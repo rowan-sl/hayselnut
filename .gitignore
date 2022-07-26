@@ -1,0 +1,7 @@
+/.vscode
+/.espressif
+/.embuild
+/target
+/Cargo.lock
+**/*.rs.bk
+src/lightening_sensor
