@@ -20,10 +20,10 @@ use std::thread::sleep;
 
 // use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 // use embedded_hal::i2c::blocking::{I2c as _, Operation as I2COperation};
-// use esp_idf_hal::{i2c::{self, I2c as _}, gpio::Gpio5};
+use esp_idf_hal::i2c;
 use embedded_hal::digital::{self, blocking::{InputPin, OutputPin}, PinState};
 use esp_idf_hal::peripherals::Peripherals;
-// use esp_idf_hal::prelude::*;
+use esp_idf_hal::prelude::*;
 use anyhow::Result;
 
 use registers::Register;
@@ -89,7 +89,8 @@ pub enum Event {
     NoiseLevelTooHigh,
     Lightning {
         distance: DistanceEstimate
-    }
+    },
+    InvalidInt(u8),
 }
 
 pub struct LightningSensor<CS: OutputPin, CLK: OutputPin, MOSI: OutputPin, MISO: InputPin> {
@@ -237,8 +238,8 @@ where
                 // println!("    lighting detected!");
                 // println!("    estimated distance: {distance:?}");
                 Event::Lightning { distance }
-            }
-            IntType::Invalid(value) => panic!("Invalid interrupt received: {:#06b}", value)
+            },
+            IntType::Invalid(value) => Event::InvalidInt(value),
         })
     }
 
@@ -318,17 +319,23 @@ fn main() -> Result<()> {
 
     println!("starting");
     let peripherals = Peripherals::take().unwrap();
-    let cs = peripherals.pins.gpio8.into_output()?;//chip select, input of sensor
-    let clk = peripherals.pins.gpio9.into_output()?;//clock, input of sensor
+
+    // let sck = peripherals.pins.gpio6;
+    // let sdi = peripherals.pins.gpio7;
+
+    // let i2c = i2c::Master::new(peripherals.i2c0, i2c::MasterPins { sda: sdi, scl: sck }, i2c::config::MasterConfig::default().baudrate(100.kHz().into()))?;
+
+    let cs = peripherals.pins.gpio4.into_output()?;//chip select, input of sensor
+    let clk = peripherals.pins.gpio5.into_output()?;//clock, input of sensor
     let mosi = peripherals.pins.gpio18.into_output()?;//data input of sensor
     let miso = peripherals.pins.gpio19.into_input()?;// data output of sensor
     let irq = peripherals.pins.gpio3.into_input()?;// interrupt
 
     println!("setting up sensor");
     let mut sensor = LightningSensor::new(cs, clk, mosi, miso)?;
-    // sensor.perform_initial_configuration()?;
-    // sensor.configure_minimum_lightning_threshold(&MinimumLightningThreshold::One)?;
-    // sensor.configure_sensor_placing(&SensorLocation::Indoor)?;
+    sensor.perform_initial_configuration()?;
+    sensor.configure_minimum_lightning_threshold(&MinimumLightningThreshold::One)?;
+    sensor.configure_sensor_placing(&SensorLocation::Indoor)?;
 
     // println!("configuring interupt");
     // let (send, recv) = std::sync::mpsc::channel::<()>();
