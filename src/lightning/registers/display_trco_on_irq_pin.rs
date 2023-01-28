@@ -1,19 +1,22 @@
-use crate::{registers::{Mode, Register}, repr::MaskDisturberEvent};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::OutputTRCOOnIRQ,
+};
 
-pub(crate) struct MaskDisturber;
-impl Register for MaskDisturber {
-    type Repr = MaskDisturberEvent;
+pub(crate) struct DisplayTrcoOnIrqPin;
+impl Register for DisplayTrcoOnIrqPin {
+    type Repr = OutputTRCOOnIRQ;
 
     fn name(&self) -> &'static str {
-        &"MASK_DIST"
+        &"DISP_TRCO"
     }
 
     fn description(&self) -> &'static str {
-        &"Mask Disturber"
+        &"Display TRCO on IRQ pin"
     }
 
     fn address(&self) -> u8 {
-        0x03
+        0x08
     }
 
     fn mode(&self) -> Mode {

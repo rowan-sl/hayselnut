@@ -23,22 +23,23 @@ opt-level = "z"
 [features]
 default = ["experimental"]
 
-experimental = ["esp-idf-svc/experimental", "esp-idf-hal/experimental", "embedded-svc/experimental"]
+experimental = ["esp-idf-svc/experimental", "embedded-svc/experimental"]
 
 [dependencies]
 anyhow = {version = "1", features = ["backtrace"]}
 log = "0.4"
 # url = "2"
-esp-idf-sys = { version = "0.31", features = ["binstart"] }
-esp-idf-svc = "0.42"
-esp-idf-hal = "0.38"
-embedded-hal = "=1.0.0-alpha.8"
+esp-idf-sys = { version = "0.32", features = ["binstart"] }
+esp-idf-svc = "0.45"
+esp-idf-hal = "0.40"
+embedded-hal = "=1.0.0-alpha.9"
 # embedded-hal-7= { package = "embedded-hal", version = "=1.0.0-alpha.7" }
-embedded-svc = { version = "0.22.0", optional = true, default-features = false }
+embedded-svc = { version = "0.24.0", optional = true, default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
-# bme280 = "0.4.4"
+bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
+shared-bus = { version = "0.2.5", features = ["eh-alpha"] }
 
 [build-dependencies]
-embuild = "0.29"
+embuild = "0.31"
 anyhow = "1"

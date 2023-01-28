@@ -1,19 +1,22 @@
-use crate::{registers::{Mode, Register}, repr::PowerDownStatus};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::MaskDisturberEvent,
+};
 
-pub(crate) struct PowerDown;
-impl Register for PowerDown {
-    type Repr = PowerDownStatus;
+pub(crate) struct MaskDisturber;
+impl Register for MaskDisturber {
+    type Repr = MaskDisturberEvent;
 
     fn name(&self) -> &'static str {
-        &"PWD"
+        &"MASK_DIST"
     }
 
     fn description(&self) -> &'static str {
-        &"Power-down"
+        &"Mask Disturber"
     }
 
     fn address(&self) -> u8 {
-        0x00
+        0x03
     }
 
     fn mode(&self) -> Mode {
@@ -21,7 +24,7 @@ impl Register for PowerDown {
     }
 
     fn mask(&self) -> u8 {
-        0b_0000_0001
+        0b_0010_0000
     }
 
     fn default_value(&self) -> u8 {

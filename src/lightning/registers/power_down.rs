@@ -1,19 +1,22 @@
-use crate::{registers::{Mode, Register}, repr::OutputSRCOOnIRQ};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::PowerDownStatus,
+};
 
-pub(crate) struct DisplaySrcoOnIrqPin;
-impl Register for DisplaySrcoOnIrqPin {
-    type Repr = OutputSRCOOnIRQ;
+pub(crate) struct PowerDown;
+impl Register for PowerDown {
+    type Repr = PowerDownStatus;
 
     fn name(&self) -> &'static str {
-        &"DISP_SRCO"
+        &"PWD"
     }
 
     fn description(&self) -> &'static str {
-        &"Display SRCO on IRQ pin"
+        &"Power-down"
     }
 
     fn address(&self) -> u8 {
-        0x08
+        0x00
     }
 
     fn mode(&self) -> Mode {
@@ -21,7 +24,7 @@ impl Register for DisplaySrcoOnIrqPin {
     }
 
     fn mask(&self) -> u8 {
-        0b_0100_0000
+        0b_0000_0001
     }
 
     fn default_value(&self) -> u8 {

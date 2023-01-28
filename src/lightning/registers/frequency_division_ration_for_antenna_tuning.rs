@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::FrequencyDivisionRatio};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::FrequencyDivisionRatio,
+};
 
 pub(crate) struct FrequencyDivisionRationForAntennaTuning;
 impl Register for FrequencyDivisionRationForAntennaTuning {

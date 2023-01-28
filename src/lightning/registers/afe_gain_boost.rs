@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::SensorLocation};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::SensorLocation,
+};
 
 pub struct AfeGainBoost;
 impl Register for AfeGainBoost {

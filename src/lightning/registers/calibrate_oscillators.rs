@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::CalibrateOscilatorsCmd};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::CalibrateOscilatorsCmd,
+};
 
 pub(crate) struct CalibrateOscillators;
 impl Register for CalibrateOscillators {

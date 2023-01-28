@@ -1,19 +1,22 @@
-use crate::{registers::{Mode, Register}, repr::SetClearStatistics};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::OutputSRCOOnIRQ,
+};
 
-pub(crate) struct ClearStatistics;
-impl Register for ClearStatistics {
-    type Repr = SetClearStatistics;
+pub(crate) struct DisplaySrcoOnIrqPin;
+impl Register for DisplaySrcoOnIrqPin {
+    type Repr = OutputSRCOOnIRQ;
 
     fn name(&self) -> &'static str {
-        &"CL_STAT"
+        &"DISP_SRCO"
     }
 
     fn description(&self) -> &'static str {
-        &"Clear statistics"
+        &"Display SRCO on IRQ pin"
     }
 
     fn address(&self) -> u8 {
-        0x02
+        0x08
     }
 
     fn mode(&self) -> Mode {
@@ -25,6 +28,6 @@ impl Register for ClearStatistics {
     }
 
     fn default_value(&self) -> u8 {
-        0b_1
+        0b_0
     }
 }

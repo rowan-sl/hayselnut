@@ -1,5 +1,3 @@
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntType {
     DistanceEstimationChanged,
@@ -17,7 +15,7 @@ impl From<u8> for IntType {
             0b_0001 => Self::NoiseLevelTooHigh,
             0b_0100 => Self::DisturberDetected,
             0b_1000 => Self::Lightning,
-            other => IntType::Invalid(other)
+            other => IntType::Invalid(other),
         }
     }
 }
@@ -48,7 +46,7 @@ impl From<u8> for SensorLocation {
         match byte {
             0b_1_0010_u8 => SensorLocation::Indoor,
             0b_0_1110_u8 => SensorLocation::Outdoor,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -91,7 +89,7 @@ impl From<u8> for PowerDownStatus {
         match byte {
             0b0 => Self::On,
             0b1 => Self::Off,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -189,7 +187,7 @@ impl From<u8> for MinimumLightningThreshold {
             0b01 => Self::Five,
             0b10 => Self::Nine,
             0b11 => Self::Sixteen,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -207,14 +205,14 @@ impl Into<u8> for MinimumLightningThreshold {
 
 /// disable disturber events
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct  MaskDisturberEvent(pub bool);
+pub struct MaskDisturberEvent(pub bool);
 
 impl From<u8> for MaskDisturberEvent {
     fn from(byte: u8) -> Self {
         match byte {
             0b0 => Self(false),
             0b1 => Self(true),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -265,7 +263,7 @@ impl From<u8> for FrequencyDivisionRatio {
             0b01 => Self::R32,
             0b10 => Self::R64,
             0b11 => Self::R128,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -293,7 +291,7 @@ impl From<u8> for DistanceEstimate {
         match byte {
             0b111111 => Self::OutOfRange,
             0b000001 => Self::Overhead,
-            dist => Self::InRange(dist)
+            dist => Self::InRange(dist),
         }
     }
 }
@@ -306,14 +304,14 @@ impl Into<u8> for DistanceEstimate {
 
 /// output TRCO clock signal on the IRQ pin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct  OutputTRCOOnIRQ(pub bool);
+pub struct OutputTRCOOnIRQ(pub bool);
 
 impl From<u8> for OutputTRCOOnIRQ {
     fn from(byte: u8) -> Self {
         match byte {
             0b0 => Self(false),
             0b1 => Self(true),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -326,14 +324,14 @@ impl Into<u8> for OutputTRCOOnIRQ {
 
 /// output SRCO clock signal on the IRQ pin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct  OutputSRCOOnIRQ(pub bool);
+pub struct OutputSRCOOnIRQ(pub bool);
 
 impl From<u8> for OutputSRCOOnIRQ {
     fn from(byte: u8) -> Self {
         match byte {
             0b0 => Self(false),
             0b1 => Self(true),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -344,17 +342,16 @@ impl Into<u8> for OutputSRCOOnIRQ {
     }
 }
 
-
 /// output LCO clock signal on the IRQ pin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct  OutputLCOOnIRQ(pub bool);
+pub struct OutputLCOOnIRQ(pub bool);
 
 impl From<u8> for OutputLCOOnIRQ {
     fn from(byte: u8) -> Self {
         match byte {
             0b0 => Self(false),
             0b1 => Self(true),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -367,14 +364,14 @@ impl Into<u8> for OutputLCOOnIRQ {
 
 /// output LCO clock signal on the IRQ pin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct  SetClearStatistics(pub bool);
+pub struct SetClearStatistics(pub bool);
 
 impl From<u8> for SetClearStatistics {
     fn from(byte: u8) -> Self {
         match byte {
             0b0 => Self(false),
             0b1 => Self(true),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }

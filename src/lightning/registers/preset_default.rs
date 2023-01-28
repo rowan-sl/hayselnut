@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::PresetDefaultCmd};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::PresetDefaultCmd,
+};
 
 pub(crate) struct PresetDefault;
 impl Register for PresetDefault {

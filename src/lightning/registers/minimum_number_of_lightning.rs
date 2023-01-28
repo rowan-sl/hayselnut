@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::MinimumLightningThreshold};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::MinimumLightningThreshold,
+};
 
 pub(crate) struct MinimumNumberOfLightning;
 impl Register for MinimumNumberOfLightning {

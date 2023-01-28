@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::OutputLCOOnIRQ};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::OutputLCOOnIRQ,
+};
 
 pub(crate) struct DisplayLcoOnIrqPin;
 impl Register for DisplayLcoOnIrqPin {

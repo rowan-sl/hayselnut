@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::IntType};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::IntType,
+};
 
 pub(crate) struct Interrupt;
 impl Register for Interrupt {

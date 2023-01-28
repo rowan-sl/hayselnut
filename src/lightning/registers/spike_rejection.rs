@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::SpikeRejectionSetting};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::SpikeRejectionSetting,
+};
 
 pub(crate) struct SpikeRejection;
 impl Register for SpikeRejection {

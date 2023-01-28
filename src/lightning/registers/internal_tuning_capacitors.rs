@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::TuningCapacitorValue};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::TuningCapacitorValue,
+};
 
 pub(crate) struct InternalTuningCapacitors;
 impl Register for InternalTuningCapacitors {

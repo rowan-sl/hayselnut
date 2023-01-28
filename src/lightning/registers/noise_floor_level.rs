@@ -1,15 +1,18 @@
-use crate::{registers::{Mode, Register}, repr::SignalVerificationThreshold};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::NoiseFloorThreshold,
+};
 
-pub(crate) struct WatchdogThreshold;
-impl Register for WatchdogThreshold {
-    type Repr = SignalVerificationThreshold;
+pub(crate) struct NoiseFloorLevel;
+impl Register for NoiseFloorLevel {
+    type Repr = NoiseFloorThreshold;
 
     fn name(&self) -> &'static str {
-        &"WDTH"
+        &"NF_LEV"
     }
 
     fn description(&self) -> &'static str {
-        &"Watchdog threshold"
+        &"unimplemented!()"
     }
 
     fn address(&self) -> u8 {
@@ -21,10 +24,10 @@ impl Register for WatchdogThreshold {
     }
 
     fn mask(&self) -> u8 {
-        0b_0000_1111
+        0b_0111_0000
     }
 
     fn default_value(&self) -> u8 {
-        0b_0001
+        0b_010
     }
 }

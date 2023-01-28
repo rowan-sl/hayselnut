@@ -1,4 +1,7 @@
-use crate::{registers::{Mode, Register}, repr::DistanceEstimate};
+use crate::lightning::{
+    registers::{Mode, Register},
+    repr::DistanceEstimate,
+};
 
 pub(crate) struct DistanceEstimation;
 impl Register for DistanceEstimation {
