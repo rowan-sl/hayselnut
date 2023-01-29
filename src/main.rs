@@ -15,11 +15,12 @@ use std::{time::Duration, thread::sleep, fmt::Write as _, io::{Read as _, Write 
 use anyhow::{bail, Result, anyhow};
 use embedded_hal::i2c::I2c;
 use embedded_svc::{ipv4, wifi::{ClientConfiguration, Configuration, Wifi}};
-use esp_idf_hal::{i2c, delay, peripheral::{self, Peripheral}, peripherals::Peripherals, adc::{self, AdcDriver, AdcChannelDriver}, units::FromValueType};
+use esp_idf_hal::{prelude::*, i2c, delay, peripheral::{self, Peripheral}, peripherals::Peripherals, adc::{self, AdcDriver, AdcChannelDriver}, units::FromValueType, gpio::PinDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     netif::{EspNetif, EspNetifWait},
     wifi::{EspWifi, WifiWait},
+    notify::EspNotify,
     ping
 };
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
@@ -62,9 +63,11 @@ fn main() -> Result<()> {
 
     println!("Connect AS3935");
     let mut lightning_i2c = bus.acquire_i2c();
+    let mut lightning_irq = pins.gpio19;
     let mut buf = [0u8; 1];
     lightning_i2c.write_read(0x03, &[0x01], &mut buf)?;
     println!("Read: {:#010b}", buf[0]);
+    drop(buf);
 
     // writeln!(display, "Starting WIFI")?;
     // #[allow(unused)]
