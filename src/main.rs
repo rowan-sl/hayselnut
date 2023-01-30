@@ -96,6 +96,17 @@ fn main() -> Result<()> {
     let ip_info = wifi.sta_netif().get_ip_info()?;
     println!("Wifi DHCP info {:?}", ip_info);
 
+    // black magic
+    // if this is not present, the call to UdpSocket::bind fails
+    {
+        esp_idf_sys::esp!(unsafe {
+            esp_idf_sys::esp_vfs_eventfd_register(&esp_idf_sys::esp_vfs_eventfd_config_t {
+                max_fds: 5,
+                ..Default::default()
+            })
+        })?;
+    }
+
     smol::block_on(async {
         println!("Async executor started");
         //NOTE (on UDP)
@@ -130,6 +141,7 @@ fn main() -> Result<()> {
                 },
                 res = socket.recv_from(&mut socket_buf).fuse() => {
                     let (amnt, addr) = res?;
+                    if amnt > socket_buf.len() { continue }
                     match bincode::deserialize::<RequestPacket>(&socket_buf[0..amnt]) {
                         Ok(pkt) => {
                             if pkt.magic != REQUEST_PACKET_MAGIC { continue }
