@@ -12,10 +12,10 @@ use esp_idf_hal::{
     peripherals::Peripherals, peripheral::Peripheral,
 };
 use esp_idf_svc::{eventloop::EspSystemEventLoop, wifi::{EspWifi, WifiEvent, WifiWait}, netif::{EspNetifWait, EspNetif}};
-use smol::net::TcpListener;
 use ssd1306::{I2CDisplayInterface, Ssd1306, prelude::DisplayConfig};
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Serialize, Deserialize};
+use smol::net::UdpSocket;
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
@@ -98,43 +98,99 @@ fn main() -> Result<()> {
 
     smol::block_on(async {
         println!("Async executor started");
+        //NOTE (on UDP)
+        // - max packet size (?) http://www.tcpipguide.com/free/t_IPDatagramSizetheMaximumTransmissionUnitMTUandFrag-4.htm
+        // - this probably means that any transmissions with sizes that are 
+        // different than the entire data should be ignored
+        // - packets can be corrupted
+        // - packets (at least small ones) will not be received in multiple parts
+        // - packets can be received more than once, or not at all 
+
         //TODO: move sensor readindg into another thread to avoid blocking the main one 
         // while reading data 
 
-        // bme280.measure(&mut delay::Ets).map_err(|e| anyhow!("Failed to read bme280 sensor"))?;
         // batt_mon.read()?;
 
-        let listener = TcpListener::bind("0.0.0.0:8080").await?;
-        let mut listener_stream = listener.incoming();
+        let mut socket = UdpSocket::bind("0.0.0.0:8080").await?;
+        let mut socket_buf = [0u8; 1024];
+        
         let mut time_before_read = smol::Timer::interval(Duration::from_secs(1));
+        
+        let mut current_measurements = Observations::default();
         //TODO: move future creation outside of select (and loop?)
-        select_biased! {
-            status = wifi_status_recv.recv().fuse() => {
-                match status? {
-                    WifiStatusUpdate::Disconnected => {
-                        //TODO: keep scanning, dont exit
-                        bail!("Wifi disconnected!");
+        loop {
+            select_biased! {
+                status = wifi_status_recv.recv().fuse() => {
+                    match status? {
+                        WifiStatusUpdate::Disconnected => {
+                            //TODO: keep scanning, dont exit
+                            bail!("Wifi disconnected!");
+                        }
+                    }
+                },
+                res = socket.recv_from(&mut socket_buf).fuse() => {
+                    let (amnt, addr) = res?;
+                    match bincode::deserialize::<RequestPacket>(&socket_buf[0..amnt]) {
+                        Ok(pkt) => {
+                            if pkt.magic != REQUEST_PACKET_MAGIC { continue }
+                            let response = DataPacket {
+                                id: pkt.id,
+                                observations: current_measurements.clone(),
+                            };
+                            let response_bytes = bincode::serialize(&response)?;
+                            socket.send_to(&response_bytes, addr).await?;
+                        }
+                        Err(..) => continue,
                     }
                 }
-            },
-            new_connection = listener_stream.next().fuse() => {
-                // will allways be Some() (see `Incoming` docs)
-                let new_connection = new_connection.unwrap()?;
-            }
-            _ = time_before_read.next().fuse() => {
-                // read sensors, put in queue
-            }
-        };
+                _ = time_before_read.next().fuse() => {
+                    // read sensors
+                    let bme280::Measurements { temperature, pressure, humidity, .. }
+                        = bme280.measure(&mut delay::Ets)
+                        .map_err(|e| anyhow!("Failed to read bme280 sensor: {e:?}"))?;
+                    let battery_voltage = batt_mon.read()?;
+                    current_measurements = Observations {
+                        temperature,
+                        pressure,
+                        humidity,
+                        battery: battery_voltage,
+                    };
+                }
+            };
+        }
 
-        Ok(()) 
+        // Ok(()) 
     })?;
-    
+
     Ok(())
 }
 
+//TODO add checksums
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Packet {
+pub struct DataPacket {
+    id: u32,
+    observations: Observations,
+}
 
+const REQUEST_PACKET_MAGIC: u32 = 0x3ce9abc2;
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RequestPacket {
+    // so random other packets are ignored
+    magic: u32,
+    // echoed back in the data packet
+    id: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Observations {
+    /// degrees c
+    temperature: f32,
+    /// relative humidity (precentage)
+    humidity: f32,
+    /// pressure (pascals)
+    pressure: f32,
+    /// battery voltage (volts)
+    battery: f32,
 }
 
 /// find and return all known wifi networks, or ones that have no password,
