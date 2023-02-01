@@ -1,7 +1,7 @@
 pub mod conf;
 pub mod lightning;
 
-use std::{time::Duration, net::Ipv4Addr};
+use std::{time::Duration, net::Ipv4Addr, fmt::Write, thread::sleep};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
@@ -27,6 +27,7 @@ fn main() -> Result<()> {
     let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio4)?;
 
     // i2c bus (shared with display, and sensors)
+    // NOTE: slow baudrate (for lightning sensor compat) will make the display slow
     let i2c_driver = i2c::I2cDriver::new(peripherals.i2c0, pins.gpio6, pins.gpio7, &i2c::config::Config::new().baudrate(100.kHz().into()))?;
     let i2c_bus = shared_bus::BusManagerSimple::new(i2c_driver); 
 
@@ -43,39 +44,69 @@ fn main() -> Result<()> {
     ).into_terminal_mode();
     display.init().map_err(|e| anyhow!("Failed to init display: {e:?}"))?;
     let _ = display.clear();
-
+    writeln!(display, "Starting...")?;
     // lightning sensor 
     // TODO
     
     let sysloop = EspSystemEventLoop::take()?;
 
     let (wifi_status_send, wifi_status_recv) = smol::channel::unbounded::<WifiStatusUpdate>();
-    let wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
+    let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
         println!("Wifi event: {event:?}");
         match event {
             WifiEvent::StaDisconnected => wifi_status_send.try_send(WifiStatusUpdate::Disconnected).expect("Impossible! (unbounded queue is full???? (or main thread dead))"), 
             _ => {}
         }
     })?;
-
+    
+    write!(display, "Starting wifi...")?;
     let mut wifi = Box::new(EspWifi::new(
         peripherals.modem,
         sysloop.clone(),
         None,
     )?);
 
+    writeln!(display, "Scanning...")?;
     // scan for available networks
     let available_aps = wifi.scan()?;
+    sleep(Duration::from_secs(1));
+    for (i, net) in available_aps.iter().enumerate() {
+        let _ = display.clear();
+        writeln!(
+            display, 
+            "Network ({}/{})\n{}\nSignal: {}dBm\n{}", 
+            i+1, available_aps.len(),
+            net.ssid,
+            net.signal_strength,
+            if conf::WIFI_CFG.iter().find(|(ssid, _)| ssid == &net.ssid).is_some() { "<known>" }
+            else if net.auth_method == wifi::AuthMethod::None { "<open>" }
+            else { "<locked>" },
+        )?;
+        sleep(Duration::from_secs(4));
+    }
     let mut accessable_aps = filter_networks(available_aps, conf::INCLUDE_OPEN_NETWORKS);
     if accessable_aps.is_empty() {
+        let _ = display.clear();
+        writeln!(display, "No wifi found!")?;
         bail!("No accessable networks!!")
         //TODO eventually this should keep scanning, and not exit
     }
     let chosen_ap = accessable_aps.remove(0);
     drop(accessable_aps);
-
+    let _ = display.clear();
+    writeln!(
+        display, 
+        "Connecting to\n{}\nSignal: {}dBm\n{}", 
+        chosen_ap.0.ssid,
+        chosen_ap.0.signal_strength,
+        if chosen_ap.1.is_some() { "<known net>" } else { "<open net>" }
+    )?;
+    sleep(Duration::from_secs(7));
+    
+    let _ = display.clear();
+    writeln!(display, "Configuring...")?;
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
-        ssid: chosen_ap.0.ssid,
+        ssid: chosen_ap.0.ssid.clone(),
         password: chosen_ap.1.unwrap_or_default().into(),
         channel: Some(chosen_ap.0.channel),
         ..Default::default()
@@ -84,15 +115,18 @@ fn main() -> Result<()> {
     wifi.start()?;
     if !WifiWait::new(&sysloop)?
         .wait_with_timeout(Duration::from_secs(20), || wifi.is_started().unwrap()) {
+        writeln!(display, "Wifi failed to start")?;
         bail!("Wifi did not start!");
     }
 
     wifi.connect()?;
     if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?
         .wait_with_timeout(Duration::from_secs(20), || wifi.is_connected().unwrap() && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)) {
+        writeln!(display, "Wifi did not connect or receive a DHCP lease")?;
         bail!("Wifi did not connect or receive a DHCP lease")
     }
 
+    let _ = display.clear();
     let ip_info = wifi.sta_netif().get_ip_info()?;
     println!("Wifi DHCP info {:?}", ip_info);
 
@@ -135,6 +169,8 @@ fn main() -> Result<()> {
                     match status? {
                         WifiStatusUpdate::Disconnected => {
                             //TODO: keep scanning, dont exit
+                            let _ = display.clear();
+                            writeln!(display, "Wifi Disconnect!\nrestart device")?;
                             bail!("Wifi disconnected!");
                         }
                     }
@@ -167,6 +203,15 @@ fn main() -> Result<()> {
                         humidity,
                         battery: battery_voltage,
                     };
+                    let _ = display.clear();
+                    write!(
+                        display, 
+                        "ON:{}\nIP:{}\nBAT:{:.1} TEMP:{:.0}F", 
+                        chosen_ap.0.ssid,
+                        ip_info.ip,
+                        battery_voltage,
+                        temperature * 1.8 + 32.0
+                    )?;
                 }
             };
         }
