@@ -1,21 +1,67 @@
-use std::{io::{Read, Write}, net::{UdpSocket, SocketAddr}, env, time::Duration};
+use std::{env, time::Duration};
+use tokio::{io::{AsyncRead, AsyncWrite, AsyncWriteExt}, fs::OpenOptions, net::UdpSocket, time};
 use serde::{Serialize, Deserialize};
 use anyhow::bail;
 
-fn main() -> anyhow::Result<()> {
-    let addr = env::var("ADDR").expect("Missing ADDR env variable");
-    println!("bind");
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect(addr)?;
-    println!("send");
-    socket.send(&bincode::serialize(&RequestPacket { magic: REQUEST_PACKET_MAGIC, id: 12345})?)?;
-    socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut buf = [0u8; 1024];
-    let res = socket.recv(&mut buf)?;
-    if res > buf.len() { bail!("Received packet too large") }
-    let decoded = bincode::deserialize::<DataPacket>(&buf[0..res])?;
-    if decoded.id != 12345 { bail!("ID wrong") }
-    println!("{:#?}", decoded.observations);
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let addr = env::var("ADDR").expect("Missing ADDR (env) to connect to");
+    let delay: u64 = env::var("DELAY").expect("Missing DELAY (env) between readings").parse().expect("Delay is not a number!");
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    socket.connect(addr).await?;
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .write(true)
+        .open("readings.csv")
+        .await?;
+    let mut id = 0u32;
+    let mut buf = vec![0u8; 1024];
+    loop {
+        time::sleep(Duration::from_secs(delay)).await;
+        id = id.wrapping_add(1);
+        socket.send(&bincode::serialize(&RequestPacket {
+            magic: REQUEST_PACKET_MAGIC,
+            id,
+        })?).await?;
+        let amnt = tokio::select!{
+            amnt = socket.recv(&mut buf) => { amnt? }
+            () = time::sleep(Duration::from_secs(1)) => {
+                eprintln!("id:{id} timed out");
+                continue;
+            }
+        }; 
+        if amnt > buf.len() {
+            eprintln!("Received packet {} larger than receiving buffer", amnt-buf.len());
+            continue;
+        }
+        let Ok(pkt) = bincode::deserialize::<DataPacket>(&buf[0..amnt]) else { eprintln!("Failed to deserialize packet"); continue; };
+        if pkt.id != id {
+            eprintln!("Received packet out of order: expect {} recv {}", id, pkt.id);
+           continue; 
+        }
+        log.write_all(format!(
+            "{},{},{},{},{}\n",
+            chrono::Utc::now(),
+            pkt.observations.temperature,
+            pkt.observations.humidity,
+            pkt.observations.pressure,
+            pkt.observations.battery,
+        ).as_bytes()).await?;   
+    }
+    // let addr = env::var("ADDR").expect("Missing ADDR env variable");
+    // println!("bind");
+    // let socket = UdpSocket::bind("0.0.0.0:0")?;
+    // socket.connect(addr)?;
+    // println!("send");
+    // socket.send(&bincode::serialize(&RequestPacket { magic: REQUEST_PACKET_MAGIC, id: 12345})?)?;
+    // socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+    // let mut buf = [0u8; 1024];
+    // let res = socket.recv(&mut buf)?;
+    // if res > buf.len() { bail!("Received packet too large") }
+    // let decoded = bincode::deserialize::<DataPacket>(&buf[0..res])?;
+    // if decoded.id != 12345 { bail!("ID wrong") }
+    // println!("{:#?}", decoded.observations);
 
     // let mut connection = TcpStream::connect(env::var("ADDR").unwrap())?;
     // let mut buf = [0u8; 20];
@@ -26,7 +72,7 @@ fn main() -> anyhow::Result<()> {
     //     let humidity = f64::from_be_bytes(buf[12..20].try_into().unwrap());
     //     println!("temperature: {temperature}, humidity: {humidity}")
     // }
-    Ok(())
+    // Ok(())
 } 
 
 

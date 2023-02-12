@@ -6,3 +6,4 @@
 **/*.rs.bk
 src/conf.rs
 /server/target
+/server/readings.csv
