@@ -22,7 +22,7 @@ use esp_idf_svc::{
 };
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use smol::net::UdpSocket;
+use smol::net::{TcpStream, TcpListener, UdpSocket, resolve};
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 fn main() -> Result<()> {
@@ -194,9 +194,9 @@ fn main() -> Result<()> {
         let socket = UdpSocket::bind("0.0.0.0:8080").await?;
         let mut socket_buf = [0u8; 1024];
 
-        let mut time_before_read = smol::Timer::interval(Duration::from_secs(1));
-
         let mut current_measurements = Observations::default();
+        let config = MeasureConfig::default();
+        let mut timers = MeasureTimers::with_config(&config);
         //TODO: move future creation outside of select (and loop?)
         loop {
             select_biased! {
@@ -226,7 +226,7 @@ fn main() -> Result<()> {
                         Err(..) => continue,
                     }
                 }
-                _ = time_before_read.next().fuse() => {
+                _ = timers.read_timer.next().fuse() => {
                     // read sensors
                     let bme280::Measurements { temperature, pressure, humidity, .. }
                         = bme280.measure(&mut delay::Ets)
@@ -255,6 +255,36 @@ fn main() -> Result<()> {
     })?;
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct MeasureConfig {
+    read_interval: Duration,
+}
+
+impl Default for MeasureConfig {
+    fn default() -> Self {
+        Self {
+            read_interval: Duration::from_secs(30),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MeasureTimers {
+    pub read_timer: smol::Timer,
+}
+
+impl MeasureTimers {
+    pub fn with_config(cfg: &MeasureConfig) -> Self {
+        Self {
+            read_timer: smol::Timer::interval(cfg.read_interval),
+        }
+    }
+
+    pub fn update_new_cfg(&mut self, new_cfg: &MeasureConfig) {
+        self.read_timer.set_interval(new_cfg.read_interval);
+    }
 }
 
 //TODO add checksums
