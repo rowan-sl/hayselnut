@@ -1,7 +1,6 @@
 use std::{env, time::Duration};
-use tokio::{io::{AsyncRead, AsyncWrite, AsyncWriteExt}, fs::OpenOptions, net::UdpSocket, time};
+use tokio::{io::AsyncWriteExt, fs::OpenOptions, net::UdpSocket, time};
 use serde::{Serialize, Deserialize};
-use anyhow::bail;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,8 +16,12 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     let mut id = 0u32;
     let mut buf = vec![0u8; 1024];
+    let mut wait = false;
     loop {
-        time::sleep(Duration::from_secs(delay)).await;
+        if wait {
+            time::sleep(Duration::from_secs(delay)).await;
+            wait = false;
+        }
         id = id.wrapping_add(1);
         socket.send(&bincode::serialize(&RequestPacket {
             magic: REQUEST_PACKET_MAGIC,
@@ -48,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             pkt.observations.pressure,
             pkt.observations.battery,
         ).as_bytes()).await?;   
+        wait = true;
     }
     // let addr = env::var("ADDR").expect("Missing ADDR env variable");
     // println!("bind");
