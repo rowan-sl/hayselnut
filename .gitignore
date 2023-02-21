@@ -7,3 +7,5 @@
 src/conf.rs
 /server/target
 /server/readings.csv
+/net/target
+/hw

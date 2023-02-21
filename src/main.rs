@@ -1,19 +1,17 @@
 pub mod conf;
 pub mod lightning;
+pub mod battery;
 
-use std::{fmt::Write, net::Ipv4Addr, thread::sleep, time::Duration};
+use std::{fmt::Write, net::Ipv4Addr, time::Duration};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
 use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi};
 use esp_idf_hal::{
-    adc::{self, Adc, AdcChannelDriver, AdcDriver},
     delay,
-    gpio::ADCPin,
     i2c,
-    peripheral::Peripheral,
     peripherals::Peripherals,
-    units::FromValueType,
+    units::FromValueType, reset::ResetReason,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -22,11 +20,35 @@ use esp_idf_svc::{
 };
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use smol::net::{TcpStream, TcpListener, UdpSocket, resolve};
+use smol::net::UdpSocket;
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
+
+use battery::BatteryMonitor;
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
+
+    {
+        use ResetReason::*;
+        match ResetReason::get() {
+            // should be normal reset conditions
+            ExternalPin | PowerOn => {}
+            // could be used for something in the future
+            // see https://github.com/esp-rs/esp-idf-hal/issues/128 for a way of storing info between sleeps
+            //  (storing in RTC fast memory, with `#[link_section=".rtc.data"] static mut VAR`)
+            Software | DeepSleep => {}
+            // report and wait (?) -- caused by some software issue (Sdio - unknown what it is)
+            _reason @ (Watchdog | InterruptWatchdog | TaskWatchdog | Sdio) => {}
+            // tentatively continue as normal
+            Unknown => {}
+            // report and wait for reset
+            Panic => {}
+            // wait for battery to raise above some level 
+            Brownout => {}
+        }
+
+    }
+
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
 
@@ -70,7 +92,7 @@ fn main() -> Result<()> {
 
     let (wifi_status_send, wifi_status_recv) = smol::channel::unbounded::<WifiStatusUpdate>();
     let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
-        println!("Wifi event: {event:?}");
+        // println!("Wifi event: {event:?}");
         match event {
             WifiEvent::StaDisconnected => wifi_status_send
                 .try_send(WifiStatusUpdate::Disconnected)
@@ -82,58 +104,58 @@ fn main() -> Result<()> {
     write!(display, "Starting wifi...")?;
     let mut wifi = Box::new(EspWifi::new(peripherals.modem, sysloop.clone(), None)?);
 
-    writeln!(display, "Scanning...")?;
+    // writeln!(display, "Scanning...")?;
     // scan for available networks
     let available_aps = wifi.scan()?;
-    sleep(Duration::from_secs(1));
-    for (i, net) in available_aps.iter().enumerate() {
-        let _ = display.clear();
-        writeln!(
-            display,
-            "Network ({}/{})\n{}\nSignal: {}dBm\n{}",
-            i + 1,
-            available_aps.len(),
-            net.ssid,
-            net.signal_strength,
-            if conf::WIFI_CFG
-                .iter()
-                .find(|(ssid, _)| ssid == &net.ssid)
-                .is_some()
-            {
-                "<known>"
-            } else if net.auth_method == wifi::AuthMethod::None {
-                "<open>"
-            } else {
-                "<locked>"
-            },
-        )?;
-        sleep(Duration::from_secs(4));
-    }
+    // sleep(Duration::from_secs(1));
+    // for (i, net) in available_aps.iter().enumerate() {
+    //     let _ = display.clear();
+    //     writeln!(
+    //         display,
+    //         "Network ({}/{})\n{}\nSignal: {}dBm\n{}",
+    //         i + 1,
+    //         available_aps.len(),
+    //         net.ssid,
+    //         net.signal_strength,
+    //         if conf::WIFI_CFG
+    //             .iter()
+    //             .find(|(ssid, _)| ssid == &net.ssid)
+    //             .is_some()
+    //         {
+    //             "<known>"
+    //         } else if net.auth_method == wifi::AuthMethod::None {
+    //             "<open>"
+    //         } else {
+    //             "<locked>"
+    //         },
+    //     )?;
+    //     sleep(Duration::from_secs(4));
+    // }
     let mut accessable_aps = filter_networks(available_aps, conf::INCLUDE_OPEN_NETWORKS);
     if accessable_aps.is_empty() {
-        let _ = display.clear();
-        writeln!(display, "No wifi found!")?;
+        // let _ = display.clear();
+        // writeln!(display, "No wifi found!")?;
         bail!("No accessable networks!!")
         //TODO eventually this should keep scanning, and not exit
     }
     let chosen_ap = accessable_aps.remove(0);
     drop(accessable_aps);
-    let _ = display.clear();
-    writeln!(
-        display,
-        "Connecting to\n{}\nSignal: {}dBm\n{}",
-        chosen_ap.0.ssid,
-        chosen_ap.0.signal_strength,
-        if chosen_ap.1.is_some() {
-            "<known net>"
-        } else {
-            "<open net>"
-        }
-    )?;
-    sleep(Duration::from_secs(7));
+    // let _ = display.clear();
+    // writeln!(
+    //     display,
+    //     "Connecting to\n{}\nSignal: {}dBm\n{}",
+    //     chosen_ap.0.ssid,
+    //     chosen_ap.0.signal_strength,
+    //     if chosen_ap.1.is_some() {
+    //         "<known net>"
+    //     } else {
+    //         "<open net>"
+    //     }
+    // )?;
+    // sleep(Duration::from_secs(7));
 
-    let _ = display.clear();
-    writeln!(display, "Configuring...")?;
+    // let _ = display.clear();
+    // writeln!(display, "Configuring...")?;
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
         ssid: chosen_ap.0.ssid.clone(),
         password: chosen_ap.1.unwrap_or_default().into(),
@@ -145,7 +167,7 @@ fn main() -> Result<()> {
     if !WifiWait::new(&sysloop)?
         .wait_with_timeout(Duration::from_secs(20), || wifi.is_started().unwrap())
     {
-        writeln!(display, "Wifi failed to start")?;
+        // writeln!(display, "Wifi failed to start")?;
         bail!("Wifi did not start!");
     }
 
@@ -157,13 +179,13 @@ fn main() -> Result<()> {
                 && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
         },
     ) {
-        writeln!(display, "Wifi did not connect or receive a DHCP lease")?;
+        // writeln!(display, "Wifi did not connect or receive a DHCP lease")?;
         bail!("Wifi did not connect or receive a DHCP lease")
     }
 
-    let _ = display.clear();
+    // let _ = display.clear();
     let ip_info = wifi.sta_netif().get_ip_info()?;
-    println!("Wifi DHCP info {:?}", ip_info);
+    // println!("Wifi DHCP info {:?}", ip_info);
 
     // black magic
     // if this is not present, the call to UdpSocket::bind fails
@@ -361,21 +383,4 @@ pub enum WifiStatusUpdate {
     Disconnected,
 }
 
-pub struct BatteryMonitor<'a, 'b, ADC: Adc, P: ADCPin>(
-    AdcDriver<'a, ADC>,
-    AdcChannelDriver<'b, P, adc::Atten11dB<P::Adc>>,
-);
 
-impl<'a, 'b, ADC: Adc, P: ADCPin> BatteryMonitor<'a, 'b, ADC, P> {
-    pub fn new(adc: impl Peripheral<P = ADC> + 'a, pin: P) -> Result<Self> {
-        Ok(Self(
-            AdcDriver::new(adc, &adc::config::Config::new().calibration(true))?,
-            AdcChannelDriver::new(pin)?,
-        ))
-    }
-
-    pub fn read(&mut self) -> Result<f32> {
-        // mull by 2, measured through a voltage divider
-        Ok((self.0.read(&mut self.1)? * 2 / 10) as f32 / 100.0)
-    }
-}
