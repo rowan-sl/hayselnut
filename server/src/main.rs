@@ -1,14 +1,25 @@
-
-use std::{env, time::Duration};
+use std::{env, time::Duration, net::SocketAddr, path::PathBuf};
 use tokio::{io::AsyncWriteExt, fs::OpenOptions, net::UdpSocket, time};
 use serde::{Serialize, Deserialize};
+use clap::Parser;
+
+pub mod tsdb;
+
+#[derive(Parser)]
+pub struct Args {
+    #[arg(short, long, help="IP address of the weather station to connect to")]
+    addr: SocketAddr,
+    #[arg(short, long, help="Delay between readings from station (in seconds)")]
+    delay: f64,
+    #[arg(short, long, help="Path for unix socket to communicate with the web server on")]
+    socket: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = env::var("ADDR").expect("Missing ADDR (env) to connect to");
-    let delay: u64 = env::var("DELAY").expect("Missing DELAY (env) between readings").parse().expect("Delay is not a number!");
+    let args = Args::parse();
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    socket.connect(addr).await?;
+    socket.connect(args.addr).await?;
     let mut log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -20,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let mut wait = false;
     loop {
         if wait {
-            time::sleep(Duration::from_secs(delay)).await;
+            time::sleep(Duration::from_secs_f64(args.delay)).await;
             wait = false;
         }
         id = id.wrapping_add(1);
