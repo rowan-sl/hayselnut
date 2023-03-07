@@ -5,7 +5,7 @@ use static_assertions::const_assert_eq;
 
 /// addr=0 is null, just like normal pointers, and invalid.
 #[repr(transparent)]
-struct FPtr<T> {
+pub struct FPtr<T> {
     addr: u64,
     _ty: PhantomData<*const T>
 }
@@ -22,9 +22,12 @@ impl<T> Clone for FPtr<T> {
     }
 }
 impl<T> Copy for FPtr<T> {}
+unsafe impl<T> FromBytes for FPtr<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+unsafe impl<T> AsBytes for FPtr<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+
 
 #[repr(transparent)]
-struct Year<D: FromBytes + AsBytes> {
+pub struct Year<D: FromBytes + AsBytes> {
     /// can be null, null=no data for that day
     days: [FPtr<Day<D>>; 366],
 }
@@ -40,11 +43,13 @@ impl<T: FromBytes + AsBytes> Clone for Year<T> {
         Self { days: self.days.clone() }
     }
 }
+unsafe impl<T: FromBytes + AsBytes> FromBytes for Year<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+unsafe impl<T: FromBytes + AsBytes> AsBytes for Year<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
 
-type Day<D> = TimeSegment<D>;
+pub type Day<D> = TimeSegment<D>;
 
 #[repr(C)]
-struct TimeSegment<D: FromBytes + AsBytes> {
+pub struct TimeSegment<D: FromBytes + AsBytes> {
     start_time: DayTime,
     end_time: DayTime,
     /// can be null, null=no next time segment
@@ -66,7 +71,9 @@ struct TimeSegment<D: FromBytes + AsBytes> {
     entries_time: [MaybeUninit<DayTime>; 512],
     /// see entries_time
     entries_data: [MaybeUninit<zerocopy::Unalign<D>>; 512],
-} 
+}
+unsafe impl<T: FromBytes + AsBytes> FromBytes for TimeSegment<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+unsafe impl<T: FromBytes + AsBytes> AsBytes for TimeSegment<T> { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
 
 const_assert_eq!(
     mem::size_of::<TimeSegment<u128>>(), 
@@ -81,7 +88,7 @@ const_assert_eq!(
 // time of day, in seconds since midnight
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct DayTime {
+pub struct DayTime {
     secs: u32
 }
 
@@ -97,4 +104,8 @@ impl DayTime {
         NaiveTime::from_num_seconds_from_midnight_opt(self.secs, 0)
     }
 }
+
+unsafe impl FromBytes for DayTime { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+unsafe impl AsBytes for DayTime { fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {} }
+
 
