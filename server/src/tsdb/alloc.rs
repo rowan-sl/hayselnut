@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+use derivative::Derivative;
 use flume::{Receiver, Sender};
 use tokio::{
     fs::{File, OpenOptions},
@@ -12,12 +13,13 @@ use tokio::{
     sync::oneshot,
     task::{self, JoinHandle},
 };
+use tracing::{span, instrument, Level, Instrument, info_span};
 use zerocopy::{AsBytes, FromBytes};
 
 use super::repr::Data;
 
 #[derive(Debug, thiserror::Error)]
-enum AllocErr {
+pub enum AllocErr {
     #[error("I/O Error: {0:?}")]
     IOError(#[from] io::Error),
 }
@@ -43,13 +45,15 @@ struct AllocReq {
     req: AllocReqKind,
 }
 
-struct Alloc {
-    close: oneshot::Receiver<()>,
+#[derive(Debug)]
+pub struct Alloc {
+    close: oneshot::Sender<()>,
     runner: JoinHandle<io::Result<()>>,
     req_queue: Sender<AllocReq>,
 }
 
 impl Alloc {
+    #[instrument]
     pub async fn open_new(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
             .create_new(true)
@@ -58,14 +62,16 @@ impl Alloc {
             .open(path.with_extension(".tsdb"))
             .await?;
         let (req_queue, req_queue_recv) = flume::unbounded();
+        let (close, close_recv) = oneshot::channel();
         let runner = task::spawn(async move {
             // addresses of currently existing `Obj` instances
             let accesses: Vec<u64> = vec![];
             Ok(())
-        });
-        Ok(Self { runner, req_queue })
+        }.instrument(info_span!("alloc_runner")));
+        Ok(Self { close, runner, req_queue })
     }
 
+    #[instrument]
     pub async fn substantiate<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<Obj<'a, T>, AllocErr> {
         let (on_done, recv) = flume::bounded(1);
         // not a bounded channel
@@ -95,6 +101,7 @@ impl Alloc {
     /// will make its best attempt deal with the problem, but there is no guarentees.
     ///
     /// this is only to be called by `Obj::drop`, ONCE.
+    #[instrument(skip(obj))]
     fn attempt_drop<'a, T: Data>(obj: &mut Obj<'a, T>) {
         // create a response queue, immedietally drop the receiving end
         let (on_done, _) = flume::bounded(1);
@@ -113,8 +120,10 @@ impl Alloc {
     }
 }
 
+#[derive(Derivative)]
+#[derivative(Debug(bound=""))]
 #[repr(transparent)]
-struct Ptr<T: Data> {
+pub struct Ptr<T: Data> {
     pub addr: u64,
     _ph0: PhantomData<*const T>,
 }
@@ -164,7 +173,10 @@ unsafe impl<T: Data> AsBytes for Ptr<T> {
     }
 }
 
-struct Obj<'a, T: Data> {
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct Obj<'a, T: Data> {
+    #[derivative(Debug="ignore")]
     alloc: &'a Alloc,
     addr: u64,
     /// current value (not synced to disk)
