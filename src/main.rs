@@ -1,18 +1,13 @@
+pub mod battery;
 pub mod conf;
 pub mod lightning;
-pub mod battery;
 
 use std::{fmt::Write, net::Ipv4Addr, time::Duration};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
 use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi};
-use esp_idf_hal::{
-    delay,
-    i2c,
-    peripherals::Peripherals,
-    units::FromValueType, reset::ResetReason,
-};
+use esp_idf_hal::{delay, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     netif::{EspNetif, EspNetifWait},
@@ -43,10 +38,9 @@ fn main() -> Result<()> {
             Unknown => {}
             // report and wait for reset
             Panic => {}
-            // wait for battery to raise above some level 
+            // wait for battery to raise above some level
             Brownout => {}
         }
-
     }
 
     let peripherals = Peripherals::take().unwrap();
@@ -382,5 +376,3 @@ pub fn filter_networks(
 pub enum WifiStatusUpdate {
     Disconnected,
 }
-
-

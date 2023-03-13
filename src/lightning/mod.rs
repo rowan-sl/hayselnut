@@ -4,11 +4,7 @@ pub mod repr;
 use std::{fmt::Debug, thread::sleep, time::Duration};
 
 use anyhow::Result;
-use embedded_hal::digital::{
-    self,
-    InputPin, OutputPin,
-    PinState,
-};
+use embedded_hal::digital::{self, InputPin, OutputPin, PinState};
 
 use registers::Register;
 use repr::{

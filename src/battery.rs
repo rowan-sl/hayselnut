@@ -1,9 +1,9 @@
+use anyhow::Result;
 use esp_idf_hal::{
     adc::{self, Adc, AdcChannelDriver, AdcDriver},
     gpio::ADCPin,
     peripheral::Peripheral,
 };
-use anyhow::Result;
 
 pub struct BatteryMonitor<'a, 'b, ADC: Adc, P: ADCPin>(
     AdcDriver<'a, ADC>,
