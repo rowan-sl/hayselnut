@@ -1,5 +1,6 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use tracing::metadata::LevelFilter;
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::UdpSocket, time};
 
@@ -22,6 +23,19 @@ pub struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env()
+                    .expect("Invalid logging config")
+            )
+            .pretty()
+            .finish()
+    ).expect("Failed to set tracing subscriber");
+
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     socket.connect(args.addr).await?;
     let mut log = OpenOptions::new()
