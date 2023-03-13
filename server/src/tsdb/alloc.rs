@@ -72,6 +72,13 @@ impl Alloc {
     }
 
     #[instrument]
+    pub async fn close(self) -> io::Result<()> {
+        let _ = self.close.send(());
+        let _res = self.runner.await.unwrap()?;
+        Ok(())
+    }
+
+    #[instrument]
     pub async fn substantiate<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<Obj<'a, T>, AllocErr> {
         let (on_done, recv) = flume::bounded(1);
         // not a bounded channel
@@ -123,12 +130,12 @@ impl Alloc {
 #[derive(Derivative)]
 #[derivative(Debug(bound=""))]
 #[repr(transparent)]
-pub struct Ptr<T: Data> {
+pub struct Ptr<T> {
     pub addr: u64,
     _ph0: PhantomData<*const T>,
 }
 
-impl<T: Data> Ptr<T> {
+impl<T> Ptr<T> {
     pub const fn null() -> Self {
         Self {
             addr: 0,
@@ -149,23 +156,23 @@ impl<T: Data> Ptr<T> {
     }
 }
 
-impl<T: Data> Clone for Ptr<T> {
+impl<T> Clone for Ptr<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: Data> Copy for Ptr<T> {}
+impl<T> Copy for Ptr<T> {}
 
 // heheheheheheheh
-unsafe impl<T: Data> FromBytes for Ptr<T> {
+unsafe impl<T> FromBytes for Ptr<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
     {
     }
 }
-unsafe impl<T: Data> AsBytes for Ptr<T> {
+unsafe impl<T> AsBytes for Ptr<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
