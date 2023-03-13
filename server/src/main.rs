@@ -1,17 +1,21 @@
-use std::{env, time::Duration, net::SocketAddr, path::PathBuf};
-use tokio::{io::AsyncWriteExt, fs::OpenOptions, net::UdpSocket, time};
-use serde::{Serialize, Deserialize};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
+use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::UdpSocket, time};
 
 pub mod tsdb;
 
 #[derive(Parser)]
 pub struct Args {
-    #[arg(short, long, help="IP address of the weather station to connect to")]
+    #[arg(short, long, help = "IP address of the weather station to connect to")]
     addr: SocketAddr,
-    #[arg(short, long, help="Delay between readings from station (in seconds)")]
+    #[arg(short, long, help = "Delay between readings from station (in seconds)")]
     delay: f64,
-    #[arg(short, long, help="Path for unix socket to communicate with the web server on")]
+    #[arg(
+        short,
+        long,
+        help = "Path for unix socket to communicate with the web server on"
+    )]
     socket: PathBuf,
 }
 
@@ -35,34 +39,46 @@ async fn main() -> anyhow::Result<()> {
             wait = false;
         }
         id = id.wrapping_add(1);
-        socket.send(&bincode::serialize(&RequestPacket {
-            magic: REQUEST_PACKET_MAGIC,
-            id,
-        })?).await?;
-        let amnt = tokio::select!{
+        socket
+            .send(&bincode::serialize(&RequestPacket {
+                magic: REQUEST_PACKET_MAGIC,
+                id,
+            })?)
+            .await?;
+        let amnt = tokio::select! {
             amnt = socket.recv(&mut buf) => { amnt? }
             () = time::sleep(Duration::from_secs(1)) => {
                 eprintln!("id:{id} timed out");
                 continue;
             }
-        }; 
+        };
         if amnt > buf.len() {
-            eprintln!("Received packet {} larger than receiving buffer", amnt-buf.len());
+            eprintln!(
+                "Received packet {} larger than receiving buffer",
+                amnt - buf.len()
+            );
             continue;
         }
         let Ok(pkt) = bincode::deserialize::<DataPacket>(&buf[0..amnt]) else { eprintln!("Failed to deserialize packet"); continue; };
         if pkt.id != id {
-            eprintln!("Received packet out of order: expect {} recv {}", id, pkt.id);
-           continue; 
+            eprintln!(
+                "Received packet out of order: expect {} recv {}",
+                id, pkt.id
+            );
+            continue;
         }
-        log.write_all(format!(
-            "{},{},{},{},{}\n",
-            chrono::Utc::now(),
-            pkt.observations.temperature,
-            pkt.observations.humidity,
-            pkt.observations.pressure,
-            pkt.observations.battery,
-        ).as_bytes()).await?;   
+        log.write_all(
+            format!(
+                "{},{},{},{},{}\n",
+                chrono::Utc::now(),
+                pkt.observations.temperature,
+                pkt.observations.humidity,
+                pkt.observations.pressure,
+                pkt.observations.battery,
+            )
+            .as_bytes(),
+        )
+        .await?;
         wait = true;
     }
     // let addr = env::var("ADDR").expect("Missing ADDR env variable");
@@ -89,8 +105,7 @@ async fn main() -> anyhow::Result<()> {
     //     println!("temperature: {temperature}, humidity: {humidity}")
     // }
     // Ok(())
-} 
-
+}
 
 //TODO add checksums
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -119,5 +134,3 @@ pub struct Observations {
     /// battery voltage (volts)
     battery: f32,
 }
-
-

@@ -11,8 +11,11 @@ bincode = "1.3.3"
 chrono = "0.4.23"
 clap = { version = "4.1.8", features = ["derive"] }
 csv = "1.1.6"
+flume = "0.10.14"
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.152", features = ["derive"] }
 static_assertions = "1.1.0"
 tokio = { version = "1.25.0", features = ["full"] }
 zerocopy = "0.6.1"
+thiserror = "1.0"
+tracing = "0.1"
