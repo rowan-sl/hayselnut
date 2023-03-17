@@ -1,12 +1,14 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use tracing::metadata::LevelFilter;
+use tracing::{metadata::LevelFilter, info};
+use tsdb::DB;
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::UdpSocket, time};
+use zerocopy::{FromBytes, AsBytes};
 
 pub mod tsdb;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct Args {
     #[arg(short, long, help = "IP address of the weather station to connect to")]
     addr: SocketAddr,
@@ -28,13 +30,22 @@ async fn main() -> anyhow::Result<()> {
         tracing_subscriber::FmtSubscriber::builder()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::builder()
-                    .with_default_directive(LevelFilter::INFO.into())
+                    .with_default_directive(LevelFilter::TRACE.into())
                     .from_env()
                     .expect("Invalid logging config")
             )
             .pretty()
             .finish()
     ).expect("Failed to set tracing subscriber");
+
+    info!("Args: {args:#?}");
+
+    #[derive(Debug, Clone, Copy, FromBytes, AsBytes)]
+    #[repr(C)]
+    struct TestData {}
+
+    let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
+    db.close().await;
 
     Ok(())
 

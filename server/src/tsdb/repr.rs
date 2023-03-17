@@ -7,8 +7,8 @@ use std::{
 use zerocopy::{AsBytes, FromBytes};
 use super::alloc::Ptr;
 
-pub trait Data: FromBytes + AsBytes + Clone + Copy {}
-impl<T: FromBytes + AsBytes + Clone + Copy> Data for T {}
+pub trait Data: FromBytes + AsBytes + Clone {}
+impl<T: FromBytes + AsBytes + Clone> Data for T {}
 
 #[repr(C)]
 pub struct Year<D: Data> {

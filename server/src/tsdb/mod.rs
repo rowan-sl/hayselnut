@@ -1,89 +1,111 @@
-use std::path::Path;
+use std::{path::Path, cmp};
 
+use chrono::{DateTime, Utc, Datelike};
 use tokio::io;
 
 mod alloc;
 mod repr;
 
 use repr::Data;
-use alloc::{Ptr, Alloc};
+use alloc::{Ptr, Alloc, errors::AllocErr};
+use tracing::{instrument, debug};
+
+use self::alloc::{errors::{AllocReqErr, AllocRunnerErr}, Obj};
 
 // TODO: Ctrl+C handler to flush data to disk (and allocated objects)
 // also make a write-ahead log or similar to catch unexpected shutdowns and recover gracefully
 pub struct DB<T: Data> {
-    head: Ptr<repr::Year<T>>,
+    /// to update this, use `update_head`
+    ///
+    /// can be null, null=no head (or data in DB)
+    cached_head: Ptr<repr::Year<T>>,
     alloc: Alloc,
 }
 
 impl<T: Data> DB<T> {
-    pub async fn open_new(path: &Path) -> io::Result<Self> {
-        let alloc = Alloc::open_new(path).await?;
-        Ok(DB { head: Ptr::null(), alloc })
+    #[instrument]
+    pub async fn open(path: &Path) -> Result<Self, self::Error> {
+        let alloc = Alloc::open(path).await?;
+        let cached_head = {
+            let o = alloc.get::<Ptr<repr::Year<T>>>(alloc::entrypoint_pointer()).await?;
+            *o
+        };
+        Ok(DB { cached_head, alloc })
     }
 
-    pub async fn close(self) -> io::Result<()> {
+    #[instrument(skip(self))]
+    pub async fn close(self) -> Result<(), self::Error> {
+        debug!("Closing DB");
         self.alloc.close().await?;
         Ok(())
     }
 
-    // pub async fn insert_record(&mut self, time: DateTime<Utc>, record: T) -> io::Result<()> {
-    //     let year = time.year();
-    //     let year_val: repr::Year<T> = if self.head.is_null() {
-    //         let head = repr::Year::with_date(time);
-    //         let ptr = self.alloc::<repr::Year<T>>().await?;
-    //         self.write(ptr, &head).await?;
-    //         self.head = ptr;
-    //         head
-    //     } else {
-    //         let head = self.read(self.head).await?;
-    //         match year.cmp(&head.year) {
-    //             cmp::Ordering::Greater => {
-    //                 let mut head = head;
-    //                 loop {
-    //                     if head.has_next() {
-    //                         let next_head = self.read(head.next).await?;
-    //                         match year.cmp(&next_head.year) {
-    //                             cmp::Ordering::Greater => {
-    //                                 head = next_head;
-    //                                 continue;
-    //                             }
-    //                             cmp::Ordering::Equal => {
-    //                                 break next_head;
-    //                             }
-    //                             cmp::Ordering::Less => {
-    //                                 // we are in-between a too small and too large year,
-    //                                 // create a new entry and update poitners on either side
-    //                                 let mut new_entry = repr::Year::<T>::with_date(time);
-    //                                 // update new entry with poitner to next one
-    //                                 new_entry.next = head.next;
-    //                                 let new_entry_ptr = self.alloc().await?;
-    //                                 self.write(new_entry_ptr, &new_entry).await?;
-    //                                 // update entry before with pointer to new entry
-    //                                 let mut updated_head = head;
-    //                                 updated_head.next = new_entry_ptr;
-    //                                 // NEXT THING TODO: API for keeping track of allocated objects
-    //                                 //self.write(updated_head, updated_head_addr).await?;
-    //                                 todo!()
-    //                             }
-    //                         }
-    //                     } else {
-    //                         todo!()
-    //                     }
-    //                 }
-    //             }
-    //             cmp::Ordering::Equal => head,
-    //             cmp::Ordering::Less => {
-    //                 let mut new_head = repr::Year::with_date(time);
-    //                 new_head.next = self.head;
-    //                 let ptr = self.alloc::<repr::Year<T>>().await?;
-    //                 self.write(ptr, &new_head).await?;
-    //                 self.head = ptr;
-    //                 new_head
-    //             }
-    //         }
-    //     };
-    //     let day = time.ordinal0();
-    //     let day_time = time.time();
-    //     todo!()
-    // }
+    async fn update_head(&mut self, new_head: Ptr<repr::Year<T>>) -> Result<(), AllocReqErr> {
+        *self.alloc.get(alloc::entrypoint_pointer()).await? = new_head;
+        self.cached_head = new_head;
+        Ok(())
+    } 
+
+    pub async fn insert<TZ: chrono::TimeZone>(&mut self, at: DateTime<TZ>, record: T) -> Result<(), self::Error> {
+        let at: DateTime<Utc> = at.with_timezone(&Utc);
+        let year: Obj<repr::Year<T>> = if self.cached_head.is_null() {
+            // TODO: fix this workaround (borrowing self.alloc, then update_head requires a full mutable borrow of self)
+            let new_head = Obj::into_ptr(self.alloc.alloc(repr::Year::with_date(at)).await?);
+            self.update_head(new_head).await?;
+            self.alloc.get(new_head).await?
+        } else {
+            let head = self.alloc.get(self.cached_head).await?;
+            match at.year().cmp(&head.year) {
+                cmp::Ordering::Greater => {
+                    let mut c_head = head;
+                    loop {
+                        if c_head.has_next() {
+                            let n_head = self.alloc.get(c_head.next).await?;
+                            match at.year().cmp(&n_head.year) {
+                                cmp::Ordering::Greater => c_head = n_head,
+                                cmp::Ordering::Equal => break n_head,
+                                cmp::Ordering::Less => {
+                                    // c_head is a preivous year, n_head is a following year.
+                                    // we create a new year, and insert it in the middle.
+                                    let mut m_head = self.alloc.alloc(repr::Year::with_date(at)).await?;
+                                    m_head.next = Obj::get_ptr(&n_head);
+                                    c_head.next = Obj::get_ptr(&m_head);
+                                }
+                            }
+                        }
+                    }
+                },
+                cmp::Ordering::Equal => head,
+                cmp::Ordering::Less => {
+                    let mut new_head = self.alloc.alloc(repr::Year::with_date(at)).await?;
+                    new_head.next = Obj::get_ptr(&head);
+                    drop(head);
+                    let ptr = Obj::into_ptr(new_head);
+                    self.update_head(ptr).await?;
+                    self.alloc.get(ptr).await?
+                }
+            }
+        };
+        let day = at.ordinal0();
+        let time = at.time();
+        todo!()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Error in allocator: {0:?}")]
+    Alloc(#[from] AllocErr)
+}
+
+impl From<AllocReqErr> for Error {
+    fn from(value: AllocReqErr) -> Self {
+        Self::from(AllocErr::from(value))
+    }
+}
+
+impl From<AllocRunnerErr> for Error {
+    fn from(value: AllocRunnerErr) -> Self {
+        Self::from(AllocErr::from(value))
+    }
 }
