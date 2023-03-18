@@ -1,11 +1,13 @@
 //! a set that has been "optomized" for performance with small keys
 //TODO: optimization
 
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct SmallSet<T: Ord> {
     values: Vec<T>,
 }
 
+#[allow(dead_code)]
 impl<T: Ord> SmallSet<T> {
     pub fn new() -> Self {
         Self {

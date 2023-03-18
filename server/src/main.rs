@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     struct TestData {}
 
     let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
-    db.close().await;
+    db.close().await?;
 
     Ok(())
 

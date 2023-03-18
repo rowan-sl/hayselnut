@@ -5,7 +5,7 @@ pub enum AllocRunnerErr {
     #[error("I/O Error: {0:?}")]
     IOError(#[from] io::Error),
     #[error("A reponse could not be sent for the processed request")]
-    ResponseFailure,
+    ResFail,
     #[error("A communication queue was unexpectedly closed")]
     CommQueueClosed,
 }
@@ -14,6 +14,18 @@ pub enum AllocRunnerErr {
 pub enum AllocReqErr {
     #[error("An unrecoverable error within the allocator occured")]
     InternalError,
+    #[error("The size of the read/write does not match the size of the target")]
+    SizeMismatch,
+    #[error("Only one object can exist for a given piece of data at one time")]
+    DoubleUse,
+    #[error("This data is currently in use")]
+    Used,
+    #[error("This data has already been freed")]
+    DoubleFree,
+    #[error("This object has been deallocated (use after free)")]
+    UseAfterFree,
+    #[error("Null pointer passed where a valid one was expected")]
+    NullPointer,
 }
 
 #[derive(Debug, thiserror::Error)]

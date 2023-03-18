@@ -3,7 +3,6 @@ use std::path::Path;
 use flume::Sender;
 use tokio::{
     fs::OpenOptions,
-    io,
     sync::oneshot,
     task::{self, JoinHandle},
 };

@@ -203,6 +203,7 @@ impl DayTime {
     /// get time (in UTC)
     ///
     /// Returns none if `self` contains an invalid number of seconds
+    #[allow(dead_code)]
     pub fn to_chrono(self) -> Option<NaiveTime> {
         NaiveTime::from_num_seconds_from_midnight_opt(self.secs, 0)
     }

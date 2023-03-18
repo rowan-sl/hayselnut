@@ -19,6 +19,7 @@ impl<T> Ptr<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub const fn with_addr(addr: u64) -> Self {
         Self {
             addr,
@@ -34,6 +35,7 @@ impl<T> Ptr<T> {
         mem::size_of::<T>()
     }
 
+    #[allow(dead_code)]
     pub const fn cast<U>(self) -> Ptr<U> {
         Ptr {
             addr: self.addr,

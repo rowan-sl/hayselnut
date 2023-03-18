@@ -33,22 +33,22 @@ pub struct Header {
     /// data written to the entrypoint should be a pointer (to some other data in the file),
     /// and it will be written to THIS LOCATION in the file (in the main header).
     ///
-    /// to read and write to this, use the `entrypoint_pointer` and cast to the appropreate type
+    /// to read and write to this, use the `entrypoint_pointer` function
     ///
     /// this can be null (no entrypoint specified yet), and can be modified (to point at a new object, allocated normally).
     /// the entrypoint is OPTIONAL to use.
+    ///
+    /// normal one-acccess-at-a-time rules apply here too!
     pub entrypoint: Ptr<()>,
 }
 
-/// Header for a segment, pointing to the next and previous segments
+/// Header for a segment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct SegHeader {
-    /// previous segment length (null if no prev segment)
-    pub len_prev: u64,
     /// length of this segment
     pub len_this: u64,
-    /// is this segment used
-    pub used: ByteBool,
+    /// is this segment free
+    pub free: ByteBool,
     pub _pad: [u8; 7],
 }

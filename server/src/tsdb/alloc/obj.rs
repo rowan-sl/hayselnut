@@ -33,8 +33,6 @@ impl<'a, T: Data> Obj<'a, T> {
         drop(obj);
         p
     }
-
-    pub fn drop(self) {}
 }
 
 impl<'a, T: Data> Deref for Obj<'a, T> {
