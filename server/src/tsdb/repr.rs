@@ -78,10 +78,6 @@ pub const TIMESEG_LEN: usize = 512;
 //TODO: possible optimization: delta compression of timestamps, and possibly data?
 #[repr(C)]
 pub struct TimeSegment<D: Data> {
-    // the start time is equal to 0h0m0s, or the end time of the last segment
-    pub start_time: DayTime,
-    // the end time is equal to 23h59m59s, or the start time of the next segment
-    pub end_time: DayTime,
     /// can be null, null=no next time segment
     /// there can only be a next time segment
     /// when all entries in this segment are full
@@ -104,10 +100,8 @@ pub struct TimeSegment<D: Data> {
     pub entries_data: [zerocopy::Unalign<D>; TIMESEG_LEN],
 }
 impl<T: Data> TimeSegment<T> {
-    pub fn new_full_day() -> Self {
+    pub fn new_empty() -> Self {
         Self {
-            start_time: DayTime::from_chrono(&NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
-            end_time: DayTime::from_chrono(&NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
             next: Ptr::null(),
             len: 0,
             _pad0: [0; 6],
@@ -116,23 +110,43 @@ impl<T: Data> TimeSegment<T> {
         }
     }
 
+    // returns None if the length is invalid 
+    pub fn full(&self) -> Option<bool> {
+        if self.len > TIMESEG_LEN as u16 { None? }
+        Some(self.len == TIMESEG_LEN as u16)
+    }
+
+    /// get the start time of the day (assumes sorted order), returning None if self.len==0
+    pub fn start_time(&self) -> Option<DayTime> {
+        if self.len == 0 { None? }
+        Some(self.entries_time[0])
+    }
+
+    /// get the end time of the day (assumes sorted order), returning None if self.len==0
+    pub fn end_time(&self) -> Option<DayTime> {
+        if self.len == 0 { None? }
+        Some(self.entries_time[self.len as usize-1])
+    }
+
     /// does this time segment contain the specified time. returns Less if the time is too early,
     /// Equal if it falls in the range, and Greater if it occurs after this range
-    pub fn contains(&self, time: DayTime) -> std::cmp::Ordering {
-        if self.start_time > time {
+    ///
+    /// assumes that this is in sorted order (it allways should be)
+    /// 
+    /// returns None if this is self.len==0
+    pub fn contains(&self, time: DayTime) -> Option<std::cmp::Ordering> {
+        Some(if self.start_time()? > time {
             std::cmp::Ordering::Less
-        } else if self.end_time >= time {
+        } else if self.end_time()? >= time {
             std::cmp::Ordering::Equal
         } else {
             std::cmp::Ordering::Greater
-        }
+        })
     }
 }
 impl<T: Data> Clone for TimeSegment<T> {
     fn clone(&self) -> Self {
         Self {
-            start_time: self.start_time,
-            end_time: self.end_time,
             next: self.next,
             len: self.len,
             _pad0: self._pad0,
@@ -160,8 +174,7 @@ unsafe impl<T: Data> AsBytes for TimeSegment<T> {
 
 const_assert_eq!(
     mem::size_of::<TimeSegment<u128>>(),
-    mem::size_of::<DayTime>() * 2
-        + mem::size_of::<Ptr<Day<u128>>>()
+    mem::size_of::<Ptr<Day<u128>>>()
         + mem::size_of::<u16>()
         + mem::size_of::<[u8; 6]>()
         + mem::size_of::<[DayTime; 512]>()
