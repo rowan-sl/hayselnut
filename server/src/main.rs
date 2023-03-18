@@ -1,10 +1,10 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use tracing::{metadata::LevelFilter, info};
-use tsdb::DB;
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::UdpSocket, time};
-use zerocopy::{FromBytes, AsBytes};
+use tracing::{info, metadata::LevelFilter};
+use tsdb::DB;
+use zerocopy::{AsBytes, FromBytes};
 
 pub mod tsdb;
 
@@ -32,11 +32,12 @@ async fn main() -> anyhow::Result<()> {
                 tracing_subscriber::EnvFilter::builder()
                     .with_default_directive(LevelFilter::TRACE.into())
                     .from_env()
-                    .expect("Invalid logging config")
+                    .expect("Invalid logging config"),
             )
             .pretty()
-            .finish()
-    ).expect("Failed to set tracing subscriber");
+            .finish(),
+    )
+    .expect("Failed to set tracing subscriber");
 
     info!("Args: {args:#?}");
 

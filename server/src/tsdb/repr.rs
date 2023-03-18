@@ -1,11 +1,8 @@
+use super::alloc::Ptr;
 use chrono::{Datelike, NaiveTime, Timelike};
 use static_assertions::const_assert_eq;
-use std::{
-    fmt::Debug,
-    mem,
-};
+use std::{fmt::Debug, mem};
 use zerocopy::{AsBytes, FromBytes};
-use super::alloc::Ptr;
 
 pub trait Data: FromBytes + AsBytes + Clone {}
 impl<T: FromBytes + AsBytes + Clone> Data for T {}
@@ -110,29 +107,35 @@ impl<T: Data> TimeSegment<T> {
         }
     }
 
-    // returns None if the length is invalid 
+    // returns None if the length is invalid
     pub fn full(&self) -> Option<bool> {
-        if self.len > TIMESEG_LEN as u16 { None? }
+        if self.len > TIMESEG_LEN as u16 {
+            None?
+        }
         Some(self.len == TIMESEG_LEN as u16)
     }
 
     /// get the start time of the day (assumes sorted order), returning None if self.len==0
     pub fn start_time(&self) -> Option<DayTime> {
-        if self.len == 0 { None? }
+        if self.len == 0 {
+            None?
+        }
         Some(self.entries_time[0])
     }
 
     /// get the end time of the day (assumes sorted order), returning None if self.len==0
     pub fn end_time(&self) -> Option<DayTime> {
-        if self.len == 0 { None? }
-        Some(self.entries_time[self.len as usize-1])
+        if self.len == 0 {
+            None?
+        }
+        Some(self.entries_time[self.len as usize - 1])
     }
 
     /// does this time segment contain the specified time. returns Less if the time is too early,
     /// Equal if it falls in the range, and Greater if it occurs after this range
     ///
     /// assumes that this is in sorted order (it allways should be)
-    /// 
+    ///
     /// returns None if this is self.len==0
     pub fn contains(&self, time: DayTime) -> Option<std::cmp::Ordering> {
         Some(if self.start_time()? > time {
@@ -153,7 +156,7 @@ impl<T: Data> Clone for TimeSegment<T> {
             entries_time: self.entries_time,
             // Saftey: zerocopy::Unalign<T> where T: Data **is** effectively copy (since it implements AsBytes+FromBytes).
             // this effectively copies the data to the new clone
-            entries_data: unsafe { std::ptr::read(&self.entries_data as _) }
+            entries_data: unsafe { std::ptr::read(&self.entries_data as _) },
         }
     }
 }

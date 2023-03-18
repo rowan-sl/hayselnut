@@ -1,4 +1,7 @@
-use std::{marker::PhantomData, ops::{Deref, DerefMut}};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 
 use derivative::Derivative;
 
@@ -7,7 +10,7 @@ use super::{Alloc, Data, Ptr};
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Obj<'a, T: Data> {
-    #[derivative(Debug="ignore")]
+    #[derivative(Debug = "ignore")]
     pub(super) alloc: &'a Alloc,
     pub(super) addr: u64,
     /// current value (not synced to disk)

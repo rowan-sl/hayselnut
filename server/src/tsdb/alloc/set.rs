@@ -3,19 +3,19 @@
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct SmallSet<T: Ord> {
-    values: Vec<T>
+    values: Vec<T>,
 }
 
 impl<T: Ord> SmallSet<T> {
     pub fn new() -> Self {
         Self {
-            values: Vec::default()
+            values: Vec::default(),
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            values: Vec::with_capacity(capacity)
+            values: Vec::with_capacity(capacity),
         }
     }
 
@@ -24,7 +24,7 @@ impl<T: Ord> SmallSet<T> {
             self.values.insert(idx, item);
             None
         } else {
-            Some(item)    
+            Some(item)
         }
     }
 
@@ -48,4 +48,3 @@ impl<T: Ord> SmallSet<T> {
         self.values.as_slice()
     }
 }
-

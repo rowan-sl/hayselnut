@@ -2,26 +2,27 @@ use std::path::Path;
 
 use flume::Sender;
 use tokio::{
-    io, fs::OpenOptions,
+    fs::OpenOptions,
+    io,
     sync::oneshot,
     task::{self, JoinHandle},
 };
-use tracing::{instrument, debug};
+use tracing::{debug, instrument};
 
-mod set; 
-mod types;
+pub mod errors;
 mod obj;
 mod ptr;
 mod repr;
-pub mod errors;
 mod runner;
+mod set;
+mod types;
 
 use super::repr::Data;
-use runner::{AllocRunner, AllocReq, AllocReqKind, AllocRes};
 use errors::{AllocErr, AllocReqErr, AllocRunnerErr};
-pub use ptr::Ptr;
 pub use obj::Obj;
+pub use ptr::Ptr;
 pub use repr::entrypoint_pointer;
+use runner::{AllocReq, AllocReqKind, AllocRes, AllocRunner};
 
 #[derive(Debug)]
 pub struct Alloc {
@@ -43,16 +44,17 @@ impl Alloc {
             .read(true)
             .write(true)
             .open(path.with_extension("tsdb"))
-            .await.map_err(AllocRunnerErr::from)?;
+            .await
+            .map_err(AllocRunnerErr::from)?;
         let (req_queue, req_queue_recv) = flume::unbounded();
         let (close, close_recv) = oneshot::channel();
-        let runner = task::spawn(AllocRunner::new(
-            file,
-            req_queue_recv,
-            close_recv,
-            create_new,
-        ).run());
-        Ok(Self { close, runner, req_queue })
+        let runner =
+            task::spawn(AllocRunner::new(file, req_queue_recv, close_recv, create_new).run());
+        Ok(Self {
+            close,
+            runner,
+            req_queue,
+        })
     }
 
     #[instrument]
@@ -63,14 +65,14 @@ impl Alloc {
     }
 
     /// Create an `Obj` instance from a pointer.
-    /// 
+    ///
     /// `Obj`s are handles to a allocated piece of data, keeping exlusive access for the `Obj`s lifetime
     /// while allowing reading and writing to the underlying data.
     ///
     /// - the pointer must have come from this allocator        (this *may* error, or will return unspecified data)
     /// - the object must not have been previously deallocated  (this *may* error, or will return unspecified data)
     ///
-    /// - no other objects must currently exist for this data   (this will error) 
+    /// - no other objects must currently exist for this data   (this will error)
     /// - the pointer must not be null!                         (this will error)
     #[instrument]
     pub async fn get<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<Obj<'a, T>, AllocReqErr> {
@@ -102,31 +104,37 @@ impl Alloc {
     /// for creating an allocator, see `Alloc::open_{new,existing}`
     pub async fn alloc<'a, T: Data>(&'a self, val: T) -> Result<Obj<'a, T>, AllocReqErr> {
         let (on_done, recv) = flume::bounded(1);
-        self.req_queue.try_send(AllocReq {
-            on_done,
-            req: AllocReqKind::Create { size: std::mem::size_of::<T>() as u64 }
-        }).unwrap();
+        self.req_queue
+            .try_send(AllocReq {
+                on_done,
+                req: AllocReqKind::Create {
+                    size: std::mem::size_of::<T>() as u64,
+                },
+            })
+            .unwrap();
         let AllocRes::Created { addr } = recv.recv_async().await.unwrap()? else {
             unreachable!("wrong response for request");
         };
         Ok(Obj {
             alloc: self,
             addr,
-            val
+            val,
         })
     }
 
     /// Deallocate the given object (passed by pointer), freeing its memory for future use.
-    /// 
-    /// - no `Obj` must currently exist for this pointer 
-    /// - the pointer must have come from this allocator 
+    ///
+    /// - no `Obj` must currently exist for this pointer
+    /// - the pointer must have come from this allocator
     /// - the pointer must not have been deallocated before.
     pub async fn free<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<(), AllocReqErr> {
         let (on_done, recv) = flume::bounded(1);
-        self.req_queue.try_send(AllocReq {
-            on_done,
-            req: AllocReqKind::Destroy { addr: ptr.addr }
-        }).unwrap();
+        self.req_queue
+            .try_send(AllocReq {
+                on_done,
+                req: AllocReqKind::Destroy { addr: ptr.addr },
+            })
+            .unwrap();
         let AllocRes::None = recv.recv_async().await.unwrap()? else {
             unreachable!("wrong response for request");
         };
@@ -156,4 +164,3 @@ impl Alloc {
             .unwrap();
     }
 }
-

@@ -1,4 +1,4 @@
-use zerocopy::{FromBytes, AsBytes};
+use zerocopy::{AsBytes, FromBytes};
 
 #[derive(Clone, Copy, Debug, Default, FromBytes, AsBytes)]
 #[repr(transparent)]
@@ -23,4 +23,3 @@ impl PartialEq for ByteBool {
 }
 
 impl Eq for ByteBool {}
-

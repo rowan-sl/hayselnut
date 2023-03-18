@@ -2,4 +2,3 @@
 
 ## TODO
 - (internal) : make pointer-using functions unsafe, or create some safe way of tracking them
-- TimeSegments storing data in-order is causing lots of pain...

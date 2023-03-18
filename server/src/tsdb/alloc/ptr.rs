@@ -1,10 +1,10 @@
-use std::{mem, marker::PhantomData};
+use std::{marker::PhantomData, mem};
 
 use derivative::Derivative;
-use zerocopy::{FromBytes, AsBytes};
+use zerocopy::{AsBytes, FromBytes};
 
 #[derive(Derivative)]
-#[derivative(Debug(bound=""), PartialEq(bound=""), Eq(bound=""))]
+#[derivative(Debug(bound = ""), PartialEq(bound = ""), Eq(bound = ""))]
 #[repr(transparent)]
 pub struct Ptr<T> {
     pub addr: u64,
@@ -67,4 +67,3 @@ unsafe impl<T> AsBytes for Ptr<T> {
 }
 unsafe impl<T> Sync for Ptr<T> {}
 unsafe impl<T> Send for Ptr<T> {}
-
