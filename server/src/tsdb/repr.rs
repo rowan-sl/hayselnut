@@ -2,7 +2,7 @@ use chrono::{Datelike, NaiveTime, Timelike};
 use static_assertions::const_assert_eq;
 use std::{
     fmt::Debug,
-    mem::{self, MaybeUninit},
+    mem,
 };
 use zerocopy::{AsBytes, FromBytes};
 use super::alloc::Ptr;
@@ -73,10 +73,14 @@ unsafe impl<T: Data> AsBytes for Year<T> {
 
 pub type Day<D> = TimeSegment<D>;
 
+pub const TIMESEG_LEN: usize = 512;
+
 //TODO: possible optimization: delta compression of timestamps, and possibly data?
 #[repr(C)]
 pub struct TimeSegment<D: Data> {
+    // the start time is equal to 0h0m0s, or the end time of the last segment
     pub start_time: DayTime,
+    // the end time is equal to 23h59m59s, or the start time of the next segment
     pub end_time: DayTime,
     /// can be null, null=no next time segment
     /// there can only be a next time segment
@@ -95,9 +99,9 @@ pub struct TimeSegment<D: Data> {
     /// `[data, data, null, null, null]` <- valid
     ///
     /// `[data, null, null, data, null]` <- invalid
-    pub entries_time: [MaybeUninit<DayTime>; 512],
+    pub entries_time: [DayTime; TIMESEG_LEN],
     /// see entries_time
-    pub entries_data: [MaybeUninit<zerocopy::Unalign<D>>; 512],
+    pub entries_data: [zerocopy::Unalign<D>; TIMESEG_LEN],
 }
 impl<T: Data> TimeSegment<T> {
     pub fn new_full_day() -> Self {
@@ -107,8 +111,35 @@ impl<T: Data> TimeSegment<T> {
             next: Ptr::null(),
             len: 0,
             _pad0: [0; 6],
-            entries_time: unsafe { MaybeUninit::uninit().assume_init() },
-            entries_data: unsafe { MaybeUninit::uninit().assume_init() },
+            entries_time: FromBytes::new_zeroed(),
+            entries_data: FromBytes::new_zeroed(),
+        }
+    }
+
+    /// does this time segment contain the specified time. returns Less if the time is too early,
+    /// Equal if it falls in the range, and Greater if it occurs after this range
+    pub fn contains(&self, time: DayTime) -> std::cmp::Ordering {
+        if self.start_time > time {
+            std::cmp::Ordering::Less
+        } else if self.end_time >= time {
+            std::cmp::Ordering::Equal
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    }
+}
+impl<T: Data> Clone for TimeSegment<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start_time: self.start_time,
+            end_time: self.end_time,
+            next: self.next,
+            len: self.len,
+            _pad0: self._pad0,
+            entries_time: self.entries_time,
+            // Saftey: zerocopy::Unalign<T> where T: Data **is** effectively copy (since it implements AsBytes+FromBytes).
+            // this effectively copies the data to the new clone
+            entries_data: unsafe { std::ptr::read(&self.entries_data as _) }
         }
     }
 }
@@ -133,8 +164,8 @@ const_assert_eq!(
         + mem::size_of::<Ptr<Day<u128>>>()
         + mem::size_of::<u16>()
         + mem::size_of::<[u8; 6]>()
-        + mem::size_of::<[MaybeUninit<DayTime>; 512]>()
-        + mem::size_of::<[MaybeUninit<zerocopy::Unalign<u128>>; 512]>()
+        + mem::size_of::<[DayTime; 512]>()
+        + mem::size_of::<[zerocopy::Unalign<u128>; 512]>()
 );
 
 /// time of day, in seconds since midnight
