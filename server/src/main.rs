@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
@@ -43,10 +44,16 @@ async fn main() -> anyhow::Result<()> {
 
     #[derive(Debug, Clone, Copy, FromBytes, AsBytes)]
     #[repr(C)]
-    struct TestData {}
+    struct TestData {
+        num1: u32
+    }
 
     let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
+    info!("attempting insert");
+    db.insert(Utc::now(), TestData { num1: 100 }).await?;
+    info!("db.insert ran successfully!");
     db.close().await?;
+    info!("db closed");
 
     Ok(())
 

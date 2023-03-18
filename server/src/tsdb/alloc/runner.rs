@@ -20,12 +20,15 @@ use super::{
     set::SmallSet, entrypoint_pointer,
 };
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum AllocRes {
     None,
-    Read { data: Vec<u8> },
+    Read { #[derivative(Debug = "ignore")] data: Vec<u8> },
     Created { addr: u64 },
 }
 
+/// all addr fields here are the address of the HEADER in the file, not the data
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum AllocReqKind {
@@ -65,6 +68,8 @@ pub struct AllocRunner {
     do_first_time_init: bool,
     /// addresses of currently existing `Obj` instances
     accesses: SmallSet<u64>,
+    /// current location of the bump allocator 
+    alloc_addr: u64,
     /// current header
     header: Header,
 }
@@ -84,11 +89,13 @@ impl AllocRunner {
             close,
             accesses: SmallSet::default(),
             do_first_time_init,
+            // starts after the header
+            alloc_addr: mem::size_of::<Header>() as u64,
             header: FromBytes::new_zeroed(),
         }
     }
 
-    #[instrument(name = "alloc_runner")]
+    #[instrument(name = "alloc_runner", skip(self))]
     pub async fn run(mut self) -> Result<(), AllocRunnerErr> {
         debug!("Alloc runner task started");
         if self.do_first_time_init {
@@ -106,18 +113,32 @@ impl AllocRunner {
                 msg = self.req_queue.recv_async() => {
                     match msg {
                         Ok(msg) => {
-                            trace!("Handle: {msg:?}"); 
-                            self.handle(msg).await?;
+                            debug!("Handle: {msg:?}"); 
+                            match self.handle(msg).await {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    error!("Runner error in handling: {e:?}");
+                                    return Err(e.into());
+                                }
+                            }
                         }
-                        Err(_) => error!("Alloc runner stopping due to closed message queue"),
+                        Err(_) => {
+                            error!("Alloc runner stopping due to closed message queue");
+                            return Err(AllocRunnerErr::CommQueueClosed);
+                        },
                     }
                 },
                 res = &mut self.close => {
                     match res {
-                        Ok(()) => debug!("Stopping alloc runner"),
-                        Err(_) => error!("Alloc runner stopping due to closed shutdown channel"),
+                        Ok(()) => {
+                            debug!("Stopping alloc runner");
+                            break;
+                        }
+                        Err(_) => {
+                            error!("Alloc runner stopping due to closed shutdown channel");
+                            return Err(AllocRunnerErr::CommQueueClosed);
+                        }
                     }
-                    break;
                 }
             }
         }
@@ -125,7 +146,7 @@ impl AllocRunner {
         Ok(())
     }
 
-    #[instrument(name = "alloc_req_handler", skip(on_done, req))]
+    #[instrument(name = "alloc_req_handler", skip(on_done, self))]
     async fn handle(&mut self, AllocReq { on_done, req }: AllocReq) -> Result<(), AllocRunnerErr> {    
         match req {
             AllocReqKind::Read {
@@ -134,6 +155,10 @@ impl AllocRunner {
                 mark_used,
             } => {
                 let respond = |res| async {
+                    match &res {
+                        Ok(ok) => trace!("Response: {ok:?}"),
+                        Err(err) => error!("Error: {err:?}"),
+                    }
                     on_done.send_async(res)
                     .await
                     .map_err(|_| AllocRunnerErr::ResFail)
@@ -159,6 +184,7 @@ impl AllocRunner {
                 }
                 //TODO: make a table of valid addresses to access
                 let seg = self.read::<SegHeader>(addr).await?;
+                trace!("Read header: {seg:?}");
                 if seg.free.into() {
                     respond(Err(AllocReqErr::UseAfterFree)).await?;
                     return Ok(());
@@ -168,7 +194,7 @@ impl AllocRunner {
                     return Ok(());
                 }
                 // read 
-                let buf = match self.read_raw(addr, len).await {
+                let buf = match self.read_raw(addr + mem::size_of::<SegHeader>() as u64, len).await {
                     Ok(buf) => buf,
                     Err(e) => {
                         let _ = respond(Err(AllocReqErr::InternalError)).await;
@@ -219,6 +245,7 @@ impl AllocRunner {
                 }
                 //TODO: make a table of valid addresses to access
                 let seg = self.read::<SegHeader>(addr).await?;
+                trace!("Read header: {seg:?}");
                 if seg.free.into() {
                     respond(Err(AllocReqErr::UseAfterFree)).await?;
                     return Ok(());
@@ -227,7 +254,7 @@ impl AllocRunner {
                     respond(Err(AllocReqErr::SizeMismatch)).await?;
                     return Ok(());
                 }
-                match self.write_raw(addr, &data).await {
+                match self.write_raw(addr + mem::size_of::<SegHeader>() as u64, &data).await {
                     Ok(()) => respond(Ok(AllocRes::None)).await?,
                     Err(e) => {
                         respond(Err(AllocReqErr::InternalError)).await?;
@@ -242,7 +269,30 @@ impl AllocRunner {
                 }
             }
             AllocReqKind::Create { size } => {
-                todo!()
+                let respond = |res| async {
+                    on_done.send_async(res)
+                    .await
+                    .map_err(|_| AllocRunnerErr::ResFail)
+                };
+                let seg_addr = self.alloc_addr;
+                let val_addr = self.alloc_addr + mem::size_of::<SegHeader>() as u64;
+                self.alloc_addr = val_addr + size;
+                let seg = SegHeader {
+                    len_this: size,
+                    free: false.into(),
+                    _pad: [0u8; 7],
+                };
+                match self.write(seg_addr, &seg).await {
+                    Ok(()) => {
+                        trace!("created allocation of size {size} at {seg_addr}.\nnew allocation marked as used, assuming Obj creation");
+                        self.accesses.insert(seg_addr);
+                        respond(Ok(AllocRes::Created { addr: seg_addr })).await?;
+                    }
+                    Err(e) => {
+                        respond(Err(AllocReqErr::InternalError)).await?;
+                        return Err(e.into());
+                    }
+                }
             }
             AllocReqKind::Destroy { addr } => {
                 let respond = |res| async {
@@ -267,6 +317,7 @@ impl AllocRunner {
                 // its literally that simple lol
                 seg.free = true.into();
                 self.write::<SegHeader>(addr, &seg).await?;
+                respond(Ok(AllocRes::None)).await?;
             }
         }
         Ok(())

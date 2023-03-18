@@ -12,13 +12,13 @@ impl From<bool> for ByteBool {
 
 impl Into<bool> for ByteBool {
     fn into(self) -> bool {
-        self.0 == 0
+        self.0 != 0
     }
 }
 
 impl PartialEq for ByteBool {
     fn eq(&self, other: &Self) -> bool {
-        (self.0 == 0) == (other.0 == 0)
+        (self.0 != 0) == (other.0 != 0)
     }
 }
 
