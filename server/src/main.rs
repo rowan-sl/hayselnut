@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     #[derive(Debug, Clone, Copy, FromBytes, AsBytes)]
     #[repr(C)]
     struct TestData {
-        num1: u32
+        num1: u32,
     }
 
     let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;

@@ -8,24 +8,30 @@ use tokio::{
     select,
     sync::oneshot,
 };
-use tracing::{trace, debug, warn, error, instrument};
+use tracing::{debug, error, instrument, trace, warn};
 use zerocopy::{AsBytes, FromBytes};
 
 use crate::tsdb::repr::Data;
 
 use super::{
+    entrypoint_pointer,
     errors::{AllocReqErr, AllocRunnerErr},
     ptr::Ptr,
     repr::{Header, SegHeader},
-    set::SmallSet, entrypoint_pointer,
+    set::SmallSet,
 };
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum AllocRes {
     None,
-    Read { #[derivative(Debug = "ignore")] data: Vec<u8> },
-    Created { addr: u64 },
+    Read {
+        #[derivative(Debug = "ignore")]
+        data: Vec<u8>,
+    },
+    Created {
+        addr: u64,
+    },
 }
 
 /// all addr fields here are the address of the HEADER in the file, not the data
@@ -39,7 +45,7 @@ pub enum AllocReqKind {
     },
     Write {
         addr: u64,
-        #[derivative(Debug="ignore")]
+        #[derivative(Debug = "ignore")]
         data: Vec<u8>,
         mark_unused: bool,
         allow_no_response: bool,
@@ -55,7 +61,7 @@ pub enum AllocReqKind {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct AllocReq {
-    #[derivative(Debug="ignore")]
+    #[derivative(Debug = "ignore")]
     pub on_done: Sender<Result<AllocRes, AllocReqErr>>,
     pub req: AllocReqKind,
 }
@@ -68,7 +74,7 @@ pub struct AllocRunner {
     do_first_time_init: bool,
     /// addresses of currently existing `Obj` instances
     accesses: SmallSet<u64>,
-    /// current location of the bump allocator 
+    /// current location of the bump allocator
     alloc_addr: u64,
     /// current header
     header: Header,
@@ -113,7 +119,7 @@ impl AllocRunner {
                 msg = self.req_queue.recv_async() => {
                     match msg {
                         Ok(msg) => {
-                            debug!("Handle: {msg:?}"); 
+                            debug!("Handle: {msg:?}");
                             match self.handle(msg).await {
                                 Ok(()) => {}
                                 Err(e) => {
@@ -147,7 +153,7 @@ impl AllocRunner {
     }
 
     #[instrument(name = "alloc_req_handler", skip(on_done, self))]
-    async fn handle(&mut self, AllocReq { on_done, req }: AllocReq) -> Result<(), AllocRunnerErr> {    
+    async fn handle(&mut self, AllocReq { on_done, req }: AllocReq) -> Result<(), AllocRunnerErr> {
         match req {
             AllocReqKind::Read {
                 addr,
@@ -159,9 +165,10 @@ impl AllocRunner {
                         Ok(ok) => trace!("Response: {ok:?}"),
                         Err(err) => error!("Error: {err:?}"),
                     }
-                    on_done.send_async(res)
-                    .await
-                    .map_err(|_| AllocRunnerErr::ResFail)
+                    on_done
+                        .send_async(res)
+                        .await
+                        .map_err(|_| AllocRunnerErr::ResFail)
                 };
                 if addr == 0 {
                     respond(Err(AllocReqErr::NullPointer)).await?;
@@ -176,7 +183,10 @@ impl AllocRunner {
                         respond(Err(AllocReqErr::SizeMismatch)).await?;
                         return Ok(());
                     }
-                    respond(Ok(AllocRes::Read { data: self.header.entrypoint.as_bytes().to_vec() } )).await?;
+                    respond(Ok(AllocRes::Read {
+                        data: self.header.entrypoint.as_bytes().to_vec(),
+                    }))
+                    .await?;
                     if mark_used {
                         self.accesses.insert(addr);
                     }
@@ -193,8 +203,11 @@ impl AllocRunner {
                     respond(Err(AllocReqErr::SizeMismatch)).await?;
                     return Ok(());
                 }
-                // read 
-                let buf = match self.read_raw(addr + mem::size_of::<SegHeader>() as u64, len).await {
+                // read
+                let buf = match self
+                    .read_raw(addr + mem::size_of::<SegHeader>() as u64, len)
+                    .await
+                {
                     Ok(buf) => buf,
                     Err(e) => {
                         let _ = respond(Err(AllocReqErr::InternalError)).await;
@@ -214,10 +227,14 @@ impl AllocRunner {
             } => {
                 // FIXME: log errors ignored by allow_no_response
                 let respond = |res| async {
-                    on_done.send_async(res)
-                    .await
-                    .map_or_else(|e| if allow_no_response { Ok(()) } else { Err(e) }, |_| Ok(()))
-                    .map_err(|_| AllocRunnerErr::ResFail )
+                    on_done
+                        .send_async(res)
+                        .await
+                        .map_or_else(
+                            |e| if allow_no_response { Ok(()) } else { Err(e) },
+                            |_| Ok(()),
+                        )
+                        .map_err(|_| AllocRunnerErr::ResFail)
                 };
                 if addr == 0 {
                     respond(Err(AllocReqErr::NullPointer)).await?;
@@ -254,7 +271,10 @@ impl AllocRunner {
                     respond(Err(AllocReqErr::SizeMismatch)).await?;
                     return Ok(());
                 }
-                match self.write_raw(addr + mem::size_of::<SegHeader>() as u64, &data).await {
+                match self
+                    .write_raw(addr + mem::size_of::<SegHeader>() as u64, &data)
+                    .await
+                {
                     Ok(()) => respond(Ok(AllocRes::None)).await?,
                     Err(e) => {
                         respond(Err(AllocReqErr::InternalError)).await?;
@@ -270,9 +290,10 @@ impl AllocRunner {
             }
             AllocReqKind::Create { size } => {
                 let respond = |res| async {
-                    on_done.send_async(res)
-                    .await
-                    .map_err(|_| AllocRunnerErr::ResFail)
+                    on_done
+                        .send_async(res)
+                        .await
+                        .map_err(|_| AllocRunnerErr::ResFail)
                 };
                 let seg_addr = self.alloc_addr;
                 let val_addr = self.alloc_addr + mem::size_of::<SegHeader>() as u64;
@@ -296,9 +317,10 @@ impl AllocRunner {
             }
             AllocReqKind::Destroy { addr } => {
                 let respond = |res| async {
-                    on_done.send_async(res)
-                    .await
-                    .map_err(|_| AllocRunnerErr::ResFail)
+                    on_done
+                        .send_async(res)
+                        .await
+                        .map_err(|_| AllocRunnerErr::ResFail)
                 };
                 if addr == 0 {
                     respond(Err(AllocReqErr::NullPointer)).await?;

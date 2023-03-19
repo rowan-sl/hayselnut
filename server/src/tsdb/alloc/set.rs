@@ -1,7 +1,6 @@
 //! a set that has been "optomized" for performance with small keys
 //TODO: optimization
 
-
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct SmallSet<T: Ord> {
     values: Vec<T>,

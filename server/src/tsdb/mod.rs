@@ -261,8 +261,6 @@ impl<T: Data> DB<T> {
         }
         Ok(())
     }
-
-    
 }
 
 #[derive(Debug, thiserror::Error)]
