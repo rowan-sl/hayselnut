@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
