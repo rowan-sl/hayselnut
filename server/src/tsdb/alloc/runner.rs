@@ -8,7 +8,7 @@ use tokio::{
     select,
     sync::oneshot,
 };
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, info, error, instrument, trace, warn};
 use zerocopy::{AsBytes, FromBytes};
 
 use crate::tsdb::repr::Data;
@@ -96,7 +96,8 @@ impl AllocRunner {
             accesses: SmallSet::default(),
             do_first_time_init,
             // starts after the header
-            alloc_addr: mem::size_of::<Header>() as u64,
+            // updated at the start of the run function
+            alloc_addr: 0,
             header: FromBytes::new_zeroed(),
         }
     }
@@ -109,11 +110,33 @@ impl AllocRunner {
             let header = Header {
                 null_byte: 0xAB,
                 _pad: [0; 7],
+                alloc_addr: mem::size_of::<Header>() as u64,
                 entrypoint: Ptr::null(),
             };
             self.write(0, &header).await?;
         }
         self.header = self.read::<Header>(0).await?;
+        self.alloc_addr = self.header.alloc_addr;
+        match self.run_inner().await {
+            Ok(()) => {
+                info!("Running shutdown code");
+                if let Err(w_err) = self.write(0, &self.header.clone()).await {
+                    error!("Failed to write header to disk, DB may be corrupt:\n{w_err:?}");
+                }
+            }
+            Err(e) => {
+                info!("Attempting to run shutdown code");
+                if let Err(w_err) = self.write(0, &self.header.clone()).await {
+                    error!("Failed to write header to disk, DB may be corrupt:\n{w_err:?}");
+                }
+                return Err(e);
+            }
+        }
+        debug!("Alloc runner task stopped without errors");
+        Ok(())
+    }
+
+    async fn run_inner(&mut self) -> Result<(), AllocRunnerErr> {
         loop {
             select! {
                 msg = self.req_queue.recv_async() => {
@@ -138,7 +161,7 @@ impl AllocRunner {
                     match res {
                         Ok(()) => {
                             debug!("Stopping alloc runner");
-                            break;
+                            break Ok(());
                         }
                         Err(_) => {
                             error!("Alloc runner stopping due to closed shutdown channel");
@@ -148,8 +171,6 @@ impl AllocRunner {
                 }
             }
         }
-        debug!("Alloc runner task stopped without errors");
-        Ok(())
     }
 
     #[instrument(name = "alloc_req_handler", skip(on_done, self))]

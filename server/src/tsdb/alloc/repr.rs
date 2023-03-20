@@ -24,6 +24,8 @@ pub struct Header {
     /// the byte at addr 0 (null pointer).
     pub null_byte: u8,
     pub _pad: [u8; 7],
+    /// current address of the bump allocator
+    pub alloc_addr: u64,
     /// the provided 'entry point', a place where data can go that
     /// indicates the structure of existing allocations to the program using this.
     ///
