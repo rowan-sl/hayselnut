@@ -6,7 +6,7 @@
 //!
 //! benchmarking TBD
 
-use std::{cmp, path::Path};
+use std::{cmp, path::Path, fmt::Debug};
 
 use chrono::{DateTime, Datelike, Utc};
 
@@ -15,6 +15,7 @@ mod repr;
 
 use alloc::{errors::AllocErr, Alloc, Ptr};
 use repr::Data;
+use serde::Serialize;
 use tracing::{debug, error, instrument};
 use zerocopy::Unalign;
 
@@ -62,6 +63,7 @@ impl<T: Data> DB<T> {
         Ok(())
     }
 
+    #[instrument(skip(self, at, record))]
     pub async fn insert<TZ: chrono::TimeZone>(
         &mut self,
         at: DateTime<TZ>,
@@ -260,6 +262,71 @@ impl<T: Data> DB<T> {
             }
         }
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn debug_structure(&mut self) -> Result<serde_json::Value, self::Error> where T: Copy + Debug + Serialize {
+        use serde_json::{Value, Map};
+        let mut m = Map::new();
+        
+        if self.cached_head.is_null() {
+            m.insert("head".into(), "null".into());
+        } else {
+            m.insert("head".into(), self.cached_head.addr.into());
+            let mut c_year = self.alloc.get(self.cached_head).await?;
+            loop {
+                let mut y_map = Map::new();
+                y_map.insert(
+                    "year".into(),
+                    chrono::NaiveDate::from_ymd_opt(c_year.year,1,1)
+                        .map_or_else(|| "invalid".into(), |y| y.format("%Y").to_string().into()) 
+                );
+                y_map.insert("next".into(), if c_year.has_next() { c_year.next.addr.into() } else { "null".into() });
+                let mut days_map = Map::new();
+                for (i, y_entry) in c_year.days.iter().enumerate() {
+                    if !y_entry.is_null() {
+                        let mut c_day = self.alloc.get(*y_entry).await?;
+                        let mut segments_map = Map::new();
+                        loop {
+                            let mut d_map = Map::new();
+                            d_map.insert("next".into(), if !c_day.next.is_null() { c_day.next.addr.into() } else { "null".into() });
+                            let mut entries_map = Map::new();
+                            for d_entry in 0..c_day.len as usize {
+                                entries_map.insert(
+                                    c_day.entries_time[d_entry]
+                                        .to_chrono()
+                                        .map_or_else(|| "invalid".into(), |y| y.format("%H:%M:%S UTC").to_string().into()),
+                                    serde_json::to_value(c_day.entries_data[d_entry].clone().into_inner())
+                                        .unwrap_or("{ < error serializing data > }".into())
+                                );
+                            } 
+                            d_map.insert("entries".into(), entries_map.into());
+                            segments_map.insert(Obj::get_ptr(&c_day).addr.to_string(), d_map.into());
+                            if !c_day.next.is_null() {
+                                c_day = self.alloc.get(c_day.next).await?;
+                            } else {
+                                break;
+                            }
+                        }
+                        days_map.insert(
+                            chrono::NaiveDate::from_yo_opt(c_year.year, i as u32 + 1)
+                                .map_or_else(|| "invalid".into(), |y| y.format("%d-%m-%Y").to_string().into()),
+                            segments_map.into()
+                        );
+                    }
+                }
+                y_map.insert("days".into(), days_map.into());
+                m.insert(Obj::get_ptr(&c_year).addr.to_string(), y_map.into());
+                if c_year.has_next() {
+                    c_year = self.alloc.get(c_year.next).await?;
+                } else {
+                    break;
+                }
+            }
+        }
+        
+
+        Ok(Value::Object(m))
     }
 }
 

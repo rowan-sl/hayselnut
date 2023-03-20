@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Args: {args:#?}");
 
-    #[derive(Debug, Clone, Copy, FromBytes, AsBytes)]
+    #[derive(Debug, Clone, Copy, Serialize, FromBytes, AsBytes)]
     #[repr(C)]
     struct TestData {
         num1: u32,
@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
     info!("attempting insert");
     db.insert(Utc::now(), TestData { num1: 100 }).await?;
     info!("db.insert ran successfully!");
+    info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
     db.close().await?;
     info!("db closed");
 
@@ -135,7 +136,8 @@ pub struct RequestPacket {
     id: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, FromBytes, AsBytes)]
+#[repr(C)]
 pub struct Observations {
     /// degrees c
     temperature: f32,
