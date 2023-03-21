@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, num::NonZeroU64};
 
 use derivative::Derivative;
 use flume::{Receiver, Sender};
@@ -16,7 +16,7 @@ use crate::tsdb::repr::Data;
 use super::{
     entrypoint_pointer,
     errors::{AllocReqErr, AllocRunnerErr},
-    ptr::Ptr,
+    ptr::{Ptr, NonNull},
     repr::{Header, SegHeader},
     set::SmallSet,
 };
@@ -30,7 +30,7 @@ pub enum AllocRes {
         data: Vec<u8>,
     },
     Created {
-        addr: u64,
+        ptr: NonNull<()>,
     },
 }
 
@@ -39,12 +39,12 @@ pub enum AllocRes {
 #[derivative(Debug)]
 pub enum AllocReqKind {
     Read {
-        addr: u64,
+        ptr: NonNull<()>,
         len: usize,
         mark_used: bool,
     },
     Write {
-        addr: u64,
+        ptr: NonNull<()>,
         #[derivative(Debug = "ignore")]
         data: Vec<u8>,
         mark_unused: bool,
@@ -54,7 +54,7 @@ pub enum AllocReqKind {
         size: u64,
     },
     Destroy {
-        addr: u64,
+        ptr: NonNull<()>,
     },
 }
 
@@ -73,7 +73,7 @@ pub struct AllocRunner {
     close: oneshot::Receiver<()>,
     do_first_time_init: bool,
     /// addresses of currently existing `Obj` instances
-    accesses: SmallSet<u64>,
+    accesses: SmallSet<NonZeroU64>,
     /// current location of the bump allocator
     alloc_addr: u64,
     /// current header
@@ -177,7 +177,7 @@ impl AllocRunner {
     async fn handle(&mut self, AllocReq { on_done, req }: AllocReq) -> Result<(), AllocRunnerErr> {
         match req {
             AllocReqKind::Read {
-                addr,
+                ptr,
                 len,
                 mark_used,
             } => {
@@ -191,15 +191,11 @@ impl AllocRunner {
                         .await
                         .map_err(|_| AllocRunnerErr::ResFail)
                 };
-                if addr == 0 {
-                    respond(Err(AllocReqErr::NullPointer)).await?;
-                    return Ok(());
-                }
-                if self.accesses.contains(&addr) && mark_used {
+                if self.accesses.contains(&ptr.addr()) && mark_used {
                     respond(Err(AllocReqErr::DoubleUse)).await?;
                     return Ok(());
                 }
-                if addr == entrypoint_pointer::<()>().addr {
+                if ptr.addr() == entrypoint_pointer::<()>().addr() {
                     if len != mem::size_of::<Ptr<()>>() {
                         respond(Err(AllocReqErr::SizeMismatch)).await?;
                         return Ok(());
@@ -209,12 +205,12 @@ impl AllocRunner {
                     }))
                     .await?;
                     if mark_used {
-                        self.accesses.insert(addr);
+                        self.accesses.insert(ptr.addr());
                     }
                     return Ok(());
                 }
                 //TODO: make a table of valid addresses to access
-                let seg = self.read::<SegHeader>(addr).await?;
+                let seg = self.read::<SegHeader>(ptr.addr().into()).await?;
                 trace!("Read header: {seg:?}");
                 if seg.free.into() {
                     respond(Err(AllocReqErr::UseAfterFree)).await?;
@@ -226,7 +222,7 @@ impl AllocRunner {
                 }
                 // read
                 let buf = match self
-                    .read_raw(addr + mem::size_of::<SegHeader>() as u64, len)
+                    .read_raw(ptr.addr().get() + mem::size_of::<SegHeader>() as u64, len)
                     .await
                 {
                     Ok(buf) => buf,
@@ -237,11 +233,11 @@ impl AllocRunner {
                 };
                 respond(Ok(AllocRes::Read { data: buf })).await?;
                 if mark_used {
-                    self.accesses.insert(addr);
+                    self.accesses.insert(ptr.addr());
                 }
             }
             AllocReqKind::Write {
-                addr,
+                ptr,
                 data,
                 mark_unused,
                 allow_no_response,
@@ -257,11 +253,7 @@ impl AllocRunner {
                         )
                         .map_err(|_| AllocRunnerErr::ResFail)
                 };
-                if addr == 0 {
-                    respond(Err(AllocReqErr::NullPointer)).await?;
-                    return Ok(());
-                }
-                if addr == entrypoint_pointer::<()>().addr {
+                if ptr.addr() == entrypoint_pointer::<()>().addr() {
                     if data.len() != mem::size_of::<Ptr<()>>() {
                         respond(Err(AllocReqErr::SizeMismatch)).await?;
                         return Ok(());
@@ -277,12 +269,12 @@ impl AllocRunner {
                     }
                     respond(Ok(AllocRes::None)).await?;
                     if mark_unused {
-                        self.accesses.remove(&addr);
+                        self.accesses.remove(&ptr.addr());
                     }
                     return Ok(());
                 }
                 //TODO: make a table of valid addresses to access
-                let seg = self.read::<SegHeader>(addr).await?;
+                let seg = self.read::<SegHeader>(ptr.addr().into()).await?;
                 trace!("Read header: {seg:?}");
                 if seg.free.into() {
                     respond(Err(AllocReqErr::UseAfterFree)).await?;
@@ -293,7 +285,7 @@ impl AllocRunner {
                     return Ok(());
                 }
                 match self
-                    .write_raw(addr + mem::size_of::<SegHeader>() as u64, &data)
+                    .write_raw(ptr.addr().get() + mem::size_of::<SegHeader>() as u64, &data)
                     .await
                 {
                     Ok(()) => respond(Ok(AllocRes::None)).await?,
@@ -303,10 +295,10 @@ impl AllocRunner {
                     }
                 }
                 if mark_unused {
-                    if !self.accesses.contains(&addr) {
+                    if !self.accesses.contains(&ptr.addr()) {
                         warn!("Unneded mark_unused flag")
                     }
-                    self.accesses.remove(&addr);
+                    self.accesses.remove(&ptr.addr());
                 }
             }
             AllocReqKind::Create { size } => {
@@ -327,8 +319,9 @@ impl AllocRunner {
                 match self.write(seg_addr, &seg).await {
                     Ok(()) => {
                         trace!("created allocation of size {size} at {seg_addr}.\nnew allocation marked as used, assuming Obj creation");
-                        self.accesses.insert(seg_addr);
-                        respond(Ok(AllocRes::Created { addr: seg_addr })).await?;
+                        let addr = NonZeroU64::new(seg_addr).unwrap();
+                        self.accesses.insert(addr);
+                        respond(Ok(AllocRes::Created { ptr: NonNull::with_addr(addr) })).await?;
                     }
                     Err(e) => {
                         respond(Err(AllocReqErr::InternalError)).await?;
@@ -336,30 +329,26 @@ impl AllocRunner {
                     }
                 }
             }
-            AllocReqKind::Destroy { addr } => {
+            AllocReqKind::Destroy { ptr } => {
                 let respond = |res| async {
                     on_done
                         .send_async(res)
                         .await
                         .map_err(|_| AllocRunnerErr::ResFail)
                 };
-                if addr == 0 {
-                    respond(Err(AllocReqErr::NullPointer)).await?;
-                    return Ok(());
-                }
-                if self.accesses.contains(&addr) {
+                if self.accesses.contains(&ptr.addr()) {
                     respond(Err(AllocReqErr::Used)).await?;
                     return Ok(());
                 }
                 //TODO: make a table of valid addresses to access
-                let mut seg = self.read::<SegHeader>(addr).await?;
+                let mut seg = self.read::<SegHeader>(ptr.addr().into()).await?;
                 if seg.free.into() {
                     respond(Err(AllocReqErr::DoubleFree)).await?;
                     return Ok(());
                 }
                 // its literally that simple lol
                 seg.free = true.into();
-                self.write::<SegHeader>(addr, &seg).await?;
+                self.write::<SegHeader>(ptr.addr().into(), &seg).await?;
                 respond(Ok(AllocRes::None)).await?;
             }
         }

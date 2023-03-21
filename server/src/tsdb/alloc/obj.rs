@@ -1,18 +1,15 @@
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 use derivative::Derivative;
 
-use super::{Alloc, Data, Ptr};
+use super::{Alloc, Data, NonNull};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Obj<'a, T: Data> {
     #[derivative(Debug = "ignore")]
     pub(super) alloc: &'a Alloc,
-    pub(super) addr: u64,
+    pub(super) ptr: NonNull<T>,
     /// current value (not synced to disk)
     pub(super) val: T,
 }
@@ -20,14 +17,11 @@ pub struct Obj<'a, T: Data> {
 impl<'a, T: Data> Obj<'a, T> {
     // all function here should not take self, but take Self as a normal param -- like Box
 
-    pub fn get_ptr(obj: &Self) -> Ptr<T> {
-        Ptr {
-            addr: obj.addr,
-            _ph0: PhantomData,
-        }
+    pub fn get_ptr(obj: &Self) -> NonNull<T> {
+        obj.ptr
     }
 
-    pub fn into_ptr(obj: Self) -> Ptr<T> {
+    pub fn into_ptr(obj: Self) -> NonNull<T> {
         let p = Self::get_ptr(&obj);
         // runs sync if necessary
         drop(obj);

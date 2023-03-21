@@ -13,7 +13,7 @@ use chrono::{DateTime, Datelike, Utc};
 mod alloc;
 mod repr;
 
-use alloc::{errors::AllocErr, Alloc, Ptr};
+use alloc::{errors::AllocErr, Alloc, Ptr, NonNull};
 use repr::Data;
 use serde::Serialize;
 use tracing::{debug, error, instrument};
@@ -71,19 +71,14 @@ impl<T: Data> DB<T> {
     ) -> Result<(), self::Error> {
         let at: DateTime<Utc> = at.with_timezone(&Utc);
         // retreive the year entry, creating it if it does not allready exist
-        let mut year: Obj<repr::Year<T>> = if self.cached_head.is_null() {
-            // TODO: fix this workaround (borrowing self.alloc, then update_head requires a full mutable borrow of self)
-            let new_head = Obj::into_ptr(self.alloc.alloc(repr::Year::with_date(at)).await?);
-            self.update_head(new_head).await?;
-            self.alloc.get(new_head).await?
-        } else {
-            let head = self.alloc.get(self.cached_head).await?;
+        let mut year: Obj<repr::Year<T>> = if let Some(p_head) = NonNull::new(self.cached_head) {
+            let head = self.alloc.get(p_head).await?;
             match at.year().cmp(&head.year) {
                 cmp::Ordering::Greater => {
                     let mut c_head = head;
                     loop {
-                        if c_head.has_next() {
-                            let n_head = self.alloc.get(c_head.next).await?;
+                        if let Some(p_next) = NonNull::new(c_head.next) {
+                            let n_head = self.alloc.get(p_next).await?;
                             match at.year().cmp(&n_head.year) {
                                 cmp::Ordering::Greater => c_head = n_head,
                                 cmp::Ordering::Equal => break n_head,
@@ -92,8 +87,8 @@ impl<T: Data> DB<T> {
                                     // we create a new year, and insert it in the middle.
                                     let mut m_head =
                                         self.alloc.alloc(repr::Year::with_date(at)).await?;
-                                    m_head.next = Obj::get_ptr(&n_head);
-                                    c_head.next = Obj::get_ptr(&m_head);
+                                    m_head.next = Obj::get_ptr(&n_head).downgrade();
+                                    c_head.next = Obj::get_ptr(&m_head).downgrade();
                                 }
                             }
                         }
@@ -102,13 +97,18 @@ impl<T: Data> DB<T> {
                 cmp::Ordering::Equal => head,
                 cmp::Ordering::Less => {
                     let mut new_head = self.alloc.alloc(repr::Year::with_date(at)).await?;
-                    new_head.next = Obj::get_ptr(&head);
+                    new_head.next = Obj::get_ptr(&head).downgrade();
                     drop(head);
                     let ptr = Obj::into_ptr(new_head);
-                    self.update_head(ptr).await?;
+                    self.update_head(ptr.downgrade()).await?;
                     self.alloc.get(ptr).await?
                 }
             }
+        } else {
+            // TODO: fix this workaround (borrowing self.alloc, then update_head requires a full mutable borrow of self)
+            let new_head = Obj::into_ptr(self.alloc.alloc(repr::Year::with_date(at)).await?);
+            self.update_head(new_head.downgrade()).await?;
+            self.alloc.get(new_head).await?
         };
         // retreive the day, creating it if it does not allready exist
         let t_day = at.ordinal0();
@@ -116,23 +116,16 @@ impl<T: Data> DB<T> {
         // find the appropreate time in the day, and insert the record
         let time = DayTime::from_chrono(&at.time());
 
-        if year.days[t_day as usize].is_null() {
-            let mut day = repr::Day::new_empty();
-            day.len += 1;
-            day.entries_time[0] = time;
-            day.entries_data[0] = Unalign::new(record);
-            let day = self.alloc.alloc(day).await?;
-            year.days[t_day as usize] = Obj::into_ptr(day);
-        } else {
-            // pointer to the previous `c_day`. starts as null
-            let mut p_ptr: Ptr<TimeSegment<T>> = Ptr::null();
+        if let Some(day_ptr) = NonNull::new(year.days[t_day as usize]) {
+            // pointer to the previous `c_day`.
+            let mut p_ptr: Option<NonNull<TimeSegment<T>>> = None;
             // pointer to current day, to update p_ptr with
-            let mut c_ptr: Ptr<TimeSegment<T>> = year.days[t_day as usize];
+            let mut c_ptr: NonNull<TimeSegment<T>> = day_ptr;
             let mut c_day = self.alloc.get(c_ptr).await?;
             // DO NOT USE continue; in this loop unless you intentionally want to skip the code at the end of it!
             loop {
-                match (c_day.next.is_null(), c_day.contains(time)) {
-                    (true, None) => {
+                match (NonNull::new(c_day.next), c_day.contains(time)) {
+                    (None, None) => {
                         // its free real estate!
                         //
                         // if we have gotten this far, then we can assume that all previous
@@ -142,10 +135,10 @@ impl<T: Data> DB<T> {
                         c_day.entries_data[0] = Unalign::new(record);
                         break;
                     }
-                    (false, None) => {
+                    (Some(c_day_next), None) => {
                         // once again, if we are this far than we can assume that all previous segments
                         // are not available
-                        let n_day = self.alloc.get(c_day.next).await?;
+                        let n_day = self.alloc.get(c_day_next).await?;
                         match n_day.contains(time) {
                             None | Some(cmp::Ordering::Greater) | Some(cmp::Ordering::Equal) => {
                                 //keep following the trail
@@ -160,20 +153,20 @@ impl<T: Data> DB<T> {
                             }
                         }
                     }
-                    (has_next, Some(cmp::Ordering::Greater)) => {
+                    (next_opt, Some(cmp::Ordering::Greater)) => {
                         if c_day.full().expect("invalid data in DB") {
-                            if !has_next {
+                            if let Some(c_day_next) = next_opt {
+                                // continue to the next day
+                                c_day = self.alloc.get(c_day_next).await?;
+                            } else {
                                 // create a new object, then continue (will go to the `(true, None)` branch where data is inserted)
                                 let n_day = self.alloc.alloc(Day::new_empty()).await?;
-                                c_day.next = Obj::get_ptr(&n_day);
+                                c_day.next = Obj::get_ptr(&n_day).downgrade();
                                 c_day = n_day;
-                            } else {
-                                // continue to the next day
-                                c_day = self.alloc.get(c_day.next).await?;
                             }
-                        } else if has_next {
+                        } else if let Some(c_day_next) = next_opt {
                             // empty space in this one, but one follows it
-                            let n_day = self.alloc.get(c_day.next).await?;
+                            let n_day = self.alloc.get(c_day_next).await?;
                             match n_day.contains(time) {
                                 Some(cmp::Ordering::Less) => {
                                     // one follows, but its time is too large. insert into this one instead
@@ -207,13 +200,13 @@ impl<T: Data> DB<T> {
                         c_day.len += 1;
                         break;
                     }
-                    (has_next, Some(cmp::Ordering::Equal)) => {
+                    (next_opt, Some(cmp::Ordering::Equal)) => {
                         // c_day is full
-                        if has_next {
-                            c_day = self.alloc.get(c_day.next).await?;
+                        if let Some(c_day_next) = next_opt {
+                            c_day = self.alloc.get(c_day_next).await?;
                         } else {
                             let n_day = self.alloc.alloc(Day::new_empty()).await?;
-                            c_day.next = Obj::get_ptr(&n_day);
+                            c_day.next = Obj::get_ptr(&n_day).downgrade();
                             c_day = n_day;
                         }
                     }
@@ -240,26 +233,33 @@ impl<T: Data> DB<T> {
                     (_, Some(cmp::Ordering::Less)) => {
                         // no space, insert one between this one and the last one.
                         let mut new = Day::new_empty();
-                        new.next = Obj::get_ptr(&c_day);
+                        new.next = Obj::get_ptr(&c_day).downgrade();
                         new.len = 1;
                         new.entries_time[0] = time;
                         new.entries_data[0] = Unalign::new(record);
                         let new = self.alloc.alloc(new).await?;
                         // new allready points to c_day as the next
-                        if p_ptr.is_null() {
-                            // no preivous day, set this one as the first.
-                            year.days[t_day as usize] = Obj::get_ptr(&new);
-                        } else {
+                        if let Some(p_ptr) = p_ptr {
                             // get prev day, set this one in between it and c_day
                             let mut p_day = self.alloc.get(p_ptr).await?;
-                            p_day.next = Obj::get_ptr(&new);
-                        }
+                            p_day.next = Obj::get_ptr(&new).downgrade();
+                        } else {
+                            // no preivous day, set this one as the first.
+                            year.days[t_day as usize] = Obj::get_ptr(&new).downgrade();
+                        } 
                         break;
                     }
                 }
-                p_ptr = c_ptr;
+                p_ptr = Some(c_ptr);
                 c_ptr = Obj::get_ptr(&c_day);
             }
+        } else {
+            let mut day = repr::Day::new_empty();
+            day.len += 1;
+            day.entries_time[0] = time;
+            day.entries_data[0] = Unalign::new(record);
+            let day = self.alloc.alloc(day).await?;
+            year.days[t_day as usize] = Obj::into_ptr(day).downgrade();
         }
         Ok(())
     }
@@ -269,11 +269,9 @@ impl<T: Data> DB<T> {
         use serde_json::{Value, Map};
         let mut m = Map::new();
         
-        if self.cached_head.is_null() {
-            m.insert("head".into(), "null".into());
-        } else {
-            m.insert("head".into(), self.cached_head.addr.into());
-            let mut c_year = self.alloc.get(self.cached_head).await?;
+        if let Some(cached_head) = NonNull::new(self.cached_head) {
+            m.insert("head".into(), cached_head.addr().get().into());
+            let mut c_year = self.alloc.get(cached_head).await?;
             loop {
                 let mut y_map = Map::new();
                 y_map.insert(
@@ -284,8 +282,8 @@ impl<T: Data> DB<T> {
                 y_map.insert("next".into(), if c_year.has_next() { c_year.next.addr.into() } else { "null".into() });
                 let mut days_map = Map::new();
                 for (i, y_entry) in c_year.days.iter().enumerate() {
-                    if !y_entry.is_null() {
-                        let mut c_day = self.alloc.get(*y_entry).await?;
+                    if let Some(y_entry) = NonNull::new(*y_entry) {
+                        let mut c_day = self.alloc.get(y_entry).await?;
                         let mut segments_map = Map::new();
                         loop {
                             let mut d_map = Map::new();
@@ -301,9 +299,9 @@ impl<T: Data> DB<T> {
                                 );
                             } 
                             d_map.insert("entries".into(), entries_map.into());
-                            segments_map.insert(Obj::get_ptr(&c_day).addr.to_string(), d_map.into());
-                            if !c_day.next.is_null() {
-                                c_day = self.alloc.get(c_day.next).await?;
+                            segments_map.insert(Obj::get_ptr(&c_day).addr().get().to_string(), d_map.into());
+                            if let Some(next) = NonNull::new(c_day.next) {
+                                c_day = self.alloc.get(next).await?;
                             } else {
                                 break;
                             }
@@ -316,16 +314,17 @@ impl<T: Data> DB<T> {
                     }
                 }
                 y_map.insert("days".into(), days_map.into());
-                m.insert(Obj::get_ptr(&c_year).addr.to_string(), y_map.into());
-                if c_year.has_next() {
-                    c_year = self.alloc.get(c_year.next).await?;
+                m.insert(Obj::get_ptr(&c_year).addr().to_string(), y_map.into());
+                if let Some(next) = NonNull::new(c_year.next) {
+                    c_year = self.alloc.get(next).await?;
                 } else {
                     break;
                 }
             }
+        } else {
+            m.insert("head".into(), "null".into());
         }
         
-
         Ok(Value::Object(m))
     }
 }

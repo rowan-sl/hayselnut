@@ -19,7 +19,7 @@ mod types;
 use super::repr::Data;
 use errors::{AllocErr, AllocReqErr, AllocRunnerErr};
 pub use obj::Obj;
-pub use ptr::Ptr;
+pub use ptr::{Ptr, NonNull};
 pub use repr::entrypoint_pointer;
 use runner::{AllocReq, AllocReqKind, AllocRes, AllocRunner};
 
@@ -74,14 +74,14 @@ impl Alloc {
     /// - no other objects must currently exist for this data   (this will error)
     /// - the pointer must not be null!                         (this will error)
     #[instrument]
-    pub async fn get<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<Obj<'a, T>, AllocReqErr> {
+    pub async fn get<'a, T: Data>(&'a self, ptr: NonNull<T>) -> Result<Obj<'a, T>, AllocReqErr> {
         let (on_done, recv) = flume::bounded(1);
         // not a bounded channel
         self.req_queue
             .try_send(AllocReq {
                 on_done,
                 req: AllocReqKind::Read {
-                    addr: ptr.addr,
+                    ptr: ptr.cast(),
                     len: ptr.pointee_size(),
                     mark_used: true,
                 },
@@ -92,7 +92,7 @@ impl Alloc {
         };
         Ok(Obj {
             alloc: self,
-            addr: ptr.addr,
+            ptr,
             val: T::read_from(data.as_slice()).unwrap(),
         })
     }
@@ -111,12 +111,12 @@ impl Alloc {
                 },
             })
             .unwrap();
-        let AllocRes::Created { addr } = recv.recv_async().await.unwrap()? else {
+        let AllocRes::Created { ptr } = recv.recv_async().await.unwrap()? else {
             unreachable!("wrong response for request");
         };
         Ok(Obj {
             alloc: self,
-            addr,
+            ptr: ptr.cast::<T>(),
             val,
         })
     }
@@ -126,12 +126,12 @@ impl Alloc {
     /// - no `Obj` must currently exist for this pointer
     /// - the pointer must have come from this allocator
     /// - the pointer must not have been deallocated before.
-    pub async fn free<'a, T: Data>(&'a self, ptr: Ptr<T>) -> Result<(), AllocReqErr> {
+    pub async fn free<'a, T: Data>(&'a self, ptr: NonNull<T>) -> Result<(), AllocReqErr> {
         let (on_done, recv) = flume::bounded(1);
         self.req_queue
             .try_send(AllocReq {
                 on_done,
-                req: AllocReqKind::Destroy { addr: ptr.addr },
+                req: AllocReqKind::Destroy { ptr: ptr.cast() },
             })
             .unwrap();
         let AllocRes::None = recv.recv_async().await.unwrap()? else {
@@ -154,7 +154,7 @@ impl Alloc {
             .try_send(AllocReq {
                 on_done,
                 req: AllocReqKind::Write {
-                    addr: obj.addr,
+                    ptr: obj.ptr.cast(),
                     data: obj.val.as_bytes().to_vec(),
                     mark_unused: true,
                     allow_no_response: true,

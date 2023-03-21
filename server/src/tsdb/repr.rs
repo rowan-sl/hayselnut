@@ -107,6 +107,8 @@ impl<T: Data> TimeSegment<T> {
         }
     }
 
+
+
     // returns None if the length is invalid
     pub fn full(&self) -> Option<bool> {
         if self.len > TIMESEG_LEN as u16 {

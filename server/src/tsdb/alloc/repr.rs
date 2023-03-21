@@ -2,19 +2,16 @@ use zerocopy::{AsBytes, FromBytes};
 
 use crate::tsdb::repr::Data;
 
-use super::{types::ByteBool, Ptr};
+use super::{types::ByteBool, ptr::{Ptr, NonNull}};
 
 /// creates a pointer to access the 'entry point' with.
 ///
 /// this is a allways-present place in memory that can store one pointer,
 /// and should be used as a way to store information about where the data
 /// that is allocated is for the thing using the allocator.
-pub const fn entrypoint_pointer<T: Data>() -> Ptr<Ptr<T>> {
-    Ptr {
-        addr: 1, /* this is special, the allocator will notice reads of 1 and read from the appropreate place */
-        _ph0: std::marker::PhantomData,
-    }
-}
+pub const fn entrypoint_pointer<T: Data>() -> NonNull<Ptr<T>> {
+    // this is special, the allocator will notice reads of 1 and read from the appropreate place
+    NonNull::with_addr(unsafe { std::num::NonZeroU64::new_unchecked(1) })}
 
 /// header for an entire backing file.
 /// will be placed at addr 0 in the file.
@@ -24,8 +21,6 @@ pub struct Header {
     /// the byte at addr 0 (null pointer).
     pub null_byte: u8,
     pub _pad: [u8; 7],
-    /// current address of the bump allocator
-    pub alloc_addr: u64,
     /// the provided 'entry point', a place where data can go that
     /// indicates the structure of existing allocations to the program using this.
     ///
@@ -42,6 +37,8 @@ pub struct Header {
     ///
     /// normal one-acccess-at-a-time rules apply here too!
     pub entrypoint: Ptr<()>,
+    /// current address of the bump allocator
+    pub alloc_addr: u64,
 }
 
 /// Header for a segment

@@ -24,8 +24,6 @@ pub enum AllocReqErr {
     DoubleFree,
     #[error("This object has been deallocated (use after free)")]
     UseAfterFree,
-    #[error("Null pointer passed where a valid one was expected")]
-    NullPointer,
 }
 
 #[derive(Debug, thiserror::Error)]

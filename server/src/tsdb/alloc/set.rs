@@ -1,7 +1,7 @@
 //! a set that has been "optomized" for performance with small keys
 //TODO: optimization
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SmallSet<T: Ord> {
     values: Vec<T>,
 }
@@ -10,7 +10,7 @@ pub struct SmallSet<T: Ord> {
 impl<T: Ord> SmallSet<T> {
     pub fn new() -> Self {
         Self {
-            values: Vec::default(),
+            values: Vec::new(),
         }
     }
 
@@ -47,5 +47,11 @@ impl<T: Ord> SmallSet<T> {
 
     pub fn as_slice(&self) -> &[T] {
         self.values.as_slice()
+    }
+}
+
+impl<T: Ord> Default for SmallSet<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
