@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Utc, Timelike, Local, NaiveDateTime, NaiveDate, NaiveTime};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
@@ -49,10 +49,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
-    info!("attempting insert");
-    db.insert(Utc::now(), TestData { num1: 100 }).await?;
-    info!("db.insert ran successfully!");
-    info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
+    // info!("attempting insert");
+    // db.insert(Local::now(), TestData { num1: 100 }).await?;
+    // db.insert(Local::now() - chrono::Duration::days(1), TestData { num1: 50 }).await?;
+    // info!("db.insert ran successfully!");
+    // info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
+    let records = db.query(NaiveDateTime::new(
+        Local::now().naive_local().date(),
+        NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+    ).and_local_timezone(Local).unwrap(),
+    NaiveDateTime::new(
+        Local::now().naive_local().date(),
+        NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+    ).and_local_timezone(Local).unwrap()).await?;
+    info!("Query: {records:#?}");
     db.close().await?;
     info!("db closed");
 

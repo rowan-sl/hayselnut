@@ -8,7 +8,7 @@ use tokio::{
     select,
     sync::oneshot,
 };
-use tracing::{debug, info, error, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 use zerocopy::{AsBytes, FromBytes};
 
 use crate::tsdb::repr::Data;
@@ -119,13 +119,13 @@ impl AllocRunner {
         self.alloc_addr = self.header.alloc_addr;
         match self.run_inner().await {
             Ok(()) => {
-                info!("Running shutdown code");
+                debug!("Running shutdown code");
                 if let Err(w_err) = self.write(0, &self.header.clone()).await {
                     error!("Failed to write header to disk, DB may be corrupt:\n{w_err:?}");
                 }
             }
             Err(e) => {
-                info!("Attempting to run shutdown code");
+                debug!("Attempting to run shutdown code");
                 if let Err(w_err) = self.write(0, &self.header.clone()).await {
                     error!("Failed to write header to disk, DB may be corrupt:\n{w_err:?}");
                 }

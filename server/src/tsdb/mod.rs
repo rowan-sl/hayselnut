@@ -8,7 +8,7 @@
 
 use std::{cmp, path::Path, fmt::Debug};
 
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Utc, NaiveDateTime, NaiveDate};
 
 mod alloc;
 mod repr;
@@ -16,7 +16,7 @@ mod repr;
 use alloc::{errors::AllocErr, Alloc, Ptr, NonNull};
 use repr::Data;
 use serde::Serialize;
-use tracing::{debug, error, instrument};
+use tracing::{debug, warn, error, instrument};
 use zerocopy::Unalign;
 
 use self::{
@@ -63,15 +63,16 @@ impl<T: Data> DB<T> {
         Ok(())
     }
 
-    #[instrument(skip(self, at, record))]
-    pub async fn insert<TZ: chrono::TimeZone>(
+    #[instrument(skip(self, at))]
+    async fn get_year<TZ: chrono::TimeZone>(
         &mut self,
         at: DateTime<TZ>,
-        record: T,
-    ) -> Result<(), self::Error> {
-        let at: DateTime<Utc> = at.with_timezone(&Utc);
+        // create a new entry if one does not exist 
+        create_if_missing: bool,
+    ) -> Result<Option<NonNull<repr::Year<T>>>, self::Error> {
+        let at = at.with_timezone(&Utc);
         // retreive the year entry, creating it if it does not allready exist
-        let mut year: Obj<repr::Year<T>> = if let Some(p_head) = NonNull::new(self.cached_head) {
+        let year: Obj<repr::Year<T>> = if let Some(p_head) = NonNull::new(self.cached_head) {
             let head = self.alloc.get(p_head).await?;
             match at.year().cmp(&head.year) {
                 cmp::Ordering::Greater => {
@@ -82,20 +83,30 @@ impl<T: Data> DB<T> {
                             match at.year().cmp(&n_head.year) {
                                 cmp::Ordering::Greater => c_head = n_head,
                                 cmp::Ordering::Equal => break n_head,
-                                cmp::Ordering::Less => {
+                                cmp::Ordering::Less if create_if_missing => {
                                     // c_head is a preivous year, n_head is a following year.
                                     // we create a new year, and insert it in the middle.
                                     let mut m_head =
                                         self.alloc.alloc(repr::Year::with_date(at)).await?;
                                     m_head.next = Obj::get_ptr(&n_head).downgrade();
                                     c_head.next = Obj::get_ptr(&m_head).downgrade();
+                                    break m_head;
+                                }
+                                cmp::Ordering::Less => {
+                                    return Ok(None);
                                 }
                             }
+                        } else if create_if_missing {
+                            let n_year = self.alloc.alloc(repr::Year::with_date(at)).await?;
+                            c_head.next = Obj::get_ptr(&n_year).downgrade();
+                            break n_year;
+                        } else {
+                            return Ok(None);
                         }
                     }
                 }
                 cmp::Ordering::Equal => head,
-                cmp::Ordering::Less => {
+                cmp::Ordering::Less if create_if_missing => {
                     let mut new_head = self.alloc.alloc(repr::Year::with_date(at)).await?;
                     new_head.next = Obj::get_ptr(&head).downgrade();
                     drop(head);
@@ -103,18 +114,36 @@ impl<T: Data> DB<T> {
                     self.update_head(ptr.downgrade()).await?;
                     self.alloc.get(ptr).await?
                 }
+                cmp::Ordering::Less => {
+                    return Ok(None);
+                }
             }
-        } else {
+        } else if create_if_missing {
             // TODO: fix this workaround (borrowing self.alloc, then update_head requires a full mutable borrow of self)
             let new_head = Obj::into_ptr(self.alloc.alloc(repr::Year::with_date(at)).await?);
             self.update_head(new_head.downgrade()).await?;
             self.alloc.get(new_head).await?
+        } else {
+            return Ok(None);
         };
+        Ok(Some(Obj::into_ptr(year)))
+    }
+
+    #[instrument(skip(self, at, record))]
+    pub async fn insert<TZ: chrono::TimeZone>(
+        &mut self,
+        at: DateTime<TZ>,
+        record: T,
+    ) -> Result<(), self::Error> {
+        let at: DateTime<Utc> = at.with_timezone(&Utc);
+        let year_ptr = self.get_year(at, true).await?.unwrap();
+        let mut year = self.alloc.get(year_ptr).await?;
+
         // retreive the day, creating it if it does not allready exist
         let t_day = at.ordinal0();
 
         // find the appropreate time in the day, and insert the record
-        let time = DayTime::from_chrono(&at.time());
+        let time = DayTime::from_chrono(&at);
 
         if let Some(day_ptr) = NonNull::new(year.days[t_day as usize]) {
             // pointer to the previous `c_day`.
@@ -265,6 +294,71 @@ impl<T: Data> DB<T> {
     }
 
     #[instrument(skip(self))]
+    pub async fn query<TZ: chrono::TimeZone>(
+        &mut self, 
+        from: DateTime<TZ>,
+        to: DateTime<TZ>,
+    ) -> Result<Vec<(DateTime<Utc>, T)>, self::Error> where T: Copy {
+        let from = from.with_timezone(&Utc);
+        let to = to.with_timezone(&Utc);
+        debug!("from {from} to {to}");
+        if to < from {
+            return Err(Error::InvalidDateRange);
+        }
+        let mut records = vec![];
+        for year_num in from.year()..=to.year() {
+            if let Some(year_ptr) = self.get_year(from.with_year(year_num).unwrap(), false).await? {
+                let day_range = if from.year() == to.year() {
+                    // only one iteration will be made
+                    from.ordinal0() as usize..=to.ordinal0() as usize
+                } else if year_num == from.year() {
+                    from.ordinal0() as usize..=365
+                } else if year_num == to.year() {
+                    0..=to.ordinal0() as usize
+                } else {
+                    0..=365
+                };
+                debug!("Query day range {day_range:?} in year {year_num}");
+
+                let year = self.alloc.get(year_ptr).await?;
+                let days = &year.days[day_range.clone()];
+                for (day_num, day_ptr) in days.iter()
+                    .copied()
+                    .filter(Ptr::not_null)
+                    .map(NonNull::new)
+                    .map(Option::unwrap)
+                    .enumerate() {
+                    let day_num = day_num + day_range.start();
+                    debug!("Query day {day_num}");
+                    let day = self.alloc.get(day_ptr).await?;
+                    let entries = day.filled_entries();
+                    debug!("{} filled entries", entries.0.len());
+                    entries.0.iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            if let Some(t_ch) = t.to_chrono() {
+                                let d_ch = NaiveDate::from_yo_opt(year_num, day_num as u32+1).unwrap();
+                                let r_time = DateTime::<Utc>::from_utc(NaiveDateTime::new(d_ch, t_ch), Utc);
+                                Some((r_time, i))
+                            } else {
+                                warn!("Invalid time entry");
+                                None
+                            }
+                        })
+                        .filter(Option::is_some)
+                        .map(Option::unwrap)
+                        .filter(|(time, _data_idx)| {
+                            debug!("{} < {} < {}", from.time(), time, to.time());
+                            from <= *time && time <= &to
+                        })
+                        .for_each(|(t, i)| records.push((t, entries.1[i].into_inner())));
+                }
+            }
+        }
+        Ok(records)
+    }
+
+    #[instrument(skip(self))]
     pub async fn debug_structure(&mut self) -> Result<serde_json::Value, self::Error> where T: Copy + Debug + Serialize {
         use serde_json::{Value, Map};
         let mut m = Map::new();
@@ -333,6 +427,8 @@ impl<T: Data> DB<T> {
 pub enum Error {
     #[error("Error in allocator: {0:?}")]
     Alloc(#[from] AllocErr),
+    #[error("Query error: time `to` is before time `from`")]
+    InvalidDateRange,
 }
 
 impl From<AllocReqErr> for Error {

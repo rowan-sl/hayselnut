@@ -38,10 +38,7 @@ impl<T> NonNull<T> {
     }
 
     pub const fn downgrade(self) -> Ptr<T> {
-        Ptr {
-            addr: self.addr.get(),
-            _ph0: self._ph0
-        }
+        Ptr::new(self.addr.get()) 
     }
 
     pub const fn cast<U>(self) -> NonNull<U> {
@@ -87,11 +84,16 @@ impl<T> Ptr<T> {
         }
     }
 
-    pub const fn is_null(self) -> bool {
+    pub const fn is_null(&self) -> bool {
         self.addr == 0
     }
 
-    pub const fn pointee_size(self) -> usize {
+    pub const fn not_null(&self) -> bool {
+        self.addr != 0
+    }
+
+    #[allow(unused)]
+    pub const fn pointee_size(&self) -> usize {
         mem::size_of::<T>()
     }
 

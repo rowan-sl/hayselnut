@@ -1,5 +1,5 @@
 use super::alloc::Ptr;
-use chrono::{Datelike, NaiveTime, Timelike};
+use chrono::{Datelike, NaiveTime, Timelike, Utc, DateTime};
 use static_assertions::const_assert_eq;
 use std::{fmt::Debug, mem};
 use zerocopy::{AsBytes, FromBytes};
@@ -107,7 +107,12 @@ impl<T: Data> TimeSegment<T> {
         }
     }
 
-
+    pub fn filled_entries(&self) -> (&[DayTime], &[zerocopy::Unalign<T>]) {
+        (
+            &self.entries_time[..=self.len as usize - 1],
+            &self.entries_data[..=self.len as usize - 1],
+        )
+    }
 
     // returns None if the length is invalid
     pub fn full(&self) -> Option<bool> {
@@ -196,7 +201,7 @@ pub struct DayTime {
 }
 
 impl DayTime {
-    pub fn from_chrono<T: Timelike>(t: &T) -> Self {
+    pub fn from_chrono(t: &DateTime<Utc>) -> Self {
         Self {
             secs: t.num_seconds_from_midnight(),
         }
