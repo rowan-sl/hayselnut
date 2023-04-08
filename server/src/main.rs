@@ -53,6 +53,10 @@ async fn main() -> anyhow::Result<()> {
     let mut router = Router::new();
     router.with_consumer(RecordDB::new(&args.db_path).await?);
 
+    // ... code ... 
+    
+    router.close().await; 
+
     Ok(())
 
     // #[derive(Debug, Clone, Copy, Serialize, FromBytes, AsBytes)]
