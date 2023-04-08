@@ -24,7 +24,7 @@ impl RequestPacket {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct Observations {
     /// degrees c

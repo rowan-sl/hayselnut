@@ -2,10 +2,10 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::tsdb::DB;
+use crate::{tsdb::DB, api::Observations};
 use super::{Record, RecordConsumer};
 
-type Entry = Record;
+type Entry = Observations;
 
 pub struct RecordDB {
     db: DB<Entry>,
@@ -13,16 +13,23 @@ pub struct RecordDB {
 
 impl RecordDB {
     pub async fn new(path: &Path) -> Result<Self> {
-        todo!()
+        let db = DB::open(path).await?;
+        Ok(Self {
+            db,
+        })
     }
 }
 
 #[async_trait]
 impl RecordConsumer for RecordDB {
-    async fn handle(&mut self, _record: &Record) -> Result<()> {
-        todo!()
+    async fn handle(&mut self, Record { data, recorded_at }: &Record) -> Result<()> {
+        self.db.insert(*recorded_at, data.clone()).await?;
+        Ok(())
     }
-    async fn close(&mut self) {
-        todo!()
+
+    async fn close(self: Box<Self>) {
+        if let Err(e) = self.db.close().await {
+            error!("Error shutting down database: {e:#?}");
+        }
     }
 }
