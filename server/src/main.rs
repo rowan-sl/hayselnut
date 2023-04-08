@@ -1,26 +1,34 @@
-use chrono::{Utc, Timelike, Local, NaiveDateTime, NaiveDate, NaiveTime};
-use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
-use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::UdpSocket, time};
-use tracing::{info, metadata::LevelFilter};
-use tsdb::DB;
-use zerocopy::{AsBytes, FromBytes};
+#[macro_use]
+extern crate async_trait;
+#[macro_use]
+extern crate tracing;
 
+use clap::Parser;
+use std::{net::SocketAddr, path::PathBuf};
+use tracing::metadata::LevelFilter;
+
+mod api;
+mod consumer;
+mod route;
 pub mod tsdb;
+
+use route::Router;
+use consumer::db::RecordDB;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[arg(short, long, help = "IP address of the weather station to connect to")]
-    addr: SocketAddr,
-    #[arg(short, long, help = "Delay between readings from station (in seconds)")]
-    delay: f64,
-    #[arg(
-        short,
-        long,
-        help = "Path for unix socket to communicate with the web server on"
-    )]
-    socket: PathBuf,
+    // #[arg(short, long, help = "IP address of the weather station to connect to")]
+    // addr: SocketAddr,
+    // #[arg(short, long, help = "Delay between readings from station (in seconds)")]
+    // delay: f64,
+    // #[arg(
+    //     short,
+    //     long,
+    //     help = "Path for unix socket to communicate with the web server on"
+    // )]
+    // socket: PathBuf,
+    #[arg(short, long, help = "Path for the database")]
+    db_path: PathBuf,
 }
 
 #[tokio::main]
@@ -42,31 +50,36 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Args: {args:#?}");
 
-    #[derive(Debug, Clone, Copy, Serialize, FromBytes, AsBytes)]
-    #[repr(C)]
-    struct TestData {
-        num1: u32,
-    }
-
-    let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
-    // info!("attempting insert");
-    // db.insert(Local::now(), TestData { num1: 100 }).await?;
-    // db.insert(Local::now() - chrono::Duration::days(1), TestData { num1: 50 }).await?;
-    // info!("db.insert ran successfully!");
-    // info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
-    let records = db.query(NaiveDateTime::new(
-        Local::now().naive_local().date(),
-        NaiveTime::from_hms_opt(0, 0, 0).unwrap()
-    ).and_local_timezone(Local).unwrap(),
-    NaiveDateTime::new(
-        Local::now().naive_local().date(),
-        NaiveTime::from_hms_opt(23, 59, 59).unwrap()
-    ).and_local_timezone(Local).unwrap()).await?;
-    info!("Query: {records:#?}");
-    db.close().await?;
-    info!("db closed");
+    let mut router = Router::new();
+    router.with_consumer(RecordDB::new(&args.db_path).await?);
 
     Ok(())
+
+    // #[derive(Debug, Clone, Copy, Serialize, FromBytes, AsBytes)]
+    // #[repr(C)]
+    // struct TestData {
+    //     num1: u32,
+    // }
+    //
+    // let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
+    // // info!("attempting insert");
+    // // db.insert(Local::now(), TestData { num1: 100 }).await?;
+    // // db.insert(Local::now() - chrono::Duration::days(1), TestData { num1: 50 }).await?;
+    // // info!("db.insert ran successfully!");
+    // // info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
+    // let records = db.query(NaiveDateTime::new(
+    //     Local::now().naive_local().date(),
+    //     NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+    // ).and_local_timezone(Local).unwrap(),
+    // NaiveDateTime::new(
+    //     Local::now().naive_local().date(),
+    //     NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+    // ).and_local_timezone(Local).unwrap()).await?;
+    // info!("Query: {records:#?}");
+    // db.close().await?;
+    // info!("db closed");
+
+    // Ok(())
 
     // let socket = UdpSocket::bind("0.0.0.0:0").await?;
     // socket.connect(args.addr).await?;
@@ -128,33 +141,4 @@ async fn main() -> anyhow::Result<()> {
     //     wait = true;
     // }
     //
-}
-
-//TODO add checksums
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DataPacket {
-    id: u32,
-    observations: Observations,
-}
-
-const REQUEST_PACKET_MAGIC: u32 = 0x3ce9abc2;
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RequestPacket {
-    // so random other packets are ignored
-    magic: u32,
-    // echoed back in the data packet
-    id: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, FromBytes, AsBytes)]
-#[repr(C)]
-pub struct Observations {
-    /// degrees c
-    temperature: f32,
-    /// relative humidity (precentage)
-    humidity: f32,
-    /// pressure (pascals)
-    pressure: f32,
-    /// battery voltage (volts)
-    battery: f32,
 }

@@ -9,9 +9,7 @@ pub struct SmallSet<T: Ord> {
 #[allow(dead_code)]
 impl<T: Ord> SmallSet<T> {
     pub fn new() -> Self {
-        Self {
-            values: Vec::new(),
-        }
+        Self { values: Vec::new() }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {

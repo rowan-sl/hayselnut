@@ -2,7 +2,10 @@ use zerocopy::{AsBytes, FromBytes};
 
 use crate::tsdb::repr::Data;
 
-use super::{types::ByteBool, ptr::{Ptr, NonNull}};
+use super::{
+    ptr::{NonNull, Ptr},
+    types::ByteBool,
+};
 
 /// creates a pointer to access the 'entry point' with.
 ///
@@ -11,7 +14,8 @@ use super::{types::ByteBool, ptr::{Ptr, NonNull}};
 /// that is allocated is for the thing using the allocator.
 pub const fn entrypoint_pointer<T: Data>() -> NonNull<Ptr<T>> {
     // this is special, the allocator will notice reads of 1 and read from the appropreate place
-    NonNull::with_addr(unsafe { std::num::NonZeroU64::new_unchecked(1) })}
+    NonNull::with_addr(unsafe { std::num::NonZeroU64::new_unchecked(1) })
+}
 
 /// header for an entire backing file.
 /// will be placed at addr 0 in the file.

@@ -19,7 +19,7 @@ mod types;
 use super::repr::Data;
 use errors::{AllocErr, AllocReqErr, AllocRunnerErr};
 pub use obj::Obj;
-pub use ptr::{Ptr, NonNull};
+pub use ptr::{NonNull, Ptr};
 pub use repr::entrypoint_pointer;
 use runner::{AllocReq, AllocReqKind, AllocRes, AllocRunner};
 

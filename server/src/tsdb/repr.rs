@@ -1,5 +1,5 @@
 use super::alloc::Ptr;
-use chrono::{Datelike, NaiveTime, Timelike, Utc, DateTime};
+use chrono::{DateTime, Datelike, NaiveTime, Timelike, Utc};
 use static_assertions::const_assert_eq;
 use std::{fmt::Debug, mem};
 use zerocopy::{AsBytes, FromBytes};
@@ -13,6 +13,8 @@ pub struct Year<D: Data> {
     pub _pad0: [u8; 4],
     /// can be null, null=no more years
     pub next: Ptr<Year<D>>,
+    /// can be null, null=no previous year
+    pub prev: Ptr<Year<D>>,
     /// can be null, null=no data for that day
     ///
     /// use oridnal0, gives the day starting at 0, to 365
@@ -22,18 +24,20 @@ const_assert_eq!(
     mem::size_of::<Year<u128>>(),
     mem::size_of::<i32>()
         + mem::size_of::<[u8; 4]>()
-        + mem::size_of::<Ptr<Year<u128>>>()
+        + mem::size_of::<Ptr<Year<u128>>>() * 2
         + mem::size_of::<[Ptr<Day<u128>>; 366]>()
 );
 impl<T: Data> Year<T> {
-    pub fn with_date(date: impl Datelike) -> Self {
+    pub fn with_date(date: impl Datelike, next: Ptr<Year<T>>, prev: Ptr<Year<T>>) -> Self {
         Self {
             year: date.year(),
             _pad0: [0; 4],
-            next: Ptr::null(),
+            next,
+            prev,
             days: [Ptr::null(); 366],
         }
     }
+
     pub fn has_next(&self) -> bool {
         !self.next.is_null()
     }
@@ -49,6 +53,7 @@ impl<T: Data> Clone for Year<T> {
             year: self.year,
             _pad0: self._pad0,
             next: self.next,
+            prev: self.prev,
             days: self.days,
         }
     }

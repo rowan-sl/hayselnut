@@ -16,7 +16,7 @@ use crate::tsdb::repr::Data;
 use super::{
     entrypoint_pointer,
     errors::{AllocReqErr, AllocRunnerErr},
-    ptr::{Ptr, NonNull},
+    ptr::{NonNull, Ptr},
     repr::{Header, SegHeader},
     set::SmallSet,
 };
@@ -53,6 +53,7 @@ pub enum AllocReqKind {
     Create {
         size: u64,
     },
+    #[allow(unused)]
     Destroy {
         ptr: NonNull<()>,
     },
@@ -321,7 +322,10 @@ impl AllocRunner {
                         trace!("created allocation of size {size} at {seg_addr}.\nnew allocation marked as used, assuming Obj creation");
                         let addr = NonZeroU64::new(seg_addr).unwrap();
                         self.accesses.insert(addr);
-                        respond(Ok(AllocRes::Created { ptr: NonNull::with_addr(addr) })).await?;
+                        respond(Ok(AllocRes::Created {
+                            ptr: NonNull::with_addr(addr),
+                        }))
+                        .await?;
                     }
                     Err(e) => {
                         respond(Err(AllocReqErr::InternalError)).await?;

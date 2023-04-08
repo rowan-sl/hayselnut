@@ -6,17 +6,17 @@
 //!
 //! benchmarking TBD
 
-use std::{cmp, path::Path, fmt::Debug};
+use std::{cmp, fmt::Debug, path::Path};
 
-use chrono::{DateTime, Datelike, Utc, NaiveDateTime, NaiveDate};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Utc};
 
 mod alloc;
 mod repr;
 
-use alloc::{errors::AllocErr, Alloc, Ptr, NonNull};
+use alloc::{errors::AllocErr, Alloc, NonNull, Ptr};
 use repr::Data;
 use serde::Serialize;
-use tracing::{debug, warn, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use zerocopy::Unalign;
 
 use self::{
@@ -67,29 +67,35 @@ impl<T: Data> DB<T> {
     async fn get_year<TZ: chrono::TimeZone>(
         &mut self,
         at: DateTime<TZ>,
-        // create a new entry if one does not exist 
+        // create a new entry if one does not exist
         create_if_missing: bool,
     ) -> Result<Option<NonNull<repr::Year<T>>>, self::Error> {
         let at = at.with_timezone(&Utc);
         // retreive the year entry, creating it if it does not allready exist
         let year: Obj<repr::Year<T>> = if let Some(p_head) = NonNull::new(self.cached_head) {
-            let head = self.alloc.get(p_head).await?;
+            let mut head = self.alloc.get(p_head).await?;
             match at.year().cmp(&head.year) {
                 cmp::Ordering::Greater => {
                     let mut c_head = head;
                     loop {
                         if let Some(p_next) = NonNull::new(c_head.next) {
-                            let n_head = self.alloc.get(p_next).await?;
+                            let mut n_head = self.alloc.get(p_next).await?;
                             match at.year().cmp(&n_head.year) {
                                 cmp::Ordering::Greater => c_head = n_head,
                                 cmp::Ordering::Equal => break n_head,
                                 cmp::Ordering::Less if create_if_missing => {
                                     // c_head is a preivous year, n_head is a following year.
                                     // we create a new year, and insert it in the middle.
-                                    let mut m_head =
-                                        self.alloc.alloc(repr::Year::with_date(at)).await?;
-                                    m_head.next = Obj::get_ptr(&n_head).downgrade();
+                                    let m_head = self
+                                        .alloc
+                                        .alloc(repr::Year::with_date(
+                                            at,
+                                            Obj::get_ptr(&n_head).downgrade(),
+                                            Obj::get_ptr(&c_head).downgrade(),
+                                        ))
+                                        .await?;
                                     c_head.next = Obj::get_ptr(&m_head).downgrade();
+                                    n_head.prev = c_head.next;
                                     break m_head;
                                 }
                                 cmp::Ordering::Less => {
@@ -97,7 +103,14 @@ impl<T: Data> DB<T> {
                                 }
                             }
                         } else if create_if_missing {
-                            let n_year = self.alloc.alloc(repr::Year::with_date(at)).await?;
+                            let n_year = self
+                                .alloc
+                                .alloc(repr::Year::with_date(
+                                    at,
+                                    Ptr::null(),
+                                    Obj::get_ptr(&c_head).downgrade(),
+                                ))
+                                .await?;
                             c_head.next = Obj::get_ptr(&n_year).downgrade();
                             break n_year;
                         } else {
@@ -107,8 +120,15 @@ impl<T: Data> DB<T> {
                 }
                 cmp::Ordering::Equal => head,
                 cmp::Ordering::Less if create_if_missing => {
-                    let mut new_head = self.alloc.alloc(repr::Year::with_date(at)).await?;
-                    new_head.next = Obj::get_ptr(&head).downgrade();
+                    let new_head = self
+                        .alloc
+                        .alloc(repr::Year::with_date(
+                            at,
+                            Obj::get_ptr(&head).downgrade(),
+                            Ptr::null(),
+                        ))
+                        .await?;
+                    head.prev = Obj::get_ptr(&new_head).downgrade();
                     drop(head);
                     let ptr = Obj::into_ptr(new_head);
                     self.update_head(ptr.downgrade()).await?;
@@ -120,13 +140,22 @@ impl<T: Data> DB<T> {
             }
         } else if create_if_missing {
             // TODO: fix this workaround (borrowing self.alloc, then update_head requires a full mutable borrow of self)
-            let new_head = Obj::into_ptr(self.alloc.alloc(repr::Year::with_date(at)).await?);
+            let new_head = Obj::into_ptr(
+                self.alloc
+                    .alloc(repr::Year::with_date(at, Ptr::null(), Ptr::null()))
+                    .await?,
+            );
             self.update_head(new_head.downgrade()).await?;
             self.alloc.get(new_head).await?
         } else {
             return Ok(None);
         };
         Ok(Some(Obj::into_ptr(year)))
+    }
+
+    #[instrument(skip(self, _year))]
+    async fn free_year(&self, _year: NonNull<repr::Year<T>>) -> Result<(), AllocErr> {
+        todo!()
     }
 
     #[instrument(skip(self, at, record))]
@@ -275,7 +304,7 @@ impl<T: Data> DB<T> {
                         } else {
                             // no preivous day, set this one as the first.
                             year.days[t_day as usize] = Obj::get_ptr(&new).downgrade();
-                        } 
+                        }
                         break;
                     }
                 }
@@ -294,11 +323,14 @@ impl<T: Data> DB<T> {
     }
 
     #[instrument(skip(self))]
-    pub async fn query<TZ: chrono::TimeZone>(
-        &mut self, 
+    pub async fn query<TZ: TimeZone>(
+        &mut self,
         from: DateTime<TZ>,
         to: DateTime<TZ>,
-    ) -> Result<Vec<(DateTime<Utc>, T)>, self::Error> where T: Copy {
+    ) -> Result<Vec<(DateTime<Utc>, T)>, self::Error>
+    where
+        T: Copy,
+    {
         let from = from.with_timezone(&Utc);
         let to = to.with_timezone(&Utc);
         debug!("from {from} to {to}");
@@ -307,7 +339,10 @@ impl<T: Data> DB<T> {
         }
         let mut records = vec![];
         for year_num in from.year()..=to.year() {
-            if let Some(year_ptr) = self.get_year(from.with_year(year_num).unwrap(), false).await? {
+            if let Some(year_ptr) = self
+                .get_year(from.with_year(year_num).unwrap(), false)
+                .await?
+            {
                 let day_range = if from.year() == to.year() {
                     // only one iteration will be made
                     from.ordinal0() as usize..=to.ordinal0() as usize
@@ -322,23 +357,23 @@ impl<T: Data> DB<T> {
 
                 let year = self.alloc.get(year_ptr).await?;
                 let days = &year.days[day_range.clone()];
-                for (day_num, day_ptr) in days.iter()
-                    .copied()
-                    .filter(Ptr::not_null)
-                    .map(NonNull::new)
-                    .map(Option::unwrap)
-                    .enumerate() {
+                for (day_num, day_ptr) in days.iter().copied().filter_map(NonNull::new).enumerate()
+                {
                     let day_num = day_num + day_range.start();
                     debug!("Query day {day_num}");
                     let day = self.alloc.get(day_ptr).await?;
                     let entries = day.filled_entries();
                     debug!("{} filled entries", entries.0.len());
-                    entries.0.iter()
+                    entries
+                        .0
+                        .iter()
                         .enumerate()
                         .map(|(i, t)| {
                             if let Some(t_ch) = t.to_chrono() {
-                                let d_ch = NaiveDate::from_yo_opt(year_num, day_num as u32+1).unwrap();
-                                let r_time = DateTime::<Utc>::from_utc(NaiveDateTime::new(d_ch, t_ch), Utc);
+                                let d_ch =
+                                    NaiveDate::from_yo_opt(year_num, day_num as u32 + 1).unwrap();
+                                let r_time =
+                                    DateTime::<Utc>::from_utc(NaiveDateTime::new(d_ch, t_ch), Utc);
                                 Some((r_time, i))
                             } else {
                                 warn!("Invalid time entry");
@@ -359,10 +394,110 @@ impl<T: Data> DB<T> {
     }
 
     #[instrument(skip(self))]
-    pub async fn debug_structure(&mut self) -> Result<serde_json::Value, self::Error> where T: Copy + Debug + Serialize {
-        use serde_json::{Value, Map};
+    pub async fn remove<TZ: TimeZone>(
+        &mut self,
+        from: DateTime<TZ>,
+        to: DateTime<TZ>,
+    ) -> Result<(), self::Error> {
+        //TODO: implement freeing stuff
+        unimplemented!();
+
+        // let from = from.with_timezone(&Utc);
+        // let to = to.with_timezone(&Utc);
+        // debug!("from {from} to {to}");
+        // if to < from {
+        //     return Err(Error::InvalidDateRange);
+        // }
+        // 'year_loop: for year_num in from.year()..=to.year() {
+        //     if let Some(year_ptr) = self.get_year(from.with_year(year_num).unwrap(), false).await? {
+        //         let day_range = if from.year() == to.year() {
+        //             // only one iteration will be made (entries to remove are inside this year)
+        //             from.ordinal0() as usize..=to.ordinal0() as usize
+        //         } else if year_num == from.year() {
+        //             // this is the first year to remove from
+        //             from.ordinal0() as usize..=365
+        //         } else if year_num == to.year() {
+        //             // final year to remove from
+        //             0..=to.ordinal0() as usize
+        //         } else {
+        //             // year is inside the range, the whole year will get removed
+        //             // 0..=365
+        //
+        //             let this_year = self.alloc.get(year_ptr).await?;
+        //             let mut last_year = if let Some(prev_ptr) = NonNull::new(this_year.prev) {
+        //                 Some(self.alloc.get(prev_ptr).await?)
+        //             } else {
+        //                 None
+        //             };
+        //             let mut next_year = if let Some(next_ptr) = NonNull::new(this_year.next) {
+        //                 Some(self.alloc.get(next_ptr).await?)
+        //             } else {
+        //                 None
+        //             };
+        //             (&mut last_year).as_mut().zip((&mut next_year).as_mut()).map(|(last, next)| {
+        //                 last.next = Obj::get_ptr(&next).downgrade();
+        //                 next.prev = Obj::get_ptr(&last).downgrade();
+        //             });
+        //             (&mut last_year).as_mut().filter(|_| next_year.is_none()).map(|last| last.next = Ptr::null());
+        //             (&mut next_year).as_mut().filter(|_| last_year.is_none()).map(|next| next.prev = Ptr::null());
+        //             //self.alloc.free(Obj::into_ptr(this_year)).await?;
+        //             self.free_year(Obj::into_ptr(this_year)).await?;
+        //             continue 'year_loop;
+        //         };
+        //         debug!("Remove day range {day_range:?} in year {year_num}");
+        //
+        //         let year = self.alloc.get(year_ptr).await?;
+        //         let days = &mut year.days[day_range.clone()];
+        //         for (day_num, day_ptr) in (*days).iter()
+        //             .copied()
+        //             .filter_map(NonNull::new)
+        //             .enumerate() {
+        //             let day_num = day_num + day_range.start();
+        //             debug!("Remove day {day_num}");
+        //             if day_num == day_range.start() {
+        //                 // first day (or only day) (may include elements that need keeping)
+        //
+        //             } else if day_num = day_range.end() {
+        //                 // last day (may include elements that need keeping)
+        //             } else {
+        //                 // any day in-between (delete the whole day)
+        //             }
+        //             // let day = self.alloc.get(day_ptr).await?;
+        //             // let entries = day.filled_entries();
+        //             // debug!("{} filled entries", entries.0.len());
+        //             // entries.0.iter()
+        //             //     .enumerate()
+        //             //     .map(|(i, t)| {
+        //             //         if let Some(t_ch) = t.to_chrono() {
+        //             //             let d_ch = NaiveDate::from_yo_opt(year_num, day_num as u32+1).unwrap();
+        //             //             let r_time = DateTime::<Utc>::from_utc(NaiveDateTime::new(d_ch, t_ch), Utc);
+        //             //             Some((r_time, i))
+        //             //         } else {
+        //             //             warn!("Invalid time entry");
+        //             //             None
+        //             //         }
+        //             //     })
+        //             //     .filter(Option::is_some)
+        //             //     .map(Option::unwrap)
+        //             //     .filter(|(time, _data_idx)| {
+        //             //         debug!("{} < {} < {}", from.time(), time, to.time());
+        //             //         from <= *time && time <= &to
+        //             //     })
+        //             //     .for_each(|(t, i)| records.push((t, entries.1[i].into_inner())));
+        //         }
+        //     }
+        // }
+        // return Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn debug_structure(&mut self) -> Result<serde_json::Value, self::Error>
+    where
+        T: Copy + Debug + Serialize,
+    {
+        use serde_json::{Map, Value};
         let mut m = Map::new();
-        
+
         if let Some(cached_head) = NonNull::new(self.cached_head) {
             m.insert("head".into(), cached_head.addr().get().into());
             let mut c_year = self.alloc.get(cached_head).await?;
@@ -370,10 +505,17 @@ impl<T: Data> DB<T> {
                 let mut y_map = Map::new();
                 y_map.insert(
                     "year".into(),
-                    chrono::NaiveDate::from_ymd_opt(c_year.year,1,1)
-                        .map_or_else(|| "invalid".into(), |y| y.format("%Y").to_string().into()) 
+                    chrono::NaiveDate::from_ymd_opt(c_year.year, 1, 1)
+                        .map_or_else(|| "invalid".into(), |y| y.format("%Y").to_string().into()),
                 );
-                y_map.insert("next".into(), if c_year.has_next() { c_year.next.addr.into() } else { "null".into() });
+                y_map.insert(
+                    "next".into(),
+                    if c_year.has_next() {
+                        c_year.next.addr.into()
+                    } else {
+                        "null".into()
+                    },
+                );
                 let mut days_map = Map::new();
                 for (i, y_entry) in c_year.days.iter().enumerate() {
                     if let Some(y_entry) = NonNull::new(*y_entry) {
@@ -381,19 +523,32 @@ impl<T: Data> DB<T> {
                         let mut segments_map = Map::new();
                         loop {
                             let mut d_map = Map::new();
-                            d_map.insert("next".into(), if !c_day.next.is_null() { c_day.next.addr.into() } else { "null".into() });
+                            d_map.insert(
+                                "next".into(),
+                                if !c_day.next.is_null() {
+                                    c_day.next.addr.into()
+                                } else {
+                                    "null".into()
+                                },
+                            );
                             let mut entries_map = Map::new();
                             for d_entry in 0..c_day.len as usize {
                                 entries_map.insert(
-                                    c_day.entries_time[d_entry]
-                                        .to_chrono()
-                                        .map_or_else(|| "invalid".into(), |y| y.format("%H:%M:%S UTC").to_string().into()),
-                                    serde_json::to_value(c_day.entries_data[d_entry].clone().into_inner())
-                                        .unwrap_or("{ < error serializing data > }".into())
+                                    c_day.entries_time[d_entry].to_chrono().map_or_else(
+                                        || "invalid".into(),
+                                        |y| y.format("%H:%M:%S UTC").to_string().into(),
+                                    ),
+                                    serde_json::to_value(
+                                        c_day.entries_data[d_entry].clone().into_inner(),
+                                    )
+                                    .unwrap_or("{ < error serializing data > }".into()),
                                 );
-                            } 
+                            }
                             d_map.insert("entries".into(), entries_map.into());
-                            segments_map.insert(Obj::get_ptr(&c_day).addr().get().to_string(), d_map.into());
+                            segments_map.insert(
+                                Obj::get_ptr(&c_day).addr().get().to_string(),
+                                d_map.into(),
+                            );
                             if let Some(next) = NonNull::new(c_day.next) {
                                 c_day = self.alloc.get(next).await?;
                             } else {
@@ -401,9 +556,11 @@ impl<T: Data> DB<T> {
                             }
                         }
                         days_map.insert(
-                            chrono::NaiveDate::from_yo_opt(c_year.year, i as u32 + 1)
-                                .map_or_else(|| "invalid".into(), |y| y.format("%d-%m-%Y").to_string().into()),
-                            segments_map.into()
+                            chrono::NaiveDate::from_yo_opt(c_year.year, i as u32 + 1).map_or_else(
+                                || "invalid".into(),
+                                |y| y.format("%d-%m-%Y").to_string().into(),
+                            ),
+                            segments_map.into(),
                         );
                     }
                 }
@@ -418,7 +575,7 @@ impl<T: Data> DB<T> {
         } else {
             m.insert("head".into(), "null".into());
         }
-        
+
         Ok(Value::Object(m))
     }
 }
@@ -427,7 +584,7 @@ impl<T: Data> DB<T> {
 pub enum Error {
     #[error("Error in allocator: {0:?}")]
     Alloc(#[from] AllocErr),
-    #[error("Query error: time `to` is before time `from`")]
+    #[error("Query/Remove error: time `to` is before time `from`")]
     InvalidDateRange,
 }
 

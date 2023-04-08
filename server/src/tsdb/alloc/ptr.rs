@@ -18,7 +18,7 @@ impl<T> NonNull<T> {
                 None => return None,
                 Some(addr) => addr,
             },
-            _ph0: PhantomData
+            _ph0: PhantomData,
         })
     }
 
@@ -38,7 +38,7 @@ impl<T> NonNull<T> {
     }
 
     pub const fn downgrade(self) -> Ptr<T> {
-        Ptr::new(self.addr.get()) 
+        Ptr::new(self.addr.get())
     }
 
     pub const fn cast<U>(self) -> NonNull<U> {
@@ -48,7 +48,6 @@ impl<T> NonNull<T> {
         }
     }
 }
-
 
 impl<T> Clone for NonNull<T> {
     fn clone(&self) -> Self {
@@ -88,6 +87,7 @@ impl<T> Ptr<T> {
         self.addr == 0
     }
 
+    #[allow(unused)]
     pub const fn not_null(&self) -> bool {
         self.addr != 0
     }
