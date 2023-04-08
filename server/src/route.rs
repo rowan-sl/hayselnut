@@ -19,7 +19,10 @@ impl Router {
     }
 
     pub async fn process(&mut self, record: Record) -> Result<()> {
-        todo!()
+        for c in &mut self.consumers {
+            c.handle(&record).await?;
+        }
+        Ok(())
     }
 
     /// call this to properly shutdown all consumers attached to this Router.
