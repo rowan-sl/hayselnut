@@ -126,6 +126,7 @@ impl Alloc {
     /// - no `Obj` must currently exist for this pointer
     /// - the pointer must have come from this allocator
     /// - the pointer must not have been deallocated before.
+    #[allow(unused)]
     pub async fn free<'a, T: Data>(&'a self, ptr: NonNull<T>) -> Result<(), AllocReqErr> {
         let (on_done, recv) = flume::bounded(1);
         self.req_queue

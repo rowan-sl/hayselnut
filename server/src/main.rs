@@ -4,7 +4,7 @@ extern crate async_trait;
 extern crate tracing;
 
 use clap::Parser;
-use std::{net::SocketAddr, path::PathBuf};
+use std::path::PathBuf;
 use tracing::metadata::LevelFilter;
 
 mod api;
