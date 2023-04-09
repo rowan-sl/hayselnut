@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::{tsdb::DB, api::Observations};
 use super::{Record, RecordConsumer};
+use crate::{station::api::Observations, tsdb::DB};
 
 type Entry = Observations;
 
@@ -14,9 +14,7 @@ pub struct RecordDB {
 impl RecordDB {
     pub async fn new(path: &Path) -> Result<Self> {
         let db = DB::open(path).await?;
-        Ok(Self {
-            db,
-        })
+        Ok(Self { db })
     }
 }
 

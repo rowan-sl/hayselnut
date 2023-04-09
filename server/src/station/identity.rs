@@ -1,0 +1,65 @@
+//! manages connections to weather stations, station identity, etc;
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
+
+pub type StationID = Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StationInfo {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnownStations {
+    ids: HashMap<StationID, StationInfo>,
+}
+
+impl KnownStations {
+    pub fn new() -> Self {
+        Self {
+            ids: HashMap::default(),
+        }
+    }
+
+    pub fn from_json(json: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(json)
+    }
+
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        serde_json::to_string_pretty(&self)
+    }
+
+    pub fn get_info(&self, id: &StationID) -> Option<&StationInfo> {
+        self.ids.get(id)
+    }
+
+    pub fn map_info<R, F: FnOnce(&StationID, &mut StationInfo) -> R>(
+        &mut self,
+        id: &StationID,
+        f: F,
+    ) -> Option<R> {
+        if let Some(inf) = self.ids.get_mut(id) {
+            Some(f(id, inf))
+        } else {
+            None
+        }
+    }
+
+    pub fn gen_id(&self) -> StationID {
+        Uuid::new_v4()
+    }
+
+    /// insert station info for a new station, returning Err(new_stations_info) if the info for that station was previously inserted
+    pub fn insert_station(
+        &mut self,
+        id: StationID,
+        info: StationInfo,
+    ) -> Result<(), (StationID, StationInfo)> {
+        if !self.ids.contains_key(&id) {
+            self.ids.insert(id, info);
+            Ok(())
+        } else {
+            Err((id, info))
+        }
+    }
+}

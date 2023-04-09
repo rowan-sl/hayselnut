@@ -7,13 +7,13 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::metadata::LevelFilter;
 
-mod api;
 mod consumer;
 mod route;
+mod station;
 pub mod tsdb;
 
-use route::Router;
 use consumer::db::RecordDB;
+use route::Router;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -53,9 +53,9 @@ async fn main() -> anyhow::Result<()> {
     let mut router = Router::new();
     router.with_consumer(RecordDB::new(&args.db_path).await?);
 
-    // ... code ... 
-    
-    router.close().await; 
+    // ... code ...
+
+    router.close().await;
 
     Ok(())
 

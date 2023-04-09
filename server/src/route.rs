@@ -26,7 +26,7 @@ impl Router {
     }
 
     /// call this to properly shutdown all consumers attached to this Router.
-    /// 
+    ///
     /// this MUST be called, you may NOT just drop Router
     pub async fn close(mut self) {
         for c in self.consumers.drain(..) {
