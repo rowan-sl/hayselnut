@@ -62,4 +62,8 @@ impl KnownStations {
             Err((id, info))
         }
     }
+
+    pub fn stations(&self) -> impl Iterator<Item = &StationID> {
+        self.ids.keys()
+    }
 }

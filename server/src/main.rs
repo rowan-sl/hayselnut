@@ -2,12 +2,19 @@
 extern crate async_trait;
 #[macro_use]
 extern crate tracing;
+#[macro_use]
+extern crate anyhow;
 
 use clap::Parser;
 use std::path::PathBuf;
+use tokio::{
+    fs::{self, OpenOptions},
+    io::AsyncReadExt,
+};
 use tracing::metadata::LevelFilter;
 
 mod consumer;
+mod paths;
 mod route;
 mod station;
 pub mod tsdb;
@@ -27,8 +34,12 @@ pub struct Args {
     //     help = "Path for unix socket to communicate with the web server on"
     // )]
     // socket: PathBuf,
-    #[arg(short, long, help = "Path for the database")]
-    db_path: PathBuf,
+    #[arg(
+        short,
+        long,
+        help = "directory for weather + station ID records to be placed"
+    )]
+    records_path: PathBuf,
 }
 
 #[tokio::main]
@@ -50,8 +61,45 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Args: {args:#?}");
 
+    if args.records_path.exists() {
+        if !args.records_path.canonicalize()?.is_dir() {
+            error!("records directory path already exists, and is a file!");
+            bail!("records dir exists");
+        }
+    } else {
+        info!("Creating new records directory at {:#?}", args.records_path);
+        fs::create_dir(args.records_path.clone()).await?;
+    }
+
+    let records_dir = paths::RecordsPath::new(args.records_path.canonicalize()?);
+
+    info!("Loading info for known stations");
+    let stations_path = records_dir.path("stations.json");
+    let stations = if stations_path.exists() {
+        if !stations_path.is_file() {
+            error!("stations.json exists, but it is not a file");
+            bail!("error loading station info");
+        }
+        let mut f = OpenOptions::new().read(true).open(stations_path).await?;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf).await?;
+        station::identity::KnownStations::from_json(&buf).map_err(|e| {
+            error!("Failed to load stations.json");
+            e
+        })?
+    } else {
+        station::identity::KnownStations::new()
+    };
+
+    debug!("Loaded known stations:");
+    for s in stations.stations() {
+        // in the future, station info should be printed
+        let _info = stations.get_info(s).unwrap();
+        debug!("Known station {}", s);
+    }
+
     let mut router = Router::new();
-    router.with_consumer(RecordDB::new(&args.db_path).await?);
+    router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
 
     // ... code ...
 
