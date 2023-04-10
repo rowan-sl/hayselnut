@@ -20,9 +20,10 @@ impl RecordDB {
 
 #[async_trait]
 impl RecordConsumer for RecordDB {
-    async fn handle(&mut self, Record { data, recorded_at }: &Record) -> Result<()> {
-        self.db.insert(*recorded_at, data.clone()).await?;
-        Ok(())
+    async fn handle(&mut self, Record { data: _, recorded_at: _, recorded_by: _ }: &Record) -> Result<()> {
+        todo!("need to make the DB store what station the data was recorded by")
+        // self.db.insert(*recorded_at, data.clone()).await?;
+        // Ok(())
     }
 
     async fn close(self: Box<Self>) {

@@ -18,7 +18,7 @@ impl RecordsPath {
     #[instrument(skip(filename))]
     pub fn path<P: AsRef<Path>>(&self, filename: P) -> PathBuf {
         let p = filename.as_ref();
-        if p.parent().is_some() {
+        if p.parent().is_some() && p.parent() != Some(Path::new("")) {
             warn!(path=?p, "RecordsPath::path only uses the last segment of a path, the rest will be discarded");
         }
         if let Some(file) = p.file_name() {

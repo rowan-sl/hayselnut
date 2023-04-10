@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use crate::station::api::Observations;
+use crate::station::{api::Observations, identity::StationID};
 
 pub mod db;
 
@@ -9,6 +9,7 @@ pub mod db;
 pub struct Record {
     pub data: Observations,
     pub recorded_at: DateTime<Utc>,
+    pub recorded_by: StationID,
 }
 
 #[async_trait]

@@ -9,7 +9,7 @@ pub type StationID = Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationInfo {}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct KnownStations {
     ids: HashMap<StationID, StationInfo>,
 }
@@ -19,14 +19,6 @@ impl KnownStations {
         Self {
             ids: HashMap::default(),
         }
-    }
-
-    pub fn from_json(json: &str) -> serde_json::Result<Self> {
-        serde_json::from_str(json)
-    }
-
-    pub fn to_json(&self) -> serde_json::Result<String> {
-        serde_json::to_string_pretty(&self)
     }
 
     pub fn get_info(&self, id: &StationID) -> Option<&StationInfo> {

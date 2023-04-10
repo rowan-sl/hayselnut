@@ -7,20 +7,22 @@ extern crate anyhow;
 
 use clap::Parser;
 use std::path::PathBuf;
-use tokio::{
-    fs::{self, OpenOptions},
-    io::AsyncReadExt,
-};
+use tokio::{fs, signal::ctrl_c, sync};
 use tracing::metadata::LevelFilter;
 
 mod consumer;
 mod paths;
 mod route;
 mod station;
+mod registry;
+mod shutdown;
 pub mod tsdb;
 
 use consumer::db::RecordDB;
 use route::Router;
+use registry::JsonLoader;
+use station::{identity::KnownStations, capabilities::KnownChannels};
+use shutdown::Shutdown;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -61,49 +63,62 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Args: {args:#?}");
 
-    if args.records_path.exists() {
-        if !args.records_path.canonicalize()?.is_dir() {
-            error!("records directory path already exists, and is a file!");
-            bail!("records dir exists");
-        }
-    } else {
-        info!("Creating new records directory at {:#?}", args.records_path);
-        fs::create_dir(args.records_path.clone()).await?;
-    }
+    let mut shutdown = Shutdown::new();
+    // trap the signal, will only start listening later in the main loop
+    let ctrlc = {
+        let (shutdown_tx, shutdown_rx) = sync::broadcast::channel::<()>(1);
+        tokio::spawn(async move {
+            if let Err(_) = ctrl_c().await {
+                error!("Failed to listen for ctrl_c signal"); 
+            }
+            shutdown_tx.send(()).unwrap();
+        });
 
-    let records_dir = paths::RecordsPath::new(args.records_path.canonicalize()?);
-
-    info!("Loading info for known stations");
-    let stations_path = records_dir.path("stations.json");
-    let stations = if stations_path.exists() {
-        if !stations_path.is_file() {
-            error!("stations.json exists, but it is not a file");
-            bail!("error loading station info");
-        }
-        let mut f = OpenOptions::new().read(true).open(stations_path).await?;
-        let mut buf = String::new();
-        f.read_to_string(&mut buf).await?;
-        station::identity::KnownStations::from_json(&buf).map_err(|e| {
-            error!("Failed to load stations.json");
-            e
-        })?
-    } else {
-        station::identity::KnownStations::new()
+        shutdown_rx
     };
 
-    debug!("Loaded known stations:");
-    for s in stations.stations() {
-        // in the future, station info should be printed
-        let _info = stations.get_info(s).unwrap();
-        debug!("Known station {}", s);
+    // a new scope is opened here so that any item using ShutdownHandles is dropped before
+    // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
+    {
+        if args.records_path.exists() {
+            if !args.records_path.canonicalize()?.is_dir() {
+                error!("records directory path already exists, and is a file!");
+                bail!("records dir exists");
+            }
+        } else {
+            info!("Creating new records directory at {:#?}", args.records_path);
+            fs::create_dir(args.records_path.clone()).await?;
+        }
+
+        let records_dir = paths::RecordsPath::new(args.records_path.canonicalize()?);
+
+        info!("Loading info for known stations");
+        let stations_path = records_dir.path("stations.json");
+        let stations = JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
+
+        debug!("Loaded known stations:");
+        for s in stations.stations() {
+            // in the future, station info should be printed
+            let _info = stations.get_info(s).unwrap();
+            debug!("Known station {}", s);
+        }
+
+        info!("Loading known channels");
+        let channels_path = records_dir.path("channels.json");
+        let stations = JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
+
+        debug!("Loaded known channels: {:?}", stations.channels().map(|(_, v)| (&v).clone()).collect::<Vec<_>>());
+
+        // let mut router = Router::new();
+        // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
+        //
+        // // ... code ...
+        //
+        // router.close().await;
+
+        shutdown.trigger_shutdown();
     }
-
-    let mut router = Router::new();
-    router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
-
-    // ... code ...
-
-    router.close().await;
+    shutdown.wait_for_completion().await;
 
     Ok(())
 
