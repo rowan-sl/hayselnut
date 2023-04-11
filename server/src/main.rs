@@ -16,10 +16,9 @@ mod route;
 mod station;
 mod registry;
 mod shutdown;
+mod net;
 pub mod tsdb;
 
-use consumer::db::RecordDB;
-use route::Router;
 use registry::JsonLoader;
 use station::{identity::KnownStations, capabilities::KnownChannels};
 use shutdown::Shutdown;

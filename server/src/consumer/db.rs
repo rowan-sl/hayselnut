@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::{Record, RecordConsumer};
-use crate::{station::api::Observations, tsdb::DB};
+use crate::tsdb::DB;
 
 type Entry = Observations;
 
