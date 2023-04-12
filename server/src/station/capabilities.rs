@@ -1,23 +1,22 @@
 use std::collections::HashMap;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]//internally tagged
+#[serde(tag = "type")] //internally tagged
 pub enum ChannelValue {
     /// f32 value
     Float,
     /// Event with no data
     Event,
-    // in the future this might include something for custom json events? 
+    // in the future this might include something for custom json events?
     // this could be used for the lightning sensor or similar
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]//internally tagged
-pub enum ChannelType { 
+#[serde(tag = "type")] //internally tagged
+pub enum ChannelType {
     /// value can be read at any time, and can be expected to change smoothly over time (EX: temperature, humidity)
     Periodic,
     /// event that occurs based on an external trigger. (EX: lightning)
@@ -25,7 +24,7 @@ pub enum ChannelType {
     Triggered,
 }
 
-/// Name of a reading channel (temperature, humidity, lightning, etc) 
+/// Name of a reading channel (temperature, humidity, lightning, etc)
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct ChannelName {
     name: String,
@@ -55,7 +54,7 @@ impl AsRef<String> for ChannelName {
     }
 }
 
-/// A reading channel's associated information 
+/// A reading channel's associated information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub name: ChannelName,
@@ -67,13 +66,13 @@ type ChannelID = Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct KnownChannels {
-    channels: HashMap<ChannelID, Channel>, 
+    channels: HashMap<ChannelID, Channel>,
 }
 
 impl KnownChannels {
     pub fn new() -> Self {
         KnownChannels {
-            channels: HashMap::default()
+            channels: HashMap::default(),
         }
     }
 
@@ -82,7 +81,8 @@ impl KnownChannels {
     }
 
     pub fn id_by_name(&self, name: &ChannelName) -> Option<ChannelID> {
-        self.channels.iter()
+        self.channels
+            .iter()
             .find(|(_, n)| &n.name == name)
             .map(|(id, _)| id.clone())
     }
@@ -99,8 +99,6 @@ impl KnownChannels {
     }
 
     pub fn channels(&self) -> impl Iterator<Item = (&ChannelID, &ChannelName)> {
-        self.channels.iter()
-            .map(|(k, v)| (k, &v.name))
+        self.channels.iter().map(|(k, v)| (k, &v.name))
     }
 }
-

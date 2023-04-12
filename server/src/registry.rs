@@ -1,10 +1,17 @@
 //! Utility for loading the registry types (`KnownStations`, `KnownChannels`, etc) from disk
 
-use std::{path::PathBuf, ops::{Deref, DerefMut}};
+use std::{
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+};
 
 use anyhow::Result;
-use serde::{Serialize, de::DeserializeOwned};
-use tokio::{fs::{File, OpenOptions}, io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt}, runtime as rt};
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::{
+    fs::{File, OpenOptions},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    runtime as rt,
+};
 
 use crate::shutdown::ShutdownHandle;
 
@@ -18,7 +25,10 @@ pub struct JsonLoader<R: Serialize + DeserializeOwned> {
 impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
     /// Loads the json at `path`, using `R::default` if it does not exist
     #[instrument(skip(sh_handle))]
-    pub async fn open(path: PathBuf, sh_handle: ShutdownHandle) -> Result<Self> where R: Default {
+    pub async fn open(path: PathBuf, sh_handle: ShutdownHandle) -> Result<Self>
+    where
+        R: Default,
+    {
         let new = !path.exists();
         if path.exists() && !path.is_file() {
             error!("Could not open `{path:?}` -- directory exists here");
@@ -70,23 +80,21 @@ impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
         handle.spawn(async move {
             if let Err(e) = file.set_len(0).await {
                 error!("JsonLoader sync failed - could not truncate: {e:#?}");
-                return
+                return;
             }
             if let Err(e) = file.seek(std::io::SeekFrom::Start(0)).await {
                 error!("JsonLoader sync failed - could not truncate: {e:#?}");
-                return
+                return;
             }
             if let Err(e) = file.write_all(serialized.as_bytes()).await {
                 error!("JsonLoader sync failed - could not write: {e:#?}");
-                return
+                return;
             }
             if let Err(e) = file.shutdown().await {
                 error!("JsonLoader drop failed - could not shutdown file stream: {e:#?}");
-                return
+                return;
             }
-            drop(sh_handle);// make shure shutdown only occurs at the end
+            drop(sh_handle); // make shure shutdown only occurs at the end
         });
     }
 }
-
-

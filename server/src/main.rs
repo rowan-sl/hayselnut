@@ -11,17 +11,17 @@ use tokio::{fs, signal::ctrl_c, sync};
 use tracing::metadata::LevelFilter;
 
 mod consumer;
-mod paths;
-mod route;
-mod station;
-mod registry;
-mod shutdown;
 mod net;
+mod paths;
+mod registry;
+mod route;
+mod shutdown;
+mod station;
 pub mod tsdb;
 
 use registry::JsonLoader;
-use station::{identity::KnownStations, capabilities::KnownChannels};
 use shutdown::Shutdown;
+use station::{capabilities::KnownChannels, identity::KnownStations};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
         let (shutdown_tx, shutdown_rx) = sync::broadcast::channel::<()>(1);
         tokio::spawn(async move {
             if let Err(_) = ctrl_c().await {
-                error!("Failed to listen for ctrl_c signal"); 
+                error!("Failed to listen for ctrl_c signal");
             }
             shutdown_tx.send(()).unwrap();
         });
@@ -106,7 +106,13 @@ async fn main() -> anyhow::Result<()> {
         let channels_path = records_dir.path("channels.json");
         let stations = JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
 
-        debug!("Loaded known channels: {:?}", stations.channels().map(|(_, v)| (&v).clone()).collect::<Vec<_>>());
+        debug!(
+            "Loaded known channels: {:?}",
+            stations
+                .channels()
+                .map(|(_, v)| (&v).clone())
+                .collect::<Vec<_>>()
+        );
 
         // let mut router = Router::new();
         // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);

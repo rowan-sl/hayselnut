@@ -1,12 +1,10 @@
 use std::mem::size_of;
 
 use static_assertions::const_assert;
-use zerocopy::{FromBytes, AsBytes};
+use zerocopy::{AsBytes, FromBytes};
 
-use super::{PACKET_TYPE_FRAME, extract_packet_type};
+use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE};
 
-// https://stackoverflow.com/questions/1098897/what-is-the-largest-safe-udp-packet-size-on-the-internet#1099359
-pub const UDP_MAX_SIZE: usize = 508;
 pub const FRAME_BUF_SIZE: usize = UDP_MAX_SIZE - 28;
 
 // NOTE:this struct must have the same first few fields (id, hash, packet_type) IN THAT ORDER as the controll packet.
@@ -14,15 +12,20 @@ pub const FRAME_BUF_SIZE: usize = UDP_MAX_SIZE - 28;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct Frame {
-    pub id: u64, 
+    // packet ids should be generated sequentially
+    // if a packet with an id <= the id of the prev packet received, it should be ignored.
+    pub id: u64,
     // for making the hash, hash is set to zero. then it is filled in with the appropreate value
-    // hashing algorithm used 
+    // hashing algorithm used
     pub hash: u64,
-    // type of packet. 
+    // type of packet.
     pub packet_type: u32,
     // (current, max).
     // max = number of fragments
     // current = where the current fragment is
+    //
+    // this is not used to uiquely identify this Frame, `id` does that.
+    // this IS used to reconstruct fragmented packets.
     pub frag_idx: [u8; 2],
     // number of bytes in `buf`.
     // in range 0..buf.len()
@@ -33,7 +36,7 @@ pub struct Frame {
 impl Frame {
     /// extracts a frame from `buf` (assumed to contain one frame).
     /// this will ignore any trailing data in `buf`
-    /// 
+    ///
     /// the `packet_type` and `hash` is validated.
     pub fn from_buf_validated(buf: &[u8]) -> Option<Frame> {
         if extract_packet_type(buf)? != PACKET_TYPE_FRAME {
@@ -47,7 +50,7 @@ impl Frame {
     }
 
     /// Generates `ceil(buf / FRAME_BUF_SIZE)` `Frames` that contain the complete data of `buf`
-    /// 
+    ///
     /// each frame will have a unique ID, and a unique frag_idx which indicates its position
     /// if the data is fragmented
     pub fn for_data<F: FnMut() -> u64>(buf: &[u8], mut id: F) -> Vec<Frame> {
@@ -56,9 +59,9 @@ impl Frame {
         assert!(num_chunks < 255, "Number of chunks must be less than 255");
         let mut frames = Vec::new();
         for (frag, chunk) in chunks.into_iter().enumerate() {
-            let mut arr_chunk= [0u8; FRAME_BUF_SIZE];
+            let mut arr_chunk = [0u8; FRAME_BUF_SIZE];
             arr_chunk.copy_from_slice(chunk);
-            
+
             let mut frame = Frame {
                 id: id(),
                 hash: 0,
@@ -94,4 +97,3 @@ impl Frame {
 }
 
 const_assert!(size_of::<Frame>() == UDP_MAX_SIZE - 4); // Frame is 504 bytes
-
