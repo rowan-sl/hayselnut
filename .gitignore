@@ -3,5 +3,5 @@
 /hayselnut/.embuild
 **/target
 **/*.rs.bk
-hayselnut/src/conf.rs
-/hw
+/hayselnut/src/conf.rs
+/hayselnut/hardware
