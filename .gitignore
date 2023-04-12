@@ -1,11 +1,7 @@
 /.vscode
 /.espressif
-/.embuild
-/target
-/Cargo.lock
+/hayselnut/.embuild
+**/target
 **/*.rs.bk
-src/conf.rs
-/server/target
-/server/readings.csv
-/net/target
+hayselnut/src/conf.rs
 /hw
