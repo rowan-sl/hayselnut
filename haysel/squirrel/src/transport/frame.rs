@@ -3,23 +3,16 @@ use std::mem::size_of;
 use static_assertions::const_assert;
 use zerocopy::{AsBytes, FromBytes};
 
-use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE};
+use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE, PacketHeader};
 
-pub const FRAME_BUF_SIZE: usize = UDP_MAX_SIZE - 28;
+pub const FRAME_BUF_SIZE: usize = UDP_MAX_SIZE - 32;
 
 // NOTE:this struct must have the same first few fields (id, hash, packet_type) IN THAT ORDER as the controll packet.
 // this is so they can be differentiated before decoding the rest
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
-#[repr(C)]
+#[repr(C, align(8))]
 pub struct Frame {
-    // packet ids should be generated sequentially
-    // if a packet with an id <= the id of the prev packet received, it should be ignored.
-    pub id: u64,
-    // for making the hash, hash is set to zero. then it is filled in with the appropreate value
-    // hashing algorithm used
-    pub hash: u64,
-    // type of packet.
-    pub packet_type: u32,
+    pub header: PacketHeader,
     // (current, max).
     // max = number of fragments
     // current = where the current fragment is
@@ -43,7 +36,7 @@ impl Frame {
             None?
         }
         let frame = Frame::read_from_prefix(buf)?;
-        if frame.hash != frame.calc_hash() {
+        if frame.header.hash != frame.calc_hash() {
             None?
         }
         Some(frame)
@@ -63,14 +56,17 @@ impl Frame {
             arr_chunk.copy_from_slice(chunk);
 
             let mut frame = Frame {
-                id: id(),
-                hash: 0,
-                packet_type: PACKET_TYPE_FRAME,
+                header: PacketHeader {
+                    id: id(),
+                    hash: 0,
+                    packet_type: PACKET_TYPE_FRAME,
+                    _pad: 0,
+                },
                 frag_idx: [frag as u8, num_chunks as u8],
                 len: chunk.len() as u16,
                 buf: arr_chunk,
             };
-            frame.hash = frame.calc_hash();
+            frame.header.hash = frame.calc_hash();
             frames.push(frame);
         }
         frames
@@ -80,7 +76,7 @@ impl Frame {
     // calculated with the `hash` field set to zero.
     fn calc_hash(&self) -> u64 {
         let mut frame = *self;
-        frame.hash = 0;
+        frame.header.hash = 0;
 
         let mut buf = [0u8; 8];
         blake3::Hasher::new()

@@ -4,16 +4,12 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use static_assertions::{const_assert, const_assert_eq};
 use zerocopy::{AsBytes, FromBytes};
 
-use super::packet::{extract_packet_type, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE};
+use super::packet::{extract_packet_type, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE, PacketHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct CmdPacket {
-    // first 3 fields - same as `Frame` struct
-    pub id: u64,
-    pub hash: u64,
-    pub packet_type: u32,
-    pub _pad: u32,
+    pub header: PacketHeader,
     // required align: u64,
     pub data: CmdPacketData,
 }
@@ -21,13 +17,15 @@ pub struct CmdPacket {
 impl CmdPacket {
     pub fn new(id: u64, cmd: Cmd) -> Self {
         let mut pack = Self {
-            id,
-            hash: 0,
-            packet_type: PACKET_TYPE_CONTROLL,
-            _pad: 0,
+            header: PacketHeader {
+                id,
+                hash: 0,
+                packet_type: PACKET_TYPE_CONTROLL,
+                _pad: 0,
+            },
             data: CmdPacketData::new(cmd),
         };
-        pack.hash = pack.calc_hash();
+        pack.header.hash = pack.calc_hash();
         pack
     }
 
@@ -37,7 +35,7 @@ impl CmdPacket {
             None?
         }
         let cmd = CmdPacket::read_from_prefix(buf)?;
-        if cmd.hash != cmd.calc_hash() {
+        if cmd.header.hash != cmd.calc_hash() {
             None?
         }
         let _ = cmd.data.extract_cmd()?;
@@ -48,7 +46,7 @@ impl CmdPacket {
     // calculated with the `hash` field set to zero.
     fn calc_hash(&self) -> u64 {
         let mut packet = *self;
-        packet.hash = 0;
+        packet.header.hash = 0;
 
         let mut buf = [0u8; 8];
         blake3::Hasher::new()
