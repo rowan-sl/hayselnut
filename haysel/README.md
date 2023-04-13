@@ -1,4 +1,4 @@
-# Hayselnut's Server (need ideas for names)
+# Haysel (hayselnut's datalogging server)
 
 This is a server that provides datalogging and identification for hayselnut weather stations,
 allowing them to log their data over the network. it uses (tsdb)[src/tsdb/] for datalogging, 

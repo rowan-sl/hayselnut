@@ -1,6 +1,7 @@
 //! manages connections to weather stations, station identity, etc;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server-utils")]
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -9,11 +10,13 @@ pub type StationID = Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationInfo {}
 
+#[cfg(feature = "server-utils")]
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct KnownStations {
     ids: HashMap<StationID, StationInfo>,
 }
 
+#[cfg(feature = "server-utils")]
 impl KnownStations {
     pub fn new() -> Self {
         Self {

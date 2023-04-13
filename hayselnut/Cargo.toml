@@ -46,7 +46,10 @@ smol = "1.2.5"
 futures = { version = "0.3.25", default-features = false, features = ["async-await"] }
 serde = { version = "1.0.152", features = ["derive"] }
 bincode = "1.3.3"
-rmpv = { version = "1.0.0", features = ["serde", "with-serde", "serde_bytes"] }
+
+[dependencies.squirrel]
+path = "../haysel/squirrel/"
+features = ["smol"]
 
 [build-dependencies]
 embuild = "0.31"

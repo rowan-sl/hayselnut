@@ -9,19 +9,17 @@ use clap::Parser;
 use std::path::PathBuf;
 use tokio::{fs, signal::ctrl_c, sync};
 use tracing::metadata::LevelFilter;
+use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 
 mod consumer;
-mod net;
 mod paths;
 mod registry;
 mod route;
 mod shutdown;
-mod station;
 pub mod tsdb;
 
 use registry::JsonLoader;
 use shutdown::Shutdown;
-use station::{capabilities::KnownChannels, identity::KnownStations};
 
 #[derive(Parser, Debug)]
 pub struct Args {

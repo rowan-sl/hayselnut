@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use crate::station::identity::StationID;
+use squirrel::api::station::identity::StationID;
 
 // re-add when fixed
 //pub mod db;

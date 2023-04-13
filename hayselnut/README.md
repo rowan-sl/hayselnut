@@ -1,4 +1,4 @@
-# esp32 based limited weather station
+# Hayselnut (the weather station)
 
 ## Credit
 

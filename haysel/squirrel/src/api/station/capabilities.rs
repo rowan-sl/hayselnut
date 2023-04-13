@@ -1,3 +1,4 @@
+#[cfg(feature = "server-utils")]
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -62,13 +63,15 @@ pub struct Channel {
     pub ty: ChannelType,
 }
 
-type ChannelID = Uuid;
+pub type ChannelID = Uuid;
 
+#[cfg(feature = "server-utils")]
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct KnownChannels {
     channels: HashMap<ChannelID, Channel>,
 }
 
+#[cfg(feature = "server-utils")]
 impl KnownChannels {
     pub fn new() -> Self {
         KnownChannels {
