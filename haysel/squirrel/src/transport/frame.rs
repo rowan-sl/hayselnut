@@ -61,7 +61,7 @@ impl Frame {
             let mut frame = Frame {
                 header: PacketHeader {
                     id: id.into_bytes(),
-                    next_id: id.into_bytes(),
+                    next_id: next_id.into_bytes(),
                     hash: 0,
                     packet_type: PACKET_TYPE_FRAME,
                     _pad: 0,
