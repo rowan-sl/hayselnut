@@ -1,16 +1,17 @@
-use std::mem::size_of;
+use std::mem::{size_of, align_of};
 
 use static_assertions::const_assert;
+use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
 use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE, PacketHeader};
 
-pub const FRAME_BUF_SIZE: usize = UDP_MAX_SIZE - 32;
+pub const FRAME_BUF_SIZE: usize = 4 + (((UDP_MAX_SIZE - (size_of::<PacketHeader>() + 4) - 4) + 7) / 8 - 1) * 8;
 
 // NOTE:this struct must have the same first few fields (id, hash, packet_type) IN THAT ORDER as the controll packet.
 // this is so they can be differentiated before decoding the rest
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
-#[repr(C, align(8))]
+#[repr(C)]
 pub struct Frame {
     pub header: PacketHeader,
     // (current, max).
@@ -46,7 +47,7 @@ impl Frame {
     ///
     /// each frame will have a unique ID, and a unique frag_idx which indicates its position
     /// if the data is fragmented
-    pub fn for_data<F: FnMut() -> u64>(buf: &[u8], mut id: F) -> Vec<Frame> {
+    pub fn for_data<F: FnMut() -> (Uuid, Uuid)>(buf: &[u8], mut id_gen: F) -> Vec<Frame> {
         let chunks = buf.chunks(FRAME_BUF_SIZE).collect::<Vec<_>>();
         let num_chunks = chunks.len();
         assert!(num_chunks < 255, "Number of chunks must be less than 255");
@@ -55,9 +56,12 @@ impl Frame {
             let mut arr_chunk = [0u8; FRAME_BUF_SIZE];
             arr_chunk.copy_from_slice(chunk);
 
+            let (id, next_id) = id_gen();
+
             let mut frame = Frame {
                 header: PacketHeader {
-                    id: id(),
+                    id: id.into_bytes(),
+                    next_id: id.into_bytes(),
                     hash: 0,
                     packet_type: PACKET_TYPE_FRAME,
                     _pad: 0,
@@ -92,4 +96,5 @@ impl Frame {
     }
 }
 
-const_assert!(size_of::<Frame>() == UDP_MAX_SIZE - 4); // Frame is 504 bytes
+const_assert!(size_of::<Frame>() == UDP_MAX_SIZE - 4); // Frame is 504 bytes -- since it needs to be aligned to 8 and size is a multiple of align
+const_assert!(align_of::<Frame>() == 8);

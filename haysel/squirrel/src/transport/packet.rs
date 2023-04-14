@@ -10,9 +10,10 @@ pub const PACKET_TYPE_CONTROLL: u32 = 0xABBCCDDE;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct PacketHeader {
-    // packet ids should be generated sequentially
-    // if a packet with an id <= the id of the prev packet received, it should be ignored.
-    pub id: u64,
+    // UUID
+    pub id: [u8; 16],
+    // the ID of the next message that will be sent (allows sequential tracking of packets)
+    pub next_id: [u8; 16],
     // for making the hash, hash is set to zero. then it is filled in with the appropreate value
     // hashing algorithm used
     pub hash: u64,
@@ -28,6 +29,7 @@ pub struct PacketHeader {
 pub fn extract_packet_type(buf: &[u8]) -> Option<u32> {
     let PacketHeader {
         id: _,
+        next_id: _,
         hash: _,
         packet_type,
         _pad: _,

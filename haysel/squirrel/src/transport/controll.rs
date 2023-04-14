@@ -2,6 +2,7 @@ use std::mem::{align_of, size_of};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use static_assertions::{const_assert, const_assert_eq};
+use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
 use super::packet::{extract_packet_type, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE, PacketHeader};
@@ -15,10 +16,11 @@ pub struct CmdPacket {
 }
 
 impl CmdPacket {
-    pub fn new(id: u64, cmd: Cmd) -> Self {
+    pub fn new(id: Uuid, next_id: Uuid, cmd: Cmd) -> Self {
         let mut pack = Self {
             header: PacketHeader {
-                id,
+                id: id.into_bytes(),
+                next_id: next_id.into_bytes(),
                 hash: 0,
                 packet_type: PACKET_TYPE_CONTROLL,
                 _pad: 0,
@@ -65,7 +67,7 @@ pub struct CmdPacketData {
     pub cmd: u8, // discriminant of `Cmd`, use `Into`/`TryFrom`
     pub _pad: [u8; 7],
     /// optional data field - used by some commands that require sending a message id
-    pub data_id: u64,
+    pub data_id: [u8; 16],
 }
 
 impl CmdPacketData {
@@ -73,7 +75,7 @@ impl CmdPacketData {
         CmdPacketData {
             cmd: c as _,
             _pad: Default::default(),
-            data_id: 0,
+            data_id: [0; 16],
         }
     }
 
@@ -81,14 +83,30 @@ impl CmdPacketData {
         Cmd::try_from(self.cmd).ok()
     }
 
-    pub fn with_data_id(mut self, id: u64) -> Self {
-        self.data_id = id;
+    pub fn with_data_id(mut self, id: Uuid) -> Self {
+        self.data_id = id.into_bytes();
         self
     }
 }
 
 const_assert_eq!(align_of::<CmdPacketData>(), align_of::<u64>());
 
+/// Note: some of this documentation refers to sequential IDs (and comparing IDs order) which
+/// is no longer used. the logic behind it is basically the same though, just with `id` and `next_id`
+///
+/// design note: should never repeat packets (without a timeout / max retry limit), to avoid becomming a DDoS vector or similar issue
+/// - the re-transmission time should increase over failed repititions (with a limit)
+/// - for the server, if the retry limit is hit, the corresponding weather station should be declared "offline".
+///        it should cease sending packets to it, untill it receives a ping or a transaction-init packet from the client.
+///   - the server is permitted to ping every known station a few times on startup to determine its status.
+/// - for the client, if the retry limit is hit it should cease normal transmissions, untill the server responds to a ping or pings it.
+///
+/// what is known as "pings" here ^ can be done using the pre-existing packets as follows:
+/// - s -> c ping: `ServerHintTransaction` -> `AllowTransaction` -> `TransactionUnnecessary` || `ConfirmTransaction` (depending on what the server has to say, bolth are perfectly valid by existing definition)
+/// - c -> s ping: `AllowTransaction` ->  `TransactionUnnecessary` || `ConfirmTransaction` (same as server ping, without the first step)
+///   - the client should allways ping the server a few times when it is turned on (alternately, it can `RequestTransaction` and send some startup info packets to the server, but this is not really needed)
+///
+/// for all packets, when re-transmitting the packet's `id` and `next_id` should not change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum Cmd {
@@ -99,6 +117,14 @@ pub enum Cmd {
     //
     // it is however assumed that the client will not (expect becuase of
     // circumstances beyond its controll) disconnect during a transaction.
+    //
+    // the ID of request packets should be repeated for repeat transmission.
+    // any responses should use the request's `next_id` as their `id`, and have a random 
+    // `next_id` like all other packets.
+    //
+    // when a transaction is started, it should use a completely new `id`, not
+    // the `next_id` of the final packet of the last transmission.
+
     /// (c -> s) request a transaction between the station and the server, with the
     /// intent being (initially) data transfer from the station to the server.
     ///
@@ -121,6 +147,7 @@ pub enum Cmd {
     // - only one (optionally fragmented) `Frame` sequence may be transmitted
     //     - this means one `Frame` if not fragmented
     //     - or the number of `Frame`s listed in the first `Frame` if fragmented.
+
     /// (rx -> tx) confirm that all packets *up to and including* `data_id` have been received.
     /// this packet informs the other side that it can stop sending packets with ids *less than or equal to*
     /// the id sent with this.
@@ -140,6 +167,7 @@ pub enum Cmd {
     // after it is confirmed, the listed action should be taken.
     //
     // TBD - conflict of intrest
+
     /// (tx -> rx) Transmitter requests to send another [set of] `Frame` to the current receiver.
     /// this should be used in the case that the `tx` has another packet immedietally available, and
     /// the receiver is not expecting to respond immedietally.
@@ -167,5 +195,11 @@ pub enum Cmd {
     Terminate = 10,
 
     // ---- misc ----
-    Hint,
+
+    /// (s -> c) Request that the client initiate a server-tx transaction.
+    /// It is perfectly valid for client implementations to completely igore these packets,
+    /// as long as they preiodically send `AllowTransaction`.
+    ///
+    /// when not ignored, this is NOT responded to with `Received`, rather with `AllowTransaction`.
+    ServerHintTransaction,
 }
