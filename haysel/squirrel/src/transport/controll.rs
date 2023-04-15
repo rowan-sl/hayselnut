@@ -5,7 +5,7 @@ use static_assertions::{const_assert, const_assert_eq};
 use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
-use super::packet::{extract_packet_type, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE, PacketHeader};
+use super::packet::{extract_packet_type, PacketHeader, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
 #[repr(C)]
@@ -125,12 +125,11 @@ pub enum Cmd {
     // circumstances beyond its controll) disconnect during a transaction.
     //
     // the ID of request packets should be repeated for repeat transmission.
-    // any responses should use the request's `next_id` as their `id`, and have a random 
+    // any responses should use the request's `next_id` as their `id`, and have a random
     // `next_id` like all other packets.
     //
     // when a transaction is started, it should use a completely new `id`, not
     // the `next_id` of the final packet of the last transmission.
-
     /// (c -> s) request a transaction between the station and the server, with the
     /// intent being (initially) data transfer from the station to the server.
     ///
@@ -153,7 +152,6 @@ pub enum Cmd {
     // - only one (optionally fragmented) `Frame` sequence may be transmitted
     //     - this means one `Frame` if not fragmented
     //     - or the number of `Frame`s listed in the first `Frame` if fragmented.
-
     /// (rx -> tx) confirm that all packets *up to and including* `data_id` have been received.
     /// this packet informs the other side that it can stop sending packets with ids *less than or equal to*
     /// the id sent with this.
@@ -204,7 +202,6 @@ pub enum Cmd {
     // Terminate = 10,
 
     // ---- misc ----
-
     /// (s -> c) Request that the client initiate a server-tx transaction.
     /// It is perfectly valid for client implementations to completely igore these packets,
     /// as long as they preiodically send `AllowTransaction`.

@@ -1,13 +1,17 @@
 use std::mem::swap;
 
-use tokio::{net::UdpSocket, select, time::{sleep_until, Duration, Instant}};
+use tokio::{
+    net::UdpSocket,
+    select,
+    time::{sleep_until, Duration, Instant},
+};
 use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
 use super::{
-    frame::Frame,
     controll::{Cmd, CmdPacket},
-    packet::{extract_packet_type, UDP_MAX_SIZE, PACKET_TYPE_CONTROLL, PacketHeader},
+    frame::Frame,
+    packet::{extract_packet_type, PacketHeader, PACKET_TYPE_CONTROLL, UDP_MAX_SIZE},
 };
 
 async fn mvp_send(sock: UdpSocket, data: &[u8]) {
@@ -22,10 +26,12 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
     let wait_dur = 1000;
     let next_wait_end = || Instant::now() + Duration::from_millis(wait_dur);
     let mut wait_end;
-    let mut buf = vec![0u8; UDP_MAX_SIZE+1];
+    let mut buf = vec![0u8; UDP_MAX_SIZE + 1];
 
     let mut expected_next_recv_id = 'send: loop {
-        sock.send(CmdPacket::new(id, next_id, Cmd::RequestTransaction).as_bytes()).await.unwrap();
+        sock.send(CmdPacket::new(id, next_id, Cmd::RequestTransaction).as_bytes())
+            .await
+            .unwrap();
 
         wait_end = next_wait_end();
         let expected_next_recv_id = 'recv: loop {
@@ -57,15 +63,20 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
             if t != PACKET_TYPE_CONTROLL {
                 panic!("Received expected ID, but with invalid data")
             }
-            let p = CmdPacket::from_buf_validated(&buf).expect("Received invalid packet with expected ID");
+            let p = CmdPacket::from_buf_validated(&buf)
+                .expect("Received invalid packet with expected ID");
             let Cmd::ConfirmTransaction = p.data.extract_cmd().unwrap() else { panic!("unexpected cmd received") };
             update_id(&mut id, &mut next_id);
             break expected_next_recv_id;
         };
         break expected_next_recv_id;
     };
-     
-    let frames = Frame::for_data(data, || { let t = (id, next_id); update_id(&mut id, &mut next_id); t });
+
+    let frames = Frame::for_data(data, || {
+        let t = (id, next_id);
+        update_id(&mut id, &mut next_id);
+        t
+    });
     for frame in frames {
         'send: loop {
             sock.send(frame.as_bytes_compact()).await.unwrap();
@@ -100,11 +111,11 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
                     println!("Received expected ID, but with invalid data");
                     continue 'recv;
                 }
-                let Some(p) = CmdPacket::from_buf_validated(&buf) else { 
+                let Some(p) = CmdPacket::from_buf_validated(&buf) else {
                     println!("Received invalid packet with expected ID");
                     continue 'recv;
                 };
-                let Cmd::Received = p.data.extract_cmd().unwrap() else { 
+                let Cmd::Received = p.data.extract_cmd().unwrap() else {
                     println!("unexpected cmd received");
                     continue 'recv;
                 };
@@ -120,9 +131,19 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
     }
 }
 
+async fn mvp_recv(sock: UdpSocket) {
+    assert!(sock.peer_addr().is_ok(), "socket must be connected");
+    let mut id = Uuid::new_v4();
+    let mut next_id = Uuid::new_v4();
+    fn update_id(id: &mut Uuid, next_id: &mut Uuid) {
+        swap(id, next_id);
+        *next_id = Uuid::new_v4();
+    }
+}
+
 //
 // trait TransactionSig {
-//     
+//
 // }
 //
 // pub struct Client {
@@ -213,10 +234,10 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
 // // allways called for `ping` transactions, the inner function may not get called if the server responds with `TransactionUnnecessary`
 // impl<'a> Transaction<'a, tr_types::Ping> {
 //     pub fn if_server_transmits<'cl, FHandle, Fut>(self, handler: FHandle) -> Transaction<'a, tr_types::Complete>
-//     where 
+//     where
 //         'a: 'cl,
 //         FHandle: FnOnce(Self) -> Fut,
-//         Fut: Future<Output = Transaction<'a, tr_types::Complete>> + 'cl 
+//         Fut: Future<Output = Transaction<'a, tr_types::Complete>> + 'cl
 //     {
 //         todo!()
 //     }

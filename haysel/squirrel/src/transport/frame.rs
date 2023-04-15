@@ -1,12 +1,13 @@
-use std::mem::{size_of, align_of};
+use std::mem::{align_of, size_of};
 
 use static_assertions::const_assert;
 use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
-use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE, PacketHeader};
+use super::packet::{extract_packet_type, PacketHeader, PACKET_TYPE_FRAME, UDP_MAX_SIZE};
 
-pub const FRAME_BUF_SIZE: usize = 4 + (((UDP_MAX_SIZE - (size_of::<PacketHeader>() + 4) - 4) + 7) / 8 - 1) * 8;
+pub const FRAME_BUF_SIZE: usize =
+    4 + (((UDP_MAX_SIZE - (size_of::<PacketHeader>() + 4) - 4) + 7) / 8 - 1) * 8;
 
 /// IMPORTANT FOR DECODERS: VALID FRAME PACKETS MAY BE SMALLER THAN THE FRAME STRUCT!! (if buf is not full, and to_bytes_compact is used)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]

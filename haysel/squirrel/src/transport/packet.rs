@@ -1,4 +1,4 @@
-use zerocopy::{FromBytes, AsBytes};
+use zerocopy::{AsBytes, FromBytes};
 
 // https://stackoverflow.com/questions/1098897/what-is-the-largest-safe-udp-packet-size-on-the-internet#1099359
 pub const UDP_MAX_SIZE: usize = 508;
