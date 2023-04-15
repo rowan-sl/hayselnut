@@ -1,13 +1,124 @@
-use std::{net::SocketAddr, future::Future, marker::PhantomData};
+use std::mem::swap;
 
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, select, time::{sleep_until, Duration, Instant}};
 use uuid::Uuid;
+use zerocopy::{AsBytes, FromBytes};
 
 use super::{
     frame::Frame,
     controll::{Cmd, CmdPacket},
-    packet::{self, extract_packet_type},
+    packet::{extract_packet_type, UDP_MAX_SIZE, PACKET_TYPE_CONTROLL, PacketHeader},
 };
+
+async fn mvp_send(sock: UdpSocket, data: &[u8]) {
+    assert!(sock.peer_addr().is_ok(), "socket must be connected");
+    let mut id = Uuid::new_v4();
+    let mut next_id = Uuid::new_v4();
+    fn update_id(id: &mut Uuid, next_id: &mut Uuid) {
+        swap(id, next_id);
+        *next_id = Uuid::new_v4();
+    }
+
+    let wait_dur = 1000;
+    let next_wait_end = || Instant::now() + Duration::from_millis(wait_dur);
+    let mut wait_end;
+    let mut buf = vec![0u8; UDP_MAX_SIZE+1];
+
+    let mut expected_next_recv_id = 'send: loop {
+        sock.send(CmdPacket::new(id, next_id, Cmd::RequestTransaction).as_bytes()).await.unwrap();
+
+        wait_end = next_wait_end();
+        let expected_next_recv_id = 'recv: loop {
+            buf.fill(0);
+            select! {
+                r = sock.recv(&mut buf) => {
+                    r.unwrap();
+                }
+                _ = sleep_until(wait_end) => {
+                    continue 'send;// try again
+                }
+            }
+
+            let Some(t) = extract_packet_type(&buf) else {
+                println!("Received data < min packet size");
+                continue 'recv; // recv, do not reset timeout
+            };
+            let h = PacketHeader::read_from_prefix(buf.as_slice()).unwrap();
+            // check that this is indeed the packet we want (received ID (transaction init response only) == next_id of request packet)
+            // this must happen before any other checks
+            // in a proper send fn, this packet should be dropped and receiveing should restart
+            let mut expected_next_recv_id = next_id;
+            let recved_id = Uuid::from_bytes(h.id);
+            if recved_id != expected_next_recv_id {
+                println!("Received out of order packet");
+                continue 'recv; // do not reset timeout
+            }
+            expected_next_recv_id = Uuid::from_bytes(h.next_id);
+            if t != PACKET_TYPE_CONTROLL {
+                panic!("Received expected ID, but with invalid data")
+            }
+            let p = CmdPacket::from_buf_validated(&buf).expect("Received invalid packet with expected ID");
+            let Cmd::ConfirmTransaction = p.data.extract_cmd().unwrap() else { panic!("unexpected cmd received") };
+            update_id(&mut id, &mut next_id);
+            break expected_next_recv_id;
+        };
+        break expected_next_recv_id;
+    };
+     
+    let frames = Frame::for_data(data, || { let t = (id, next_id); update_id(&mut id, &mut next_id); t });
+    for frame in frames {
+        'send: loop {
+            sock.send(frame.as_bytes_compact()).await.unwrap();
+
+            wait_end = next_wait_end();
+            'recv: loop {
+                buf.fill(0);
+                select! {
+                    r = sock.recv(&mut buf) => {
+                        r.unwrap();
+                    }
+                    _ = sleep_until(wait_end) => {
+                        continue 'send;// try again
+                    }
+                }
+
+                let Some(t) = extract_packet_type(&buf) else {
+                    println!("Received data < min packet size");
+                    continue 'recv; // recv, do not reset timeout
+                };
+                let h = PacketHeader::read_from_prefix(buf.as_slice()).unwrap();
+                // check that this is indeed the packet we want (received ID (transaction init response only) == next_id of request packet)
+                // this must happen before any other checks
+                // in a proper send fn, this packet should be dropped and receiveing should restart
+                let recved_id = Uuid::from_bytes(h.id);
+                if recved_id != expected_next_recv_id {
+                    println!("Received out of order packet");
+                    continue 'recv; // do not reset timeout
+                }
+                expected_next_recv_id = Uuid::from_bytes(h.next_id);
+                if t != PACKET_TYPE_CONTROLL {
+                    println!("Received expected ID, but with invalid data");
+                    continue 'recv;
+                }
+                let Some(p) = CmdPacket::from_buf_validated(&buf) else { 
+                    println!("Received invalid packet with expected ID");
+                    continue 'recv;
+                };
+                let Cmd::Received = p.data.extract_cmd().unwrap() else { 
+                    println!("unexpected cmd received");
+                    continue 'recv;
+                };
+                if p.data.data_id != frame.header.id {
+                    println!("Received confirmation packet for wrong `id`");
+                    continue 'recv;
+                }
+                update_id(&mut id, &mut next_id);
+                break;
+            }
+            break;
+        }
+    }
+}
 
 //
 // trait TransactionSig {

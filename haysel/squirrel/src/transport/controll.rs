@@ -31,6 +31,11 @@ impl CmdPacket {
         pack
     }
 
+    pub fn with_data_id(mut self, id: Uuid) -> Self {
+        self.data.data_id = id.into_bytes();
+        self
+    }
+
     /// Validates `hash`, `packet_type`, and checks that `data` contains a valid `Cmd`
     pub fn from_buf_validated(buf: &[u8]) -> Option<Self> {
         if extract_packet_type(buf)? != PACKET_TYPE_CONTROLL {
@@ -95,6 +100,7 @@ const_assert_eq!(align_of::<CmdPacketData>(), align_of::<u64>());
 /// is no longer used. the logic behind it is basically the same though, just with `id` and `next_id`
 ///
 /// design note: should never repeat packets (without a timeout / max retry limit), to avoid becomming a DDoS vector or similar issue
+/// - TODO: in server-tx mode, the server should not retransmit. the client should request retransmissions.
 /// - the re-transmission time should increase over failed repititions (with a limit)
 /// - for the server, if the retry limit is hit, the corresponding weather station should be declared "offline".
 ///        it should cease sending packets to it, untill it receives a ping or a transaction-init packet from the client.
@@ -163,36 +169,39 @@ pub enum Cmd {
     Received = 5,
 
     // ---- continue or terminate a transaction ----
-    // after ONE frame is sent, one of the following packets should be sent *by the current transmitter)
+    // after ONE frame is sent, one of the following packets should be sent by the current transmitter)
     // after it is confirmed, the listed action should be taken.
     //
     // TBD - conflict of intrest
 
-    /// (tx -> rx) Transmitter requests to send another [set of] `Frame` to the current receiver.
-    /// this should be used in the case that the `tx` has another packet immedietally available, and
-    /// the receiver is not expecting to respond immedietally.
-    ContinueTxAgain = 6,
-
-    /// (tx -> rx) Defer the decision of what to do to the non currently transmitting entity.
-    /// [the receiver] can decide to do one of the following:
-    /// - switch to being the transmitter (`ContinueSwitchRoles`)
-    /// - allow the current transmitter to continue its role (`ContinueSameRoles`)
-    ///
-    /// after sending this, `tx` and `rx` temporarily switch roles (for one command to be sent).
-    /// if `ContinueSwitchRoles` is chosen, this state is maintained. if `ContinueSameRoles`, this is reverted.
-    ContinueDeferDecision = 7,
-
-    /// (rx -> tx) When sent by the [temporary transmitter], it becomes the new transmitter on confirmation.
-    ContinueSwitchRoles = 8,
-
-    /// (rx -> tx) When sent by the [temporary transmitter], it reverts back to the reciever.
-    /// [the receiver] can now decide to
-    /// - send `ContinueTxAgain`, and transmit.
-    /// - send `Terminate`, and end the transaction upon confirmation.
-    ContinueSameRoles = 9,
-
-    /// (tx -> rx) Terminate the connection upon confirmation.
-    Terminate = 10,
+    // -- these packets removed temporarily to simplify protocol. --
+    // after the last packet is confirmed, (all fragments received) the transaction implicitly is terminated
+    //
+    // /// (tx -> rx) Transmitter requests to send another [set of] `Frame` to the current receiver.
+    // /// this should be used in the case that the `tx` has another packet immedietally available, and
+    // /// the receiver is not expecting to respond immedietally.
+    // ContinueTxAgain = 6,
+    //
+    // /// (tx -> rx) Defer the decision of what to do to the non currently transmitting entity.
+    // /// [the receiver] can decide to do one of the following:
+    // /// - switch to being the transmitter (`ContinueSwitchRoles`)
+    // /// - allow the current transmitter to continue its role (`ContinueSameRoles`)
+    // ///
+    // /// after sending this, `tx` and `rx` temporarily switch roles (for one command to be sent).
+    // /// if `ContinueSwitchRoles` is chosen, this state is maintained. if `ContinueSameRoles`, this is reverted.
+    // ContinueDeferDecision = 7,
+    //
+    // /// (rx -> tx) When sent by the [temporary transmitter], it becomes the new transmitter on confirmation.
+    // ContinueSwitchRoles = 8,
+    //
+    // /// (rx -> tx) When sent by the [temporary transmitter], it reverts back to the reciever.
+    // /// [the receiver] can now decide to
+    // /// - send `ContinueTxAgain`, and transmit.
+    // /// - send `Terminate`, and end the transaction upon confirmation.
+    // ContinueSameRoles = 9,
+    //
+    // /// (tx -> rx) Terminate the connection upon confirmation.
+    // Terminate = 10,
 
     // ---- misc ----
 

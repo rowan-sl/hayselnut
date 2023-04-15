@@ -8,8 +8,7 @@ use super::packet::{extract_packet_type, PACKET_TYPE_FRAME, UDP_MAX_SIZE, Packet
 
 pub const FRAME_BUF_SIZE: usize = 4 + (((UDP_MAX_SIZE - (size_of::<PacketHeader>() + 4) - 4) + 7) / 8 - 1) * 8;
 
-// NOTE:this struct must have the same first few fields (id, hash, packet_type) IN THAT ORDER as the controll packet.
-// this is so they can be differentiated before decoding the rest
+/// IMPORTANT FOR DECODERS: VALID FRAME PACKETS MAY BE SMALLER THAN THE FRAME STRUCT!! (if buf is not full, and to_bytes_compact is used)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct Frame {
@@ -24,6 +23,8 @@ pub struct Frame {
     // number of bytes in `buf`.
     // in range 0..buf.len()
     pub len: u16,
+    // data past [len] in buf is probably going to be garbaje, depending on how the receiver is implemented
+    // since valid frame packets can have a size less than the size of frame!!
     pub buf: [u8; FRAME_BUF_SIZE],
 }
 
