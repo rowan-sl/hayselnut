@@ -1,8 +1,7 @@
-use tokio::net::UdpSocket;
+use crate::net::UdpSocket;
 
 use crate::transport::{
-    shared::send_and_wait,
-    Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE,
+    shared::send_and_wait, Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE,
     PACKET_TYPE_COMMAND, PACKET_TYPE_FRAME,
 };
 
@@ -72,7 +71,9 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
         }),
         None,
         Some(CmdKind::Complete),
-    ).await {
+    )
+    .await
+    {
         Packet::Cmd(c) => {
             debug_assert_eq!(c.command, CmdKind::Complete as _); // validated in `send_and_wait`
             return None;
@@ -95,7 +96,9 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
             }),
             None,
             Some(CmdKind::Complete),
-        ).await {
+        )
+        .await
+        {
             Packet::Cmd(c) => {
                 debug_assert_eq!(c.command, CmdKind::Complete as _); // validated in `send_and_wait`
                 break;
@@ -109,4 +112,3 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
 
     Some(buf)
 }
-

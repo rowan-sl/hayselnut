@@ -1,14 +1,24 @@
-use tokio::{
+use futures::{select, FutureExt};
+use std::time::{Duration, Instant};
+
+async fn sleep_until(when: Instant) {
+    #[cfg(feature = "tokio")]
+    tokio::time::sleep_until(when.into()).await;
+    #[cfg(feature = "smol")]
+    smol::Timer::at(when).await;
+}
+
+use crate::{
     net::UdpSocket,
-    select,
-    time::{sleep_until, Duration, Instant},
+    transport::{extract_packet_type, read_packet, CmdKind, Packet, UDP_MAX_SIZE},
 };
 
-use crate::transport::{
-    extract_packet_type, read_packet, CmdKind, Packet, UDP_MAX_SIZE,
-};
-
-pub async fn send_and_wait(sock: &UdpSocket, to: Packet, ty: Option<u8>, cmd: Option<CmdKind>) -> Packet {
+pub async fn send_and_wait(
+    sock: &UdpSocket,
+    to: Packet,
+    ty: Option<u8>,
+    cmd: Option<CmdKind>,
+) -> Packet {
     let bytes = to.as_bytes();
 
     let wait_dur = 1000;
@@ -26,11 +36,11 @@ pub async fn send_and_wait(sock: &UdpSocket, to: Packet, ty: Option<u8>, cmd: Op
         wait_end = next_wait_end();
         break loop {
             select! {
-                r = sock.recv(&mut buf) => {
+                r = sock.recv(&mut buf).fuse() => {
                     println!("Received packet");
                     amnt = r.unwrap();
                 }
-                _ = sleep_until(wait_end) => {
+                _ = sleep_until(wait_end).fuse() => {
                     println!("Timed out, resend");
                     continue 'send;
                 }
@@ -52,5 +62,3 @@ pub async fn send_and_wait(sock: &UdpSocket, to: Packet, ty: Option<u8>, cmd: Op
         };
     }
 }
-
-

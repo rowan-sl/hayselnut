@@ -8,5 +8,4 @@ extern crate tracing;
 
 pub mod api;
 mod net;
-#[cfg(feature = "tokio")]
 pub mod transport;
