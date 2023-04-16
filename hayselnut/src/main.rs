@@ -15,7 +15,7 @@ use esp_idf_svc::{
 };
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use smol::net::UdpSocket;
+use smol::net::{UdpSocket, resolve};
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 use battery::BatteryMonitor;
@@ -194,6 +194,19 @@ fn main() -> Result<()> {
 
     smol::block_on(async {
         println!("Async executor started");
+        let sock = UdpSocket::bind("0.0.0.0:0").await?;
+        let ips = resolve(conf::SERVER).await?;
+        if ips.len() == 0 {
+            bail!("Failed to resolve server address -- DNS lookup found nothing");
+        } else if ips.len() > 1 {
+            bail!("Faild to respolve server address -- multiple results ({ips:?})");
+        }
+        sock.connect(ips[0]).await?;
+        println!("attempting to send test data");
+        let mut gen = squirrel::transport::UidGenerator::new();
+        squirrel::transport::client::mvp_send(&sock, 0xDEADBEEFu64.to_be_bytes().as_slice(), &mut gen).await;
+        println!("sent test data");
+
         //NOTE (on UDP)
         // - max packet size (?) http://www.tcpipguide.com/free/t_IPDatagramSizetheMaximumTransmissionUnitMTUandFrag-4.htm
         // - this probably means that any transmissions with sizes that are
@@ -207,67 +220,67 @@ fn main() -> Result<()> {
 
         // batt_mon.read()?;
 
-        let socket = UdpSocket::bind("0.0.0.0:8080").await?;
-        let mut socket_buf = [0u8; 1024];
+        // let socket = UdpSocket::bind("0.0.0.0:8080").await?;
+        // let mut socket_buf = [0u8; 1024];
+        //
+        // let mut current_measurements = Observations::default();
+        // let config = MeasureConfig::default();
+        // let mut timers = MeasureTimers::with_config(&config);
+        // //TODO: move future creation outside of select (and loop?)
+        // loop {
+        //     select_biased! {
+        //         status = wifi_status_recv.recv().fuse() => {
+        //             match status? {
+        //                 WifiStatusUpdate::Disconnected => {
+        //                     //TODO: keep scanning, dont exit
+        //                     let _ = display.clear();
+        //                     writeln!(display, "Wifi Disconnect!\nrestart device")?;
+        //                     bail!("Wifi disconnected!");
+        //                 }
+        //             }
+        //         },
+        //         res = socket.recv_from(&mut socket_buf).fuse() => {
+        //             let (amnt, addr) = res?;
+        //             if amnt > socket_buf.len() { continue }
+        //             match bincode::deserialize::<RequestPacket>(&socket_buf[0..amnt]) {
+        //                 Ok(pkt) => {
+        //                     if pkt.magic != REQUEST_PACKET_MAGIC { continue }
+        //                     let response = DataPacket {
+        //                         id: pkt.id,
+        //                         observations: current_measurements.clone(),
+        //                     };
+        //                     let response_bytes = bincode::serialize(&response)?;
+        //                     socket.send_to(&response_bytes, addr).await?;
+        //                 }
+        //                 Err(..) => continue,
+        //             }
+        //         }
+        //         _ = timers.read_timer.next().fuse() => {
+        //             // read sensors
+        //             let bme280::Measurements { temperature, pressure, humidity, .. }
+        //                 = bme280.measure(&mut delay::Ets)
+        //                 .map_err(|e| anyhow!("Failed to read bme280 sensor: {e:?}"))?;
+        //             let battery_voltage = batt_mon.read()?;
+        //             current_measurements = Observations {
+        //                 temperature,
+        //                 pressure,
+        //                 humidity,
+        //                 battery: battery_voltage,
+        //             };
+        //             let _ = display.clear();
+        //             write!(
+        //                 display,
+        //                 "ON:{}\nIP:{}\nBAT:{:.1} TEMP:{:.0}F",
+        //                 chosen_ap.0.ssid,
+        //                 ip_info.ip,
+        //                 battery_voltage,
+        //                 temperature * 1.8 + 32.0
+        //             )?;
+        //         }
+        //     };
+        // }
 
-        let mut current_measurements = Observations::default();
-        let config = MeasureConfig::default();
-        let mut timers = MeasureTimers::with_config(&config);
-        //TODO: move future creation outside of select (and loop?)
-        loop {
-            select_biased! {
-                status = wifi_status_recv.recv().fuse() => {
-                    match status? {
-                        WifiStatusUpdate::Disconnected => {
-                            //TODO: keep scanning, dont exit
-                            let _ = display.clear();
-                            writeln!(display, "Wifi Disconnect!\nrestart device")?;
-                            bail!("Wifi disconnected!");
-                        }
-                    }
-                },
-                res = socket.recv_from(&mut socket_buf).fuse() => {
-                    let (amnt, addr) = res?;
-                    if amnt > socket_buf.len() { continue }
-                    match bincode::deserialize::<RequestPacket>(&socket_buf[0..amnt]) {
-                        Ok(pkt) => {
-                            if pkt.magic != REQUEST_PACKET_MAGIC { continue }
-                            let response = DataPacket {
-                                id: pkt.id,
-                                observations: current_measurements.clone(),
-                            };
-                            let response_bytes = bincode::serialize(&response)?;
-                            socket.send_to(&response_bytes, addr).await?;
-                        }
-                        Err(..) => continue,
-                    }
-                }
-                _ = timers.read_timer.next().fuse() => {
-                    // read sensors
-                    let bme280::Measurements { temperature, pressure, humidity, .. }
-                        = bme280.measure(&mut delay::Ets)
-                        .map_err(|e| anyhow!("Failed to read bme280 sensor: {e:?}"))?;
-                    let battery_voltage = batt_mon.read()?;
-                    current_measurements = Observations {
-                        temperature,
-                        pressure,
-                        humidity,
-                        battery: battery_voltage,
-                    };
-                    let _ = display.clear();
-                    write!(
-                        display,
-                        "ON:{}\nIP:{}\nBAT:{:.1} TEMP:{:.0}F",
-                        chosen_ap.0.ssid,
-                        ip_info.ip,
-                        battery_voltage,
-                        temperature * 1.8 + 32.0
-                    )?;
-                }
-            };
-        }
-
-        // Ok(())
+        Ok::<(), anyhow::Error>(())
     })?;
 
     Ok(())
