@@ -61,11 +61,17 @@ async fn mvp_send(sock: UdpSocket, data: &[u8]) {
             }
             expected_next_recv_id = Uuid::from_bytes(h.next_id);
             if t != PACKET_TYPE_CONTROLL {
-                panic!("Received expected ID, but with invalid data")
+                println!("Received expected ID, but with invalid data");
+                continue 'recv;
             }
-            let p = CmdPacket::from_buf_validated(&buf)
-                .expect("Received invalid packet with expected ID");
-            let Cmd::ConfirmTransaction = p.data.extract_cmd().unwrap() else { panic!("unexpected cmd received") };
+            let Some(p) = CmdPacket::from_buf_validated(&buf) else {
+                println!("Received invalid packet with expected ID");
+                continue 'recv;
+            };
+            let Cmd::ConfirmTransaction = p.data.extract_cmd().unwrap() else {
+                println!("unexpected cmd received");
+                continue 'recv;
+            };
             update_id(&mut id, &mut next_id);
             break expected_next_recv_id;
         };

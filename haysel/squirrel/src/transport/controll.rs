@@ -99,8 +99,7 @@ const_assert_eq!(align_of::<CmdPacketData>(), align_of::<u64>());
 /// Note: some of this documentation refers to sequential IDs (and comparing IDs order) which
 /// is no longer used. the logic behind it is basically the same though, just with `id` and `next_id`
 ///
-/// design note: should never repeat packets (without a timeout / max retry limit), to avoid becomming a DDoS vector or similar issue
-/// - TODO: in server-tx mode, the server should not retransmit. the client should request retransmissions.
+/// design note: should never repeat (resending) packets (without a timeout / max retry limit), to avoid becomming a DDoS vector or similar issue
 /// - the re-transmission time should increase over failed repititions (with a limit)
 /// - for the server, if the retry limit is hit, the corresponding weather station should be declared "offline".
 ///        it should cease sending packets to it, untill it receives a ping or a transaction-init packet from the client.
@@ -152,7 +151,13 @@ pub enum Cmd {
     // - only one (optionally fragmented) `Frame` sequence may be transmitted
     //     - this means one `Frame` if not fragmented
     //     - or the number of `Frame`s listed in the first `Frame` if fragmented.
-    /// (rx -> tx) confirm that all packets *up to and including* `data_id` have been received.
+
+    /// (c -> s) request the next packet to be sent by the server
+    /// important: if the server receives a retransmission, it should respond with the same packet as it did before, not the next one
+    /// otherwise, the server returns the next frame of its packet.
+    RequestFrame = 12,
+
+    /// (c ->/<- s) confirm that all packets *up to and including* `data_id` have been received.
     /// this packet informs the other side that it can stop sending packets with ids *less than or equal to*
     /// the id sent with this.
     ///
@@ -207,5 +212,5 @@ pub enum Cmd {
     /// as long as they preiodically send `AllowTransaction`.
     ///
     /// when not ignored, this is NOT responded to with `Received`, rather with `AllowTransaction`.
-    ServerHintTransaction,
+    ServerHintTransaction = 11,
 }
