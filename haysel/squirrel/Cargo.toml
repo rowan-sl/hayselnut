@@ -23,7 +23,7 @@ thiserror = "1.0.40"
 
 [features]
 server-utils = []
-tokio = ["dep:tokio", "dep:tracing"]
-smol = ["dep:smol", "dep:log"]
+tokio = ["dep:tokio", "tracing"]
+smol = ["dep:smol", "log"]
 
 

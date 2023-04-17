@@ -55,7 +55,7 @@ impl Frame {
             None
         } else {
             let mut larger = [0u8; size_of::<Self>()];
-            larger.copy_from_slice(bytes);
+            larger[0..bytes.len()].copy_from_slice(bytes);
             Some(Self::read_from(larger.as_slice()).unwrap())
         }
     }

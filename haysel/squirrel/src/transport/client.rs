@@ -7,6 +7,7 @@ use crate::transport::{
 
 pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator) {
     assert!(sock.peer_addr().is_ok(), "Socket must be connected");
+    info!("Trying to send {data:?} to {:?}", sock.peer_addr().unwrap());
 
     let Packet::Cmd(Cmd { packet: mut respond_to, .. }) = send_and_wait(
         sock,
@@ -23,7 +24,7 @@ pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator)
 
     for chunk in data.chunks(FRAME_BUF_SIZE) {
         let mut arr_chunk = [0u8; FRAME_BUF_SIZE];
-        arr_chunk.copy_from_slice(chunk);
+        arr_chunk[0..chunk.len()].copy_from_slice(chunk);
 
         let Packet::Cmd(c) = send_and_wait(
             sock,

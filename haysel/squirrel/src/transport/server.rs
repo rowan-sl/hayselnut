@@ -66,6 +66,7 @@ impl ClientInterface {
     }
 
     pub fn handle(&mut self, packet: Packet) {
+        info!("state: {:?}", self.state);
         if let State::Receiving | State::Sending = self.state {
             if self.transaction_time.elapsed() > self.max_transaction_time {
                 self.state = State::Resting;
@@ -106,7 +107,8 @@ impl ClientInterface {
                             len: self.send_buf.len().clamp(0, FRAME_BUF_SIZE) as _,
                             data: {
                                 let mut buf = [0u8; FRAME_BUF_SIZE];
-                                buf.copy_from_slice(&self.send_buf[0..self.send_buf.len().clamp(0, FRAME_BUF_SIZE)]);
+                                buf[0..self.send_buf.len().clamp(0,FRAME_BUF_SIZE)]
+                                    .copy_from_slice(&self.send_buf[0..self.send_buf.len().clamp(0, FRAME_BUF_SIZE)]);
                                 buf
                             }
                         })))).unwrap();
@@ -143,9 +145,11 @@ impl ClientInterface {
                 self.state = State::Receiving;
             }
             (State::ReceivingStart, Packet::Frame(..)) => {}
+            // receiving
             (State::Receiving, Packet::Cmd(cmd))
                 if cmd.command == CmdKind::Complete as _
-                && cmd.packet == self.respond_to => {
+                && cmd.responding_to == self.last_sent => {
+                self.respond_to = cmd.packet;
                 // the first end-transaction packet.
                 self.dispatch.send((self.addr, DispatchEvent::Received(self.recev_buf.clone()))).unwrap();
                 self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Cmd(Cmd {

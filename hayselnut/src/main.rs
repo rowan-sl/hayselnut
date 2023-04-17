@@ -2,7 +2,7 @@ pub mod battery;
 pub mod conf;
 pub mod lightning;
 
-use std::{fmt::Write, net::Ipv4Addr, time::Duration};
+use std::{fmt::Write, net::{Ipv4Addr, SocketAddr}, time::Duration, convert::TryInto};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
@@ -22,6 +22,7 @@ use battery::BatteryMonitor;
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
+    esp_idf_svc::log::EspLogger::initialize_default();
 
     {
         use ResetReason::*;
@@ -195,12 +196,14 @@ fn main() -> Result<()> {
     smol::block_on(async {
         println!("Async executor started");
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
-        let ips = resolve(conf::SERVER).await?;
+        let mut ips = resolve(conf::SERVER).await?;
         if ips.len() == 0 {
             bail!("Failed to resolve server address -- DNS lookup found nothing");
         } else if ips.len() > 1 {
             bail!("Faild to respolve server address -- multiple results ({ips:?})");
         }
+        //temp hardcoded IP
+        ips[0] = SocketAddr::new([10,1,10,9].into(), 43210);
         sock.connect(ips[0]).await?;
         println!("attempting to send test data");
         let mut gen = squirrel::transport::UidGenerator::new();

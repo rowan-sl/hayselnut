@@ -19,29 +19,37 @@ pub async fn send_and_wait(
     ty: Option<u8>,
     cmd: Option<CmdKind>,
 ) -> Packet {
+    info!("Sending packet {to:#?}");
     let bytes = to.as_bytes();
 
-    let wait_dur = 1000;
+    let wait_dur = 5000;
     let next_wait_end = || Instant::now() + Duration::from_millis(wait_dur);
     let mut wait_end;
     let mut buf = vec![0u8; UDP_MAX_SIZE];
     let mut amnt = 0usize;
 
     'send: loop {
+        info!("Sending");
         amnt += 1;
         if amnt == 10 {
-            panic!("Timed out");
+            panic!("Timed out -- max limit hit");
         }
         sock.send(bytes).await.unwrap();
         wait_end = next_wait_end();
         break loop {
             select! {
-                r = sock.recv(&mut buf).fuse() => {
-                    println!("Received packet");
-                    amnt = r.unwrap();
+                r = sock.recv_from(&mut buf).fuse() => {
+                    info!("Received data");
+                    let (c, f) = r.unwrap();
+                    if f == sock.peer_addr().unwrap() {
+                        amnt = c;
+                    } else {
+                        warn!("Received data from an unknown source at {f:?}");
+                        continue;
+                    }
                 }
                 _ = sleep_until(wait_end).fuse() => {
-                    println!("Timed out, resend");
+                    info!("Timed out, resend");
                     continue 'send;
                 }
             }
@@ -58,6 +66,7 @@ pub async fn send_and_wait(
                     continue;
                 }
             }
+            info!("Received requested packet {p:#?}");
             break p;
         };
     }
