@@ -1,4 +1,4 @@
-use std::{time::{Instant, Duration}, collections::VecDeque};
+use std::{time::{Instant, Duration}, collections::VecDeque, mem::swap};
 
 use flume::Sender;
 use num_enum::TryFromPrimitive;
@@ -40,6 +40,7 @@ pub struct ClientInterface {
     recev_buf: Vec<u8>,
     send_queue: VecDeque<Vec<u8>>,
     send_buf: Vec<u8>,
+    last_sent_send_buf: Vec<u8>,
     dispatch: Sender<(SocketAddr, DispatchEvent)>,
 }
 
@@ -57,6 +58,7 @@ impl ClientInterface {
             recev_buf: vec![],
             send_queue: Default::default(),
             send_buf: vec![],
+            last_sent_send_buf: vec![],
             dispatch,
         }
     }
@@ -66,7 +68,7 @@ impl ClientInterface {
     }
 
     pub fn handle(&mut self, packet: Packet) {
-        info!("state: {:?}", self.state);
+        //info!("state: {:?}", self.state);
         if let State::Receiving | State::Sending = self.state {
             if self.transaction_time.elapsed() > self.max_transaction_time {
                 self.state = State::Resting;
@@ -94,11 +96,11 @@ impl ClientInterface {
                         })))).unwrap();
                     }
                     CmdKind::Rx => {
-                        todo!();
                         self.state = State::SendingStart;
                         self.transaction_time = Instant::now();
                         // send_queue value only removed when sending is done
                         self.send_buf = self.send_queue.back().cloned().unwrap_or(vec![]);
+                        self.last_sent_send_buf.clear();
                         self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Frame(Frame {
                             packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
                             responding_to: self.respond_to,
@@ -107,8 +109,10 @@ impl ClientInterface {
                             len: self.send_buf.len().clamp(0, FRAME_BUF_SIZE) as _,
                             data: {
                                 let mut buf = [0u8; FRAME_BUF_SIZE];
-                                buf[0..self.send_buf.len().clamp(0,FRAME_BUF_SIZE)]
-                                    .copy_from_slice(&self.send_buf[0..self.send_buf.len().clamp(0, FRAME_BUF_SIZE)]);
+                                let mut past_buf = self.send_buf.split_off(FRAME_BUF_SIZE.clamp(0, self.send_buf.len()));
+                                swap(&mut self.send_buf, &mut past_buf);
+                                self.last_sent_send_buf = past_buf.clone();
+                                buf[0..past_buf.len()].copy_from_slice(&past_buf);
                                 buf
                             }
                         })))).unwrap();
@@ -117,6 +121,7 @@ impl ClientInterface {
                 }
             }
             (State::Resting, _) => {}
+            // receiving
             (State::ReceivingStart, Packet::Cmd(cmd))
                 if cmd.command == CmdKind::Tx as _
                 && cmd.packet == self.respond_to => {
@@ -145,7 +150,6 @@ impl ClientInterface {
                 self.state = State::Receiving;
             }
             (State::ReceivingStart, Packet::Frame(..)) => {}
-            // receiving
             (State::Receiving, Packet::Cmd(cmd))
                 if cmd.command == CmdKind::Complete as _
                 && cmd.responding_to == self.last_sent => {
@@ -199,23 +203,118 @@ impl ClientInterface {
                 })))).unwrap();
             }
             (State::TheoreticallyDoneReceiving, _) => {}
-            // (State::Receiving, Packet::Cmd(cmd)) if cmd.command == CmdKind::Complete as _ => {
-            //     todo!()
-            // }
-            // (State::Receiving, Packet::Cmd(..)) => {}
-            // (State::Receiving, Packet::Frame(frame)) if frame.responding_to == self.last_sent => {
-            //     self.respond_to = frame.packet;
-            //     let data = &frame.data[0..frame.len as _];
-            //     self.recev_buf.extend_from_slice(data);
-            //     self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Cmd(Cmd {
-            //         packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
-            //         responding_to: self.respond_to,
-            //         packet_ty: PACKET_TYPE_COMMAND,
-            //         command: CmdKind::Confirm as _,
-            //         padding: [0; 2],
-            //     })))).unwrap();
-            // }
-            _ => todo!()
+            // sending
+            (State::SendingStart, Packet::Cmd(cmd)) if cmd.command == CmdKind::Rx as _
+                && cmd.packet == self.respond_to => {
+                    // repeat the Rx init packet
+                    self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Frame(Frame {
+                        packet: self.last_sent,
+                        responding_to: self.respond_to,
+                        packet_ty: PACKET_TYPE_FRAME,
+                        _pad: 0,
+                        len: self.last_sent_send_buf.len() as _,
+                        data: {
+                            let mut buf = [0u8; FRAME_BUF_SIZE];
+                            buf[0..self.last_sent_send_buf.len()].copy_from_slice(&self.last_sent_send_buf);
+                            buf
+                        }
+                    })))).unwrap();
+                }
+            (State::SendingStart, Packet::Cmd(cmd)) if cmd.command == CmdKind::Confirm as _
+                && cmd.responding_to == self.last_sent => {
+                    self.respond_to = cmd.packet;
+                    // send the next frame (or end the transaction), go into Sending mode (or done mode)
+                    if self.send_buf.is_empty() {
+                        self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Cmd(Cmd {
+                            packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
+                            responding_to: self.respond_to,
+                            packet_ty: PACKET_TYPE_COMMAND,
+                            command: CmdKind::Complete as _,
+                            padding: [0; 2],
+                        })))).unwrap();
+
+                        self.state = State::TheoreticallyDoneSending;
+                    } else {
+                        self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Frame(Frame {
+                            packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
+                            responding_to: self.respond_to,
+                            packet_ty: PACKET_TYPE_FRAME,
+                            _pad: 0,
+                            len: self.send_buf.len().clamp(0, FRAME_BUF_SIZE) as _,
+                            data: {
+                                let mut buf = [0u8; FRAME_BUF_SIZE];
+                                let mut past_buf = self.send_buf.split_off(FRAME_BUF_SIZE.clamp(0, self.send_buf.len()));
+                                swap(&mut self.send_buf, &mut past_buf);
+                                self.last_sent_send_buf = past_buf.clone();
+                                buf[0..past_buf.len()].copy_from_slice(&past_buf);
+                                buf
+                            }
+                        })))).unwrap();
+
+                        self.state = State::Sending;
+                    }
+                }
+            (State::SendingStart, _) => {}
+            (State::Sending, Packet::Cmd(cmd)) if cmd.command == CmdKind::Confirm as _
+                && cmd.responding_to == self.last_sent => {
+                self.respond_to = cmd.packet;
+                // send the next frame
+                if self.send_buf.is_empty() {
+                    self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Cmd(Cmd {
+                        packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
+                        responding_to: self.respond_to,
+                        packet_ty: PACKET_TYPE_COMMAND,
+                        command: CmdKind::Complete as _,
+                        padding: [0; 2],
+                    })))).unwrap();
+
+                    self.state = State::TheoreticallyDoneSending;
+                } else {
+                    self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Frame(Frame {
+                        packet: { self.last_sent = self.uid_gen.next(); self.last_sent },
+                        responding_to: self.respond_to,
+                        packet_ty: PACKET_TYPE_FRAME,
+                        _pad: 0,
+                        len: self.send_buf.len().clamp(0, FRAME_BUF_SIZE) as _,
+                        data: {
+                            let mut buf = [0u8; FRAME_BUF_SIZE];
+                            let mut past_buf = self.send_buf.split_off(FRAME_BUF_SIZE.clamp(0, self.send_buf.len()));
+                            swap(&mut self.send_buf, &mut past_buf);
+                            self.last_sent_send_buf = past_buf.clone();
+                            buf[0..past_buf.len()].copy_from_slice(&past_buf);
+                            buf
+                        }
+                    })))).unwrap();
+                }
+            }
+            (State::Sending, Packet::Cmd(cmd)) if cmd.command == CmdKind::Confirm as _
+                && cmd.packet == self.respond_to => {
+                // repeat the last frame
+                self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Frame(Frame {
+                    packet: self.last_sent,
+                    responding_to: self.respond_to,
+                    packet_ty: PACKET_TYPE_FRAME,
+                    _pad: 0,
+                    len: self.last_sent_send_buf.len() as _,
+                    data: {
+                        let mut buf = [0u8; FRAME_BUF_SIZE];
+                        buf[0..self.last_sent_send_buf.len()].copy_from_slice(&self.last_sent_send_buf);
+                        buf
+                    }
+                })))).unwrap();
+            }
+            (State::Sending, _) => {}
+            (State::TheoreticallyDoneSending, Packet::Cmd(cmd)) if cmd.command == CmdKind::Confirm as _
+                && cmd.packet == self.respond_to => {
+                    self.dispatch.send((self.addr, DispatchEvent::Send(Packet::Cmd(Cmd {
+                        packet: self.last_sent,
+                        responding_to: self.respond_to,
+                        packet_ty: PACKET_TYPE_COMMAND,
+                        command: CmdKind::Complete as _,
+                        padding: [0; 2],
+                    })))).unwrap();
+                }
+            (State::TheoreticallyDoneSending, _) => {}
         }
     }
 }

@@ -6,7 +6,7 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::Parser;
-use std::{path::PathBuf, collections::HashMap, net::SocketAddr, time::Duration};
+use std::{path::PathBuf, collections::HashMap, net::{SocketAddr, SocketAddrV4}, time::Duration};
 use tokio::{fs, signal::ctrl_c, sync, net::UdpSocket, spawn, select};
 use tracing::metadata::LevelFilter;
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
             // test code for the network protcol
             let sock = UdpSocket::bind("0.0.0.0:43210").await?;
             let max_transaction_time = Duration::from_secs(30);
-            let (dispatch, dispatch_rx) = flume::unbounded();
+            let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
             let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
 
             loop {
@@ -130,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
                         let (ip, event) = recv.unwrap();
                         match event {
                             DispatchEvent::Send(packet) => {
-                                debug!("Sending {packet:#?} to {ip:?}");
+                                //debug!("Sending {packet:#?} to {ip:?}");
                                 sock.send_to(packet.as_bytes(), ip).await.unwrap();
                             }
                             DispatchEvent::TimedOut => {
@@ -138,12 +138,14 @@ async fn main() -> anyhow::Result<()> {
                             }
                             DispatchEvent::Received(data) => {
                                 info!("Received {data:?} from {ip:?}");
+                                // echo the data back
+                                clients.get_mut(&ip).unwrap().queue(data);
                             }
                         }
                     }
                     packet = recv_next_packet(&sock) => {
                         if let Some((from, packet)) = packet? {
-                            debug!("Received {packet:#?} from {from:?}");
+                            //debug!("Received {packet:#?} from {from:?}");
                             let cl = clients.entry(from)
                                 .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone()));
                             cl.handle(packet);

@@ -207,7 +207,11 @@ fn main() -> Result<()> {
         sock.connect(ips[0]).await?;
         println!("attempting to send test data");
         let mut gen = squirrel::transport::UidGenerator::new();
-        squirrel::transport::client::mvp_send(&sock, 0xDEADBEEFu64.to_be_bytes().as_slice(), &mut gen).await;
+        let data = 0xDEADBEEFu32.to_be_bytes();
+        println!("Sending data: {data:?}");
+        squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
+        let data = squirrel::transport::client::mvp_recv(&sock, &mut gen).await.unwrap_or(vec![]);
+        println!("Received (echo): {data:?}");
         println!("sent test data");
 
         //NOTE (on UDP)

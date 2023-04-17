@@ -19,7 +19,7 @@ pub async fn send_and_wait(
     ty: Option<u8>,
     cmd: Option<CmdKind>,
 ) -> Packet {
-    info!("Sending packet {to:#?}");
+    //info!("Sending packet {to:#?}");
     let bytes = to.as_bytes();
 
     let wait_dur = 5000;
@@ -29,7 +29,7 @@ pub async fn send_and_wait(
     let mut amnt = 0usize;
 
     'send: loop {
-        info!("Sending");
+        //info!("Sending");
         amnt += 1;
         if amnt == 10 {
             panic!("Timed out -- max limit hit");
@@ -39,7 +39,7 @@ pub async fn send_and_wait(
         break loop {
             select! {
                 r = sock.recv_from(&mut buf).fuse() => {
-                    info!("Received data");
+                    //info!("Received data");
                     let (c, f) = r.unwrap();
                     if f == sock.peer_addr().unwrap() {
                         amnt = c;
@@ -66,7 +66,7 @@ pub async fn send_and_wait(
                     continue;
                 }
             }
-            info!("Received requested packet {p:#?}");
+            //info!("Received requested packet {p:#?}");
             break p;
         };
     }
