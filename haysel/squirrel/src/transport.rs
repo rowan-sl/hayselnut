@@ -5,6 +5,7 @@ use static_assertions::const_assert_eq;
 use zerocopy::{AsBytes, FromBytes};
 
 pub mod client;
+pub mod server;
 pub mod shared;
 
 // https://stackoverflow.com/questions/1098897/what-is-the-largest-safe-udp-packet-size-on-the-internet#1099359
@@ -17,6 +18,7 @@ pub fn extract_packet_type(bytes: &[u8]) -> Option<u8> {
     bytes.get(8).copied()
 }
 
+#[derive(Debug)]
 pub struct UidGenerator(u32);
 
 impl UidGenerator {
@@ -26,7 +28,7 @@ impl UidGenerator {
     }
 
     pub fn next(&mut self) -> u32 {
-        self.0.wrapping_add(1);
+        self.0 = self.0.wrapping_add(1);
         self.0
     }
 }
@@ -77,7 +79,11 @@ pub struct Cmd {
 // Tx Confirm Frame Confirm Frame Confirm Complete Confirm
 // c  s     c       (timeout)     c       s
 // Rx Frame Confirm /* dropped */ Confirm Complete
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
+//
+// a note on repeat transmission:
+//  - the repeat (from the client) should have the same UID as the original
+//  - the response (from the server) should also be identical to the first response
+#[derive(Debug, Clone, Copy,PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum CmdKind {
     // c-> s inform transmit
@@ -92,12 +98,13 @@ pub enum CmdKind {
 
 pub fn read_packet(buf: &[u8]) -> Option<Packet> {
     Some(match extract_packet_type(buf)? {
-        PACKET_TYPE_FRAME => Packet::Frame(Frame::from_bytes_compact(buf)?),
+        PACKET_TYPE_FRAME =>Packet::Frame(Frame::from_bytes_compact(buf)?),
         PACKET_TYPE_COMMAND => Packet::Cmd(Cmd::read_from(buf)?),
         _ => None?,
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Packet {
     Cmd(Cmd),
     Frame(Frame),

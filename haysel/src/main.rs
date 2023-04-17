@@ -6,8 +6,8 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::Parser;
-use std::path::PathBuf;
-use tokio::{fs, signal::ctrl_c, sync};
+use std::{path::PathBuf, collections::HashMap, net::SocketAddr, time::Duration};
+use tokio::{fs, signal::ctrl_c, sync, net::UdpSocket, spawn, select};
 use tracing::metadata::LevelFilter;
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 
@@ -62,7 +62,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut shutdown = Shutdown::new();
     // trap the signal, will only start listening later in the main loop
-    let ctrlc = {
+    let mut ctrlc = {
+        warn!("Trapping ctrl+c, it will be useless until initialization is finished");
         let (shutdown_tx, shutdown_rx) = sync::broadcast::channel::<()>(1);
         tokio::spawn(async move {
             if let Err(_) = ctrl_c().await {
@@ -112,6 +113,48 @@ async fn main() -> anyhow::Result<()> {
                 .collect::<Vec<_>>()
         );
 
+        let mut handle = shutdown.handle();
+        spawn(async move { async move {
+            use squirrel::transport::server::{DispatchEvent, ClientInterface, recv_next_packet};
+            // test code for the network protcol
+            let sock = UdpSocket::bind("0.0.0.0:43210").await?;
+            let max_transaction_time = Duration::from_secs(30);
+            let (dispatch, dispatch_rx) = flume::unbounded();
+            let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
+
+            loop {
+                select! {
+                    // TODO: complete transactions and inform clients before exit
+                    _ = handle.wait_for_shutdown() => { break; }
+                    recv = dispatch_rx.recv_async() => {
+                        let (ip, event) = recv.unwrap();
+                        match event {
+                            DispatchEvent::Send(packet) => {
+                                debug!("Sending {packet:#?} to {ip:?}");
+                                sock.send_to(packet.as_bytes(), ip).await.unwrap();
+                            }
+                            DispatchEvent::TimedOut => {
+                                error!("Connection to {ip:?} timed out");
+                            }
+                            DispatchEvent::Received(data) => {
+                                info!("Received {data:?} from {ip:?}");
+                            }
+                        }
+                    }
+                    packet = recv_next_packet(&sock) => {
+                        if let Some((from, packet)) = packet? {
+                            debug!("Received {packet:#?} from {from:?}");
+                            let cl = clients.entry(from)
+                                .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone()));
+                            cl.handle(packet);
+                        }
+                    }
+                };
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }.await.unwrap() } );
+
         // let mut router = Router::new();
         // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
         //
@@ -119,6 +162,8 @@ async fn main() -> anyhow::Result<()> {
         //
         // router.close().await;
 
+        info!("running -- press ctrl+c to exit");
+        ctrlc.recv().await.unwrap();
         shutdown.trigger_shutdown();
     }
     shutdown.wait_for_completion().await;
