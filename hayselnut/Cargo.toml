@@ -1,7 +1,12 @@
 [package]
 name = "hayselnut"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
+authors = ["rowan-sl <r@fawkes.io>"]
+resolver = "2"
+
+[package.metadata.espflash]
+partition_table = "partitions.csv"
 
 [patch.crates-io]
 smol = { git = "https://github.com/esp-rs-compat/smol" }
@@ -10,12 +15,14 @@ socket2 = { git = "https://github.com/esp-rs-compat/socket2" }
 getrandom = { version = "0.2", git = "https://github.com/esp-rs-compat/getrandom.git" }
 # getrandom1 = { version = "0.1", git = "https://github.com/esp-rs-compat/getrandom.git", package = "getrandom", branch = "0.1" }
 embedded-io = { git = "https://github.com/ivmarkov/embedded-io" }
+# remove once the next version is released
+esp-idf-svc = { version = "0.45.0", git = "https://github.com/esp-rs/esp-idf-svc.git" }
 
 [profile.release]
 codegen-units=1
-lto=true
-strip=true
-opt-level = "z"
+#lto=true
+#strip=true
+opt-level = "s"
 
 [profile.dev]
 debug = true # Symbols are nice and they don't increase the size on Flash
@@ -23,7 +30,6 @@ opt-level = "z"
 
 [features]
 default = ["experimental"]
-
 experimental = ["esp-idf-svc/experimental", "embedded-svc/experimental"]
 
 [dependencies]
@@ -35,7 +41,7 @@ esp-idf-svc = "0.45"
 esp-idf-hal = "0.40"
 embedded-hal = "=1.0.0-alpha.9"
 # embedded-hal-7= { package = "embedded-hal", version = "=1.0.0-alpha.7" }
-embedded-svc = { version = "0.24.0", optional = true, default-features = false }
+embedded-svc = { version = "0.24.0", default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
 bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
@@ -49,6 +55,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 uuid = { version = "1.3.1", features = ["serde", "v4"] }
 static_assertions = "1.1.0"
 rmp-serde = "1.1.1"
+#async-io = "=1.12" # pin to fix compilation issue with rustix
 
 [dependencies.squirrel]
 path = "../haysel/squirrel/"
@@ -56,4 +63,4 @@ features = ["smol"]
 
 [build-dependencies]
 embuild = "0.31"
-anyhow = "1"
+##anyhow = "1"
