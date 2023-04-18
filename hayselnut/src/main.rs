@@ -6,21 +6,27 @@ pub mod conf;
 pub mod lightning;
 pub mod store;
 
-use std::{fmt::Write, net::{Ipv4Addr, SocketAddr}, time::Duration, convert::TryInto};
+use std::{
+    convert::TryInto,
+    fmt::Write,
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{anyhow, bail, Result};
-use esp_idf_sys as _; // allways should be imported if `binstart` feature is enabled.
 use bme280::i2c::BME280;
 use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi};
 use esp_idf_hal::{delay, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     netif::{EspNetif, EspNetifWait},
-    wifi::{EspWifi, WifiEvent, WifiWait}, nvs::EspDefaultNvsPartition,
+    nvs::EspDefaultNvsPartition,
+    wifi::{EspWifi, WifiEvent, WifiWait},
 };
+use esp_idf_sys as _; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use smol::net::{UdpSocket, resolve};
+use smol::net::{resolve, UdpSocket};
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 use battery::BatteryMonitor;
@@ -106,8 +112,14 @@ fn main() -> Result<()> {
     })?;
 
     write!(display, "Starting wifi...")?;
-    let mut wifi = Box::new(EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs_partition.clone()))?);
-    wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration::default()))?;
+    let mut wifi = Box::new(EspWifi::new(
+        peripherals.modem,
+        sysloop.clone(),
+        Some(nvs_partition.clone()),
+    )?);
+    wifi.set_configuration(&wifi::Configuration::Client(
+        wifi::ClientConfiguration::default(),
+    ))?;
     wifi.start()?;
     if !WifiWait::new(&sysloop)?
         .wait_with_timeout(Duration::from_secs(20), || wifi.is_started().unwrap())
@@ -229,7 +241,6 @@ fn main() -> Result<()> {
         })?;
     }
 
-
     smol::block_on(async {
         println!("Async executor started");
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
@@ -240,7 +251,7 @@ fn main() -> Result<()> {
             bail!("Faild to respolve server address -- multiple results ({ips:?})");
         }
         //temp hardcoded IP
-        ips[0] = SocketAddr::new([10,1,10,9].into(), 43210);
+        ips[0] = SocketAddr::new([10, 1, 10, 9].into(), 43210);
         sock.connect(ips[0]).await?;
         println!("connected to: {:?}", sock.peer_addr()?);
         println!("attempting to send test data");
@@ -248,11 +259,11 @@ fn main() -> Result<()> {
         let data = 0xDEADBEEFu32.to_be_bytes();
         println!("Sending data: {data:?}");
         squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
-        let data = squirrel::transport::client::mvp_recv(&sock, &mut gen).await.unwrap_or(vec![]);
+        let data = squirrel::transport::client::mvp_recv(&sock, &mut gen)
+            .await
+            .unwrap_or(vec![]);
         println!("Received (echo): {data:?}");
         println!("done");
-
-
 
         //NOTE (on UDP)
         // - max packet size (?) http://www.tcpipguide.com/free/t_IPDatagramSizetheMaximumTransmissionUnitMTUandFrag-4.htm
