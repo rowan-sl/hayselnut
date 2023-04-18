@@ -31,9 +31,7 @@ fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
-    println!("Hello, World!");
     esp_idf_svc::log::EspLogger::initialize_default();
-    println!("b"); 
 
     {
         use ResetReason::*;
@@ -55,21 +53,14 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("c");
-
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
 
-    println!("d");
-
     let nvs_partition = EspDefaultNvsPartition::take()?;
-
-    println!("e");
 
     // initializing connectiosn to things
     // battery monitor
     let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio4)?;
-    println!("f");
     // i2c bus (shared with display, and sensors)
     // NOTE: slow baudrate (for lightning sensor compat) will make the display slow
     let i2c_driver = i2c::I2cDriver::new(
@@ -79,14 +70,12 @@ fn main() -> Result<()> {
         &i2c::config::Config::new().baudrate(100.kHz().into()),
     )?;
     let i2c_bus = shared_bus::BusManagerSimple::new(i2c_driver);
-    println!("h");
 
     // temp/humidity/pressure
     let mut bme280 = BME280::new(i2c_bus.acquire_i2c(), 0x77);
     bme280
         .init(&mut delay::Ets)
         .map_err(|e| anyhow!("Failed to init bme280: {e:?}"))?;
-    println!("i");
 
     // oled display used for status on the device
     let display_interface = I2CDisplayInterface::new(i2c_bus.acquire_i2c());
@@ -101,12 +90,10 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("Failed to init display: {e:?}"))?;
     let _ = display.clear();
     writeln!(display, "Starting...")?;
-    println!("j");
     // lightning sensor
     // TODO
 
     let sysloop = EspSystemEventLoop::take()?;
-    println!("k");
     let (wifi_status_send, wifi_status_recv) = smol::channel::unbounded::<WifiStatusUpdate>();
     let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
         // println!("Wifi event: {event:?}");
@@ -117,11 +104,9 @@ fn main() -> Result<()> {
             _ => {}
         }
     })?;
-    println!("m");
 
     write!(display, "Starting wifi...")?;
     let mut wifi = Box::new(EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs_partition.clone()))?);
-    println!("n");
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration::default()))?;
     wifi.start()?;
     if !WifiWait::new(&sysloop)?
@@ -132,7 +117,6 @@ fn main() -> Result<()> {
     }
 
     // wifi.start()?;
-    println!("o");
     // -- NVS station information initialization --
     // // performed here since it uses random numbers, and `getrandom` on the esp32
     // // requires wifi / bluetooth to be enabled for true random numbers
@@ -150,7 +134,6 @@ fn main() -> Result<()> {
     // };
     // info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
-    println!("p"); 
 
     // writeln!(display, "Scanning...")?;
     // scan for available networks
@@ -188,7 +171,6 @@ fn main() -> Result<()> {
     }
     let chosen_ap = accessable_aps.remove(0);
     drop(accessable_aps);
-    println!("q");
     // let _ = display.clear();
     // writeln!(
     //     display,
@@ -211,7 +193,6 @@ fn main() -> Result<()> {
         channel: Some(chosen_ap.0.channel),
         ..Default::default()
     }))?;
-    println!("r");
 
     // wifi.start()?;
     // if !WifiWait::new(&sysloop)?
@@ -220,7 +201,6 @@ fn main() -> Result<()> {
     //     // writeln!(display, "Wifi failed to start")?;
     //     bail!("Wifi did not start!");
     // }
-    println!("s");
 
     wifi.connect()?;
     if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?.wait_with_timeout(
@@ -233,7 +213,6 @@ fn main() -> Result<()> {
         // writeln!(display, "Wifi did not connect or receive a DHCP lease")?;
         bail!("Wifi did not connect or receive a DHCP lease")
     }
-    println!("t");
 
     // let _ = display.clear();
     let ip_info = wifi.sta_netif().get_ip_info()?;
@@ -250,7 +229,6 @@ fn main() -> Result<()> {
         })?;
     }
 
-    println!("u");
 
     smol::block_on(async {
         println!("Async executor started");
@@ -272,7 +250,7 @@ fn main() -> Result<()> {
         squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
         let data = squirrel::transport::client::mvp_recv(&sock, &mut gen).await.unwrap_or(vec![]);
         println!("Received (echo): {data:?}");
-        println!("sent test data");
+        println!("done");
 
 
 
