@@ -120,19 +120,19 @@ fn main() -> Result<()> {
     // -- NVS station information initialization --
     // // performed here since it uses random numbers, and `getrandom` on the esp32
     // // requires wifi / bluetooth to be enabled for true random numbers
-    // let mut store = StationStoreAccess::new(nvs_partition.clone())?;
-    // let station_info = if !store.exists()? {
-    //     warn!("Performing first-time initialization of station information");
-    //     let default = StationStoreData {
-    //         station_uuid: Uuid::new_v4(),
-    //     };
-    //     warn!("Picked a UUID of {}", default.station_uuid);
-    //     store.write(&default)?;
-    //     default
-    // } else {
-    //     store.read()?.unwrap()
-    // };
-    // info!("Loaded station info: {station_info:#?}");
+    let mut store = StationStoreAccess::new(nvs_partition.clone())?;
+    let station_info = if !store.exists()? {
+        warn!("Performing first-time initialization of station information");
+        let default = StationStoreData {
+            station_uuid: Uuid::new_v4(),
+        };
+        warn!("Picked a UUID of {}", default.station_uuid);
+        store.write(&default)?;
+        default
+    } else {
+        store.read()?.unwrap()
+    };
+    info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
     // writeln!(display, "Scanning...")?;
