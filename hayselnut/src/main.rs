@@ -1,6 +1,10 @@
+#[macro_use]
+extern crate log;
+
 pub mod battery;
 pub mod conf;
 pub mod lightning;
+pub mod store;
 
 use std::{fmt::Write, net::{Ipv4Addr, SocketAddr}, time::Duration, convert::TryInto};
 
@@ -11,7 +15,7 @@ use esp_idf_hal::{delay, i2c, peripherals::Peripherals, reset::ResetReason, unit
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     netif::{EspNetif, EspNetifWait},
-    wifi::{EspWifi, WifiEvent, WifiWait},
+    wifi::{EspWifi, WifiEvent, WifiWait}, nvs::EspDefaultNvsPartition,
 };
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -19,6 +23,8 @@ use smol::net::{UdpSocket, resolve};
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 use battery::BatteryMonitor;
+use store::{StationStoreAccess, StationStoreData};
+use uuid::Uuid;
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
@@ -46,6 +52,8 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
+
+    let nvs_partition = EspDefaultNvsPartition::take()?;
 
     // initializing connectiosn to things
     // battery monitor
@@ -98,6 +106,24 @@ fn main() -> Result<()> {
 
     write!(display, "Starting wifi...")?;
     let mut wifi = Box::new(EspWifi::new(peripherals.modem, sysloop.clone(), None)?);
+
+    // -- NVS station information initialization --
+    // performed here since it uses random numbers, and `getrandom` on the esp32
+    // requires wifi / bluetooth to be enabled for true random numbers
+    let mut store = StationStoreAccess::new(nvs_partition.clone())?;
+    let station_info = if !store.exists()? {
+        warn!("Performing first-time initialization of station information");
+        let default = StationStoreData {
+            station_uuid: Uuid::new_v4(),
+        };
+        warn!("Picked a UUID of {}", default.station_uuid);
+        store.write(&default)?;
+        default
+    } else {
+        store.read()?.unwrap()
+    };
+    info!("Loaded station info: {station_info:#?}");
+    // -- end NVS info init --
 
     // writeln!(display, "Scanning...")?;
     // scan for available networks

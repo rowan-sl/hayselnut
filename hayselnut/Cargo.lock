@@ -190,15 +190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1063,7 +1054,6 @@ name = "hayselnut"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bincode",
  "bme280",
  "embedded-graphics",
  "embedded-hal 1.0.0-alpha.9",
@@ -1075,12 +1065,15 @@ dependencies = [
  "futures",
  "log",
  "num",
+ "rmp-serde",
  "serde",
  "shared-bus",
  "smol",
  "squirrel",
  "ssd1306",
+ "static_assertions",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -1505,6 +1498,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "427c3892f9e783d91cc128285287e70a59e206ca452770ece88a76f7a3eddd72"
 
 [[package]]
+name = "paste"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f746c4065a8fa3fe23974dd82f15431cc8d40779821001404d10d2e79ca7d79"
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1696,6 +1695,28 @@ dependencies = [
  "num_cpus",
  "rayon",
  "winapi",
+]
+
+[[package]]
+name = "rmp"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44519172358fd6d58656c86ab8e7fbc9e1490c3e8f14d35ed78ca0dd07403c9f"
+dependencies = [
+ "byteorder",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5b13be192e0220b8afb7222aa5813cb62cc269ebb5cac346ca6487681d2913e"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde",
 ]
 
 [[package]]
