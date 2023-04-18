@@ -26,7 +26,20 @@ use esp_idf_svc::{
 use esp_idf_sys as _; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use smol::net::{resolve, UdpSocket};
+use smol::{
+    net::{resolve, UdpSocket},
+    Timer,
+};
+use squirrel::{
+    api::{
+        station::capabilities::{Channel, ChannelName, ChannelType, ChannelValue},
+        PacketKind,
+    },
+    transport::{
+        client::{mvp_recv, mvp_send},
+        UidGenerator,
+    },
+};
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 use battery::BatteryMonitor;
@@ -254,16 +267,66 @@ fn main() -> Result<()> {
         ips[0] = SocketAddr::new([10, 1, 10, 9].into(), 43210);
         sock.connect(ips[0]).await?;
         println!("connected to: {:?}", sock.peer_addr()?);
-        println!("attempting to send test data");
-        let mut gen = squirrel::transport::UidGenerator::new();
-        let data = 0xDEADBEEFu32.to_be_bytes();
-        println!("Sending data: {data:?}");
-        squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
-        let data = squirrel::transport::client::mvp_recv(&sock, &mut gen)
-            .await
-            .unwrap_or(vec![]);
-        println!("Received (echo): {data:?}");
-        println!("done");
+
+        let mut uid_gen = UidGenerator::new();
+        let channels = vec![
+            Channel {
+                name: "temperature".into(),
+                value: ChannelValue::Float,
+                ty: ChannelType::Periodic,
+            },
+            Channel {
+                name: "humidity".into(),
+                value: ChannelValue::Float,
+                ty: ChannelType::Periodic,
+            },
+            Channel {
+                name: "pressure".into(),
+                value: ChannelValue::Float,
+                ty: ChannelType::Periodic,
+            },
+        ];
+
+        // send init packet
+        info!("sending init info");
+        let packet = PacketKind::Connect(squirrel::api::OnConnect {
+            station_id: station_info.station_uuid,
+            channels,
+        });
+        mvp_send(
+            &sock,
+            &rmp_serde::to_vec_named(&packet).unwrap(),
+            &mut uid_gen,
+        )
+        .await;
+
+        info!("receiving channel mappings");
+        let recv = loop {
+            match mvp_recv(&sock, &mut uid_gen).await {
+                Some(p) => break p,
+                None => {
+                    debug!("retry receive in 5s (got empty response = no packet ready yet)");
+                    Timer::after(Duration::from_secs(5)).await;
+                }
+            }
+        };
+        let mappings = match rmp_serde::from_slice(&recv) {
+            Ok(PacketKind::ChannelMappings(map)) => map,
+            Ok(other) => bail!("Expected channel mappings, got {other:?}"),
+            Err(..) => bail!("Failed to deserialize received data"),
+        };
+        info!("channel mappings: {mappings:#?}");
+
+        // println!("attempting to send test data");
+        // let mut gen = squirrel::transport::UidGenerator::new();
+        // let data = 0xDEADBEEFu32.to_be_bytes();
+        // println!("Sending data: {data:?}");
+        // squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
+        // let data = squirrel::transport::client::mvp_recv(&sock, &mut gen)
+        //     .await
+        //     .unwrap_or(vec![]);
+        // println!("Received (echo): {data:?}");
+        // println!("done");
 
         //NOTE (on UDP)
         // - max packet size (?) http://www.tcpipguide.com/free/t_IPDatagramSizetheMaximumTransmissionUnitMTUandFrag-4.htm

@@ -83,7 +83,7 @@ pub struct Cmd {
 // a note on repeat transmission:
 //  - the repeat (from the client) should have the same UID as the original
 //  - the response (from the server) should also be identical to the first response
-#[derive(Debug, Clone, Copy,PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum CmdKind {
     // c-> s inform transmit
@@ -98,7 +98,7 @@ pub enum CmdKind {
 
 pub fn read_packet(buf: &[u8]) -> Option<Packet> {
     Some(match extract_packet_type(buf)? {
-        PACKET_TYPE_FRAME =>Packet::Frame(Frame::from_bytes_compact(buf)?),
+        PACKET_TYPE_FRAME => Packet::Frame(Frame::from_bytes_compact(buf)?),
         PACKET_TYPE_COMMAND => Packet::Cmd(Cmd::read_from(buf)?),
         _ => None?,
     })

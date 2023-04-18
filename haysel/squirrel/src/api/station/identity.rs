@@ -8,7 +8,9 @@ use uuid::Uuid;
 pub type StationID = Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationInfo {}
+pub struct StationInfo {
+    pub supports_channels: Vec<super::capabilities::ChannelID>,
+}
 
 #[cfg(feature = "server-utils")]
 #[derive(Debug, Serialize, Deserialize, Default)]

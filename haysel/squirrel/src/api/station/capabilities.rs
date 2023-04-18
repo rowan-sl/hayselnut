@@ -37,9 +37,9 @@ impl ChannelName {
     }
 }
 
-impl From<String> for ChannelName {
-    fn from(value: String) -> Self {
-        Self::new(value)
+impl<T: ToString> From<T> for ChannelName {
+    fn from(value: T) -> Self {
+        Self::new(value.to_string())
     }
 }
 
@@ -91,13 +91,13 @@ impl KnownChannels {
     }
 
     /// Returns Err(new_channel) if a channel with the new channels name already exists
-    pub fn insert_channel(&mut self, channel: Channel) -> Result<(), Channel> {
+    pub fn insert_channel(&mut self, channel: Channel) -> Result<ChannelID, Channel> {
         if self.id_by_name(&channel.name).is_some() {
             Err(channel)
         } else {
             let id = ChannelID::new_v4();
             self.channels.insert(id, channel);
-            Ok(())
+            Ok(id)
         }
     }
 

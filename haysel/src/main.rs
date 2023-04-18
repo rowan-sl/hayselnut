@@ -6,10 +6,21 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::Parser;
-use std::{path::PathBuf, collections::HashMap, net::{SocketAddr, SocketAddrV4}, time::Duration};
-use tokio::{fs, signal::ctrl_c, sync, net::UdpSocket, spawn, select};
+use squirrel::api::{
+    station::{
+        capabilities::{Channel, ChannelID, ChannelName, KnownChannels},
+        identity::{KnownStations, StationInfo},
+    },
+    ChannelMappings, PacketKind,
+};
+use std::{
+    collections::HashMap,
+    net::{SocketAddr, SocketAddrV4},
+    path::PathBuf,
+    time::Duration,
+};
+use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
 use tracing::metadata::LevelFilter;
-use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 
 mod consumer;
 mod paths;
@@ -92,29 +103,35 @@ async fn main() -> anyhow::Result<()> {
 
         info!("Loading info for known stations");
         let stations_path = records_dir.path("stations.json");
-        let stations = JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
-
+        let mut stations =
+            JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
         debug!("Loaded known stations:");
-        for s in stations.stations() {
-            // in the future, station info should be printed
-            let _info = stations.get_info(s).unwrap();
-            debug!("Known station {}", s);
-        }
 
         info!("Loading known channels");
         let channels_path = records_dir.path("channels.json");
-        let stations = JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
+        let mut channels =
+            JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
 
         debug!(
-            "Loaded known channels: {:?}",
-            stations
+            "Loaded known channels: {:#?}",
+            channels
                 .channels()
-                .map(|(_, v)| (&v).clone())
+                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>()
         );
 
+        for s in stations.stations() {
+            // in the future, station info should be printed
+            let info = stations.get_info(s).unwrap();
+            debug!(
+                "Known station {}\nsupports channels {:#?}",
+                s, info.supports_channels
+            );
+        }
+
         let mut handle = shutdown.handle();
-        spawn(async move { async move {
+        spawn(async move {
+            async move {
             use squirrel::transport::server::{DispatchEvent, ClientInterface, recv_next_packet};
             // test code for the network protcol
             let sock = UdpSocket::bind("0.0.0.0:43210").await?;
@@ -137,9 +154,43 @@ async fn main() -> anyhow::Result<()> {
                                 error!("Connection to {ip:?} timed out");
                             }
                             DispatchEvent::Received(data) => {
-                                info!("Received {data:?} from {ip:?}");
-                                // echo the data back
-                                clients.get_mut(&ip).unwrap().queue(data);
+                                debug!("received [packet] from {ip:?}");
+                                if let Ok(packet) = rmp_serde::from_slice::<PacketKind>(&data) {
+                                    trace!("packet content: {packet:?}");
+                                    match packet {
+                                        PacketKind::Connect(data) => {
+                                            let name_to_id_mappings = data.channels.iter()
+                                                .map(|ch| {
+                                                    (
+                                                        ch.name.clone(),
+                                                        channels.id_by_name(&ch.name)
+                                                            .unwrap_or_else(|| {
+                                                                info!("creating new channel: {ch:?}");
+                                                                channels.insert_channel(ch.clone()).unwrap()
+                                                            })
+                                                    )
+                                                })
+                                                .collect::<HashMap<ChannelName, ChannelID>>();
+                                            if let Some(_) = stations.get_info(&data.station_id) {
+                                                info!("connecting to known station [{}] at IP {:?}", data.station_id, ip);
+                                                stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
+                                            } else {
+                                                info!("connected to new station [{}] at IP {:?}", data.station_id, ip);
+                                                let id = stations.gen_id();
+                                                stations.insert_station(id, StationInfo {
+                                                    supports_channels: name_to_id_mappings.values().copied().collect(),
+                                                }).unwrap();
+                                            }
+                                            let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
+                                                map: name_to_id_mappings,
+                                            })).unwrap();
+                                            clients.get_mut(&ip).unwrap().queue(resp);
+                                        }
+                                        _ => debug!("received unexpected packet, ignoring"),
+                                    }
+                                } else {
+                                    debug!("packet was malformed (failed to deserialize)");
+                                }
                             }
                         }
                     }
@@ -155,7 +206,8 @@ async fn main() -> anyhow::Result<()> {
             }
 
             Ok::<(), anyhow::Error>(())
-        }.await.unwrap() } );
+        }.await.unwrap()
+        });
 
         // let mut router = Router::new();
         // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
