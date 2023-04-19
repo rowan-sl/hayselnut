@@ -8,19 +8,21 @@ extern crate anyhow;
 use clap::Parser;
 use squirrel::api::{
     station::{
-        capabilities::{Channel, ChannelID, ChannelName, KnownChannels},
+        capabilities::{ChannelID, ChannelName, KnownChannels},
         identity::{KnownStations, StationInfo},
     },
     ChannelMappings, PacketKind,
 };
 use std::{
     collections::HashMap,
-    net::{SocketAddr, SocketAddrV4},
+    net::SocketAddr,
     path::PathBuf,
     time::Duration,
 };
 use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
 use tracing::metadata::LevelFilter;
+use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::config as resolveconf;
 
 mod consumer;
 mod paths;
@@ -50,6 +52,10 @@ pub struct Args {
         help = "directory for weather + station ID records to be placed"
     )]
     records_path: PathBuf,
+    #[arg(short, long, help = "url of the server that this is to be run on")]
+    url: String,
+    #[arg(short, long, help = "port to run the server on")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -129,12 +135,26 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
+        info!("Performing DNS lookup of server's extranal IP (url={})", args.url);
+        let resolver = TokioAsyncResolver::tokio(
+            resolveconf::ResolverConfig::default(),
+            resolveconf::ResolverOpts::default()
+        )?;
+        let addrs = resolver.lookup_ip(args.url)
+            .await?
+            .into_iter()
+            .map(|addr| {
+                debug!("Resolved IP {addr}");
+                SocketAddr::new(addr, args.port)
+            })
+            .collect::<Vec<_>>();
+
         let mut handle = shutdown.handle();
-        spawn(async move {
+        let main_task = spawn(async move {
             async move {
             use squirrel::transport::server::{DispatchEvent, ClientInterface, recv_next_packet};
             // test code for the network protcol
-            let sock = UdpSocket::bind("0.0.0.0:43210").await?;
+            let sock = UdpSocket::bind(addrs.as_slice()).await?;
             let max_transaction_time = Duration::from_secs(30);
             let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
             let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
@@ -196,7 +216,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     packet = recv_next_packet(&sock) => {
                         if let Some((from, packet)) = packet? {
-                            //debug!("Received {packet:#?} from {from:?}");
+                            debug!("Received {packet:#?} from {from:?}");
                             let cl = clients.entry(from)
                                 .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone()));
                             cl.handle(packet);
@@ -217,7 +237,7 @@ async fn main() -> anyhow::Result<()> {
         // router.close().await;
 
         info!("running -- press ctrl+c to exit");
-        ctrlc.recv().await.unwrap();
+        select! { _ = ctrlc.recv() => {} _ = main_task => {} }
         shutdown.trigger_shutdown();
     }
     shutdown.wait_for_completion().await;

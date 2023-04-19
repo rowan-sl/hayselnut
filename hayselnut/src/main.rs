@@ -257,14 +257,14 @@ fn main() -> Result<()> {
     smol::block_on(async {
         println!("Async executor started");
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
-        let mut ips = resolve(conf::SERVER).await?;
+        let ips = resolve(conf::SERVER).await?;
         if ips.len() == 0 {
             bail!("Failed to resolve server address -- DNS lookup found nothing");
         } else if ips.len() > 1 {
             bail!("Faild to respolve server address -- multiple results ({ips:?})");
         }
         //temp hardcoded IP
-        ips[0] = SocketAddr::new([10, 1, 10, 9].into(), 43210);
+        // ips[0] = SocketAddr::new([10, 1, 10, 9].into(), 43210);
         sock.connect(ips[0]).await?;
         println!("connected to: {:?}", sock.peer_addr()?);
 
