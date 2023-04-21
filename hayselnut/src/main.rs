@@ -9,11 +9,7 @@ pub mod lightning;
 pub mod store;
 pub mod wifictl;
 
-use std::{
-    fmt::Write,
-    net::Ipv4Addr,
-    time::Duration, cell::SyncUnsafeCell,
-};
+use std::{cell::SyncUnsafeCell, fmt::Write, net::Ipv4Addr, time::Duration};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
@@ -25,7 +21,7 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition,
     wifi::{EspWifi, WifiEvent, WifiWait},
 };
-use esp_idf_sys::{self as _, esp_sleep_disable_wakeup_source, esp_deep_sleep_start}; // allways should be imported if `binstart` feature is enabled.
+use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source}; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use smol::{
@@ -74,14 +70,16 @@ fn main() -> Result<()> {
             //  (storing in RTC fast memory, with `#[link_section=".rtc.data"] static mut VAR`)
             DeepSleep => {
                 match unsafe { *DEEP_SLEEP_CAUSE.get() } {
-                    SleepCause::None => {}// hmmmmm
+                    SleepCause::None => {} // hmmmmm
                     SleepCause::Panic => {
                         // esp docs LIE! (somehow, the chip was woken from deep sleep)
                         // leave the cause as is
                         // sleep forever (or is it)
                         unsafe {
                             //just to make sure
-                            esp_sleep_disable_wakeup_source(esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL);
+                            esp_sleep_disable_wakeup_source(
+                                esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
+                            );
                             esp_deep_sleep_start();
                         }
                     }
@@ -104,7 +102,9 @@ fn main() -> Result<()> {
                     // sleep forever
                     //TODO: set an LED on when this happens incase the message is missed
                     *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
-                    esp_sleep_disable_wakeup_source(esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL);
+                    esp_sleep_disable_wakeup_source(
+                        esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
+                    );
                     esp_deep_sleep_start();
                 }
             }
