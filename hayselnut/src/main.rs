@@ -1,3 +1,5 @@
+#![feature(sync_unsafe_cell)]
+
 #[macro_use]
 extern crate log;
 
@@ -5,12 +7,12 @@ pub mod battery;
 pub mod conf;
 pub mod lightning;
 pub mod store;
+pub mod wifictl;
 
 use std::{
-    convert::TryInto,
     fmt::Write,
-    net::{Ipv4Addr, SocketAddr},
-    time::Duration,
+    net::Ipv4Addr,
+    time::Duration, cell::SyncUnsafeCell,
 };
 
 use anyhow::{anyhow, bail, Result};
@@ -23,7 +25,7 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition,
     wifi::{EspWifi, WifiEvent, WifiWait},
 };
-use esp_idf_sys as _; // allways should be imported if `binstart` feature is enabled.
+use esp_idf_sys::{self as _, esp_sleep_disable_wakeup_source, esp_deep_sleep_start}; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use smol::{
@@ -32,7 +34,7 @@ use smol::{
 };
 use squirrel::{
     api::{
-        station::capabilities::{Channel, ChannelName, ChannelType, ChannelValue},
+        station::capabilities::{Channel, ChannelType, ChannelValue},
         PacketKind,
     },
     transport::{
@@ -50,9 +52,19 @@ fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
 
     {
+        // stored in RTC fast memory, not powered off by default even in deep sleep
+        // saftey of access: pinky promise that this code is single threadded
+        #[link_section = ".rtc.data"]
+        static DEEP_SLEEP_CAUSE: SyncUnsafeCell<SleepCause> = SyncUnsafeCell::new(SleepCause::None);
+
+        #[derive(Clone, Copy)]
+        enum SleepCause {
+            None,
+            Panic,
+        }
+
         use ResetReason::*;
         match ResetReason::get() {
             // should be normal reset conditions
@@ -60,17 +72,48 @@ fn main() -> Result<()> {
             // could be used for something in the future
             // see https://github.com/esp-rs/esp-idf-hal/issues/128 for a way of storing info between sleeps
             //  (storing in RTC fast memory, with `#[link_section=".rtc.data"] static mut VAR`)
-            Software | DeepSleep => {}
+            DeepSleep => {
+                match unsafe { *DEEP_SLEEP_CAUSE.get() } {
+                    SleepCause::None => {}// hmmmmm
+                    SleepCause::Panic => {
+                        // esp docs LIE! (somehow, the chip was woken from deep sleep)
+                        // leave the cause as is
+                        // sleep forever (or is it)
+                        unsafe {
+                            //just to make sure
+                            esp_sleep_disable_wakeup_source(esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL);
+                            esp_deep_sleep_start();
+                        }
+                    }
+                }
+            }
+            //????
+            Software => {}
             // report and wait (?) -- caused by some software issue (Sdio - unknown what it is)
             _reason @ (Watchdog | InterruptWatchdog | TaskWatchdog | Sdio) => {}
             // tentatively continue as normal
             Unknown => {}
             // report and wait for reset
-            Panic => {}
+            Panic => {
+                // if printing fails, avoid panicing again
+                let _ = std::panic::catch_unwind(|| {
+                    eprintln!("Chip restarted due to panic -- halting to avoid repeated panicing");
+                    eprintln!("restart chip to exit halted mode");
+                });
+                unsafe {
+                    // sleep forever
+                    //TODO: set an LED on when this happens incase the message is missed
+                    *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
+                    esp_sleep_disable_wakeup_source(esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL);
+                    esp_deep_sleep_start();
+                }
+            }
             // wait for battery to raise above some level
             Brownout => {}
         }
     }
+
+    esp_idf_svc::log::EspLogger::initialize_default();
 
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
@@ -141,10 +184,10 @@ fn main() -> Result<()> {
         bail!("Wifi did not start!");
     }
 
-    // wifi.start()?;
     // -- NVS station information initialization --
-    // // performed here since it uses random numbers, and `getrandom` on the esp32
-    // // requires wifi / bluetooth to be enabled for true random numbers
+    // performed here since it uses random numbers, and `getrandom` on the esp32
+    // requires wifi / bluetooth to be enabled for true random numbers
+    // - performed before the wifi is connected, because in the future this might store info on known networks
     let mut store = StationStoreAccess::new(nvs_partition.clone())?;
     let station_info = if !store.exists()? {
         warn!("Performing first-time initialization of station information");
@@ -160,72 +203,22 @@ fn main() -> Result<()> {
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
-    // writeln!(display, "Scanning...")?;
-    // scan for available networks
     let available_aps = wifi.scan()?;
-    // sleep(Duration::from_secs(1));
-    // for (i, net) in available_aps.iter().enumerate() {
-    //     let _ = display.clear();
-    //     writeln!(
-    //         display,
-    //         "Network ({}/{})\n{}\nSignal: {}dBm\n{}",
-    //         i + 1,
-    //         available_aps.len(),
-    //         net.ssid,
-    //         net.signal_strength,
-    //         if conf::WIFI_CFG
-    //             .iter()
-    //             .find(|(ssid, _)| ssid == &net.ssid)
-    //             .is_some()
-    //         {
-    //             "<known>"
-    //         } else if net.auth_method == wifi::AuthMethod::None {
-    //             "<open>"
-    //         } else {
-    //             "<locked>"
-    //         },
-    //     )?;
-    //     sleep(Duration::from_secs(4));
-    // }
+
     let mut accessable_aps = filter_networks(available_aps, conf::INCLUDE_OPEN_NETWORKS);
     if accessable_aps.is_empty() {
-        // let _ = display.clear();
-        // writeln!(display, "No wifi found!")?;
         bail!("No accessable networks!!")
         //TODO eventually this should keep scanning, and not exit
     }
     let chosen_ap = accessable_aps.remove(0);
     drop(accessable_aps);
-    // let _ = display.clear();
-    // writeln!(
-    //     display,
-    //     "Connecting to\n{}\nSignal: {}dBm\n{}",
-    //     chosen_ap.0.ssid,
-    //     chosen_ap.0.signal_strength,
-    //     if chosen_ap.1.is_some() {
-    //         "<known net>"
-    //     } else {
-    //         "<open net>"
-    //     }
-    // )?;
-    // sleep(Duration::from_secs(7));
 
-    // let _ = display.clear();
-    // writeln!(display, "Configuring...")?;
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
         ssid: chosen_ap.0.ssid.clone(),
         password: chosen_ap.1.unwrap_or_default().into(),
         channel: Some(chosen_ap.0.channel),
         ..Default::default()
     }))?;
-
-    // wifi.start()?;
-    // if !WifiWait::new(&sysloop)?
-    //     .wait_with_timeout(Duration::from_secs(20), || wifi.is_started().unwrap())
-    // {
-    //     // writeln!(display, "Wifi failed to start")?;
-    //     bail!("Wifi did not start!");
-    // }
 
     wifi.connect()?;
     if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?.wait_with_timeout(
@@ -235,27 +228,18 @@ fn main() -> Result<()> {
                 && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
         },
     ) {
-        // writeln!(display, "Wifi did not connect or receive a DHCP lease")?;
         bail!("Wifi did not connect or receive a DHCP lease")
     }
 
-    // let _ = display.clear();
     let ip_info = wifi.sta_netif().get_ip_info()?;
     println!("Wifi DHCP info {:?}", ip_info);
 
-    // black magic
-    // if this is not present, the call to UdpSocket::bind fails
-    {
-        esp_idf_sys::esp!(unsafe {
-            esp_idf_sys::esp_vfs_eventfd_register(&esp_idf_sys::esp_vfs_eventfd_config_t {
-                max_fds: 5,
-                ..Default::default()
-            })
-        })?;
-    }
+    // see docs
+    wifictl::util::fix_networking()?;
 
     smol::block_on(async {
         println!("Async executor started");
+        // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
         let ips = resolve(conf::SERVER).await?;
         if ips.len() == 0 {
@@ -310,23 +294,14 @@ fn main() -> Result<()> {
                 }
             }
         };
+
         let mappings = match rmp_serde::from_slice(&recv) {
             Ok(PacketKind::ChannelMappings(map)) => map,
             Ok(other) => bail!("Expected channel mappings, got {other:?}"),
             Err(..) => bail!("Failed to deserialize received data"),
         };
-        info!("channel mappings: {mappings:#?}");
 
-        // println!("attempting to send test data");
-        // let mut gen = squirrel::transport::UidGenerator::new();
-        // let data = 0xDEADBEEFu32.to_be_bytes();
-        // println!("Sending data: {data:?}");
-        // squirrel::transport::client::mvp_send(&sock, &data, &mut gen).await;
-        // let data = squirrel::transport::client::mvp_recv(&sock, &mut gen)
-        //     .await
-        //     .unwrap_or(vec![]);
-        // println!("Received (echo): {data:?}");
-        // println!("done");
+        info!("channel mappings: {mappings:#?}");
 
         //NOTE (on UDP)
         // - max packet size (?) http://www.tcpipguide.com/free/t_IPDatagramSizetheMaximumTransmissionUnitMTUandFrag-4.htm
