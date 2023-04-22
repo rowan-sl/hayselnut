@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use self::station::{
-    capabilities::{Channel, ChannelID, ChannelName},
+    capabilities::{Channel, ChannelID, ChannelName, ChannelData},
     identity::StationID,
 };
 
@@ -15,6 +15,7 @@ pub enum PacketKind {
     // sent to client after it connects.
     // provides mappings of channel names -> uuids
     ChannelMappings(ChannelMappings),
+    Data(SomeData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,3 +28,9 @@ pub struct OnConnect {
 pub struct ChannelMappings {
     pub map: HashMap<ChannelName, ChannelID>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SomeData {
+    pub per_channel: HashMap<ChannelID, ChannelData>
+}
+

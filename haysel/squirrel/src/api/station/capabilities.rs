@@ -15,6 +15,13 @@ pub enum ChannelValue {
     // this could be used for the lightning sensor or similar
 }
 
+// not used in describing a channel, but rather in conveying the data of that channel
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChannelData {
+    Float(f32),
+    Event
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")] //internally tagged
 pub enum ChannelType {

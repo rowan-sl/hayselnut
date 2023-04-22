@@ -175,48 +175,57 @@ async fn main() -> anyhow::Result<()> {
                             }
                             DispatchEvent::Received(data) => {
                                 debug!("received [packet] from {ip:?}");
-                                if let Ok(packet) = rmp_serde::from_slice::<PacketKind>(&data) {
-                                    trace!("packet content: {packet:?}");
-                                    match packet {
-                                        PacketKind::Connect(data) => {
-                                            let name_to_id_mappings = data.channels.iter()
-                                                .map(|ch| {
-                                                    (
-                                                        ch.name.clone(),
-                                                        channels.id_by_name(&ch.name)
-                                                            .unwrap_or_else(|| {
-                                                                info!("creating new channel: {ch:?}");
-                                                                channels.insert_channel(ch.clone()).unwrap()
-                                                            })
-                                                    )
-                                                })
-                                                .collect::<HashMap<ChannelName, ChannelID>>();
-                                            if let Some(_) = stations.get_info(&data.station_id) {
-                                                info!("connecting to known station [{}] at IP {:?}", data.station_id, ip);
-                                                stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
-                                            } else {
-                                                info!("connected to new station [{}] at IP {:?}", data.station_id, ip);
-                                                let id = stations.gen_id();
-                                                stations.insert_station(id, StationInfo {
-                                                    supports_channels: name_to_id_mappings.values().copied().collect(),
-                                                }).unwrap();
+                                if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
+                                    trace!("packet content (msgpack value): {packet:#?}");
+                                }
+                                match rmp_serde::from_slice::<PacketKind>(&data) {
+                                    Ok(packet) => {
+                                        trace!("packet content: {packet:?}");
+                                        match packet {
+                                            PacketKind::Connect(data) => {
+                                                let name_to_id_mappings = data.channels.iter()
+                                                    .map(|ch| {
+                                                        (
+                                                            ch.name.clone(),
+                                                            channels.id_by_name(&ch.name)
+                                                                .unwrap_or_else(|| {
+                                                                    info!("creating new channel: {ch:?}");
+                                                                    channels.insert_channel(ch.clone()).unwrap()
+                                                                })
+                                                        )
+                                                    })
+                                                    .collect::<HashMap<ChannelName, ChannelID>>();
+                                                if let Some(_) = stations.get_info(&data.station_id) {
+                                                    info!("connecting to known station [{}] at IP {:?}", data.station_id, ip);
+                                                    stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
+                                                } else {
+                                                    info!("connected to new station [{}] at IP {:?}", data.station_id, ip);
+                                                    let id = stations.gen_id();
+                                                    stations.insert_station(id, StationInfo {
+                                                        supports_channels: name_to_id_mappings.values().copied().collect(),
+                                                    }).unwrap();
+                                                }
+                                                let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
+                                                    map: name_to_id_mappings,
+                                                })).unwrap();
+                                                clients.get_mut(&ip).unwrap().queue(resp);
                                             }
-                                            let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
-                                                map: name_to_id_mappings,
-                                            })).unwrap();
-                                            clients.get_mut(&ip).unwrap().queue(resp);
+                                            PacketKind::Data(data) => {
+                                                info!("Received data: {data:#?}");
+                                            }
+                                            _ => warn!("received unexpected packet, ignoring"),
                                         }
-                                        _ => debug!("received unexpected packet, ignoring"),
                                     }
-                                } else {
-                                    debug!("packet was malformed (failed to deserialize)");
+                                    Err(e) => {
+                                        warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
+                                    }
                                 }
                             }
                         }
                     }
                     packet = recv_next_packet(&sock) => {
                         if let Some((from, packet)) = packet? {
-                            debug!("Received {packet:#?} from {from:?}");
+                            //debug!("Received {packet:#?} from {from:?}");
                             let cl = clients.entry(from)
                                 .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone()));
                             cl.handle(packet);
