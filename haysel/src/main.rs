@@ -6,20 +6,24 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::Parser;
-use squirrel::api::{
-    station::{
-        capabilities::{ChannelID, ChannelName, KnownChannels},
-        identity::{KnownStations, StationInfo},
+use squirrel::{
+    api::{
+        station::{
+            capabilities::{ChannelID, ChannelName, KnownChannels, ChannelData},
+            identity::{KnownStations, StationInfo},
+        },
+        ChannelMappings, PacketKind,
     },
-    ChannelMappings, PacketKind,
+    transport::server::{DispatchEvent, ClientInterface, recv_next_packet},
 };
 use std::{
     collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     time::Duration,
+    fmt::Write as _,
 };
-use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
+use tokio::{fs::{self, OpenOptions}, net::UdpSocket, select, signal::ctrl_c, spawn, sync, io::AsyncWriteExt};
 use tracing::metadata::LevelFilter;
 use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::config as resolveconf;
@@ -150,9 +154,16 @@ async fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>();
 
         let mut handle = shutdown.handle();
+        let temp_log_path = records_dir.path("data.txt");
         let main_task = spawn(async move {
             async move {
-            use squirrel::transport::server::{DispatchEvent, ClientInterface, recv_next_packet};
+            // file stuff 
+                let mut temp_log = OpenOptions::new()
+                    .write(true)
+                    .append(true)
+                    .create(true)
+                    .open(temp_log_path)
+                    .await?;
             // test code for the network protcol
             let sock = UdpSocket::bind(addrs.as_slice()).await?;
             let max_transaction_time = Duration::from_secs(30);
@@ -175,9 +186,9 @@ async fn main() -> anyhow::Result<()> {
                             }
                             DispatchEvent::Received(data) => {
                                 debug!("received [packet] from {ip:?}");
-                                if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
-                                    trace!("packet content (msgpack value): {packet:#?}");
-                                }
+                                // if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
+                                //     trace!("packet content (msgpack value): {packet:#?}");
+                                // }
                                 match rmp_serde::from_slice::<PacketKind>(&data) {
                                     Ok(packet) => {
                                         trace!("packet content: {packet:?}");
@@ -200,8 +211,7 @@ async fn main() -> anyhow::Result<()> {
                                                     stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
                                                 } else {
                                                     info!("connected to new station [{}] at IP {:?}", data.station_id, ip);
-                                                    let id = stations.gen_id();
-                                                    stations.insert_station(id, StationInfo {
+                                                    stations.insert_station(data.station_id, StationInfo {
                                                         supports_channels: name_to_id_mappings.values().copied().collect(),
                                                     }).unwrap();
                                                 }
@@ -211,7 +221,23 @@ async fn main() -> anyhow::Result<()> {
                                                 clients.get_mut(&ip).unwrap().queue(resp);
                                             }
                                             PacketKind::Data(data) => {
-                                                info!("Received data: {data:#?}");
+                                                let mut buf = String::new();
+                                                for (chid, dat) in data.per_channel {
+                                                    if let Some(ch) = channels.get_channel(&chid) {
+                                                        //TODO: verify that types match
+                                                        let _ = writeln!(buf, "Channel {chid} ({}) => {:?}", <ChannelName as Into<String>>::into(ch.name.clone()), dat);
+                                                        if let "battery" | "temperature" | "humidity" | "pressure" = ch.name.as_ref().as_str() {
+                                                            temp_log.write_all(format!("[{}]:{}={}", chrono::Local::now().to_rfc3339(), ch.name.as_ref(), match dat {
+                                                                ChannelData::Float(f) => f.to_string(),
+                                                                ChannelData::Event => "null".to_string(),
+                                                            }).as_bytes()).await?;
+                                                        }
+                                                    } else {
+                                                        warn!("Data contains channel id {chid} which is not known to this server");
+                                                        let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
+                                                    }
+                                                }
+                                                info!("Received data:\n{buf}");
                                             }
                                             _ => warn!("received unexpected packet, ignoring"),
                                         }

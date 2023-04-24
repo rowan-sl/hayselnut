@@ -9,19 +9,27 @@ pub mod lightning;
 pub mod store;
 pub mod wifictl;
 
-use std::{cell::SyncUnsafeCell, fmt::Write, net::Ipv4Addr, time::Duration, collections::HashMap, thread::sleep};
+use std::{
+    cell::SyncUnsafeCell, collections::HashMap, fmt::Write, net::Ipv4Addr, thread::sleep,
+    time::Duration,
+};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
 use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi};
-use esp_idf_hal::{delay, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType, gpio::PinDriver};
+use esp_idf_hal::{
+    delay, gpio::PinDriver, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType,
+};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     netif::{EspNetif, EspNetifWait},
     nvs::EspDefaultNvsPartition,
     wifi::{EspWifi, WifiEvent, WifiWait},
 };
-use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source, gpio_deep_sleep_hold_en, gpio_hold_en, gpio_num_t_GPIO_NUM_2}; // allways should be imported if `binstart` feature is enabled.
+use esp_idf_sys::{
+    self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source, gpio_deep_sleep_hold_en,
+    gpio_hold_en, gpio_num_t_GPIO_NUM_2,
+}; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use smol::{
@@ -30,7 +38,9 @@ use smol::{
 };
 use squirrel::{
     api::{
-        station::capabilities::{Channel, ChannelType, ChannelValue, ChannelID, ChannelData, ChannelName},
+        station::capabilities::{
+            Channel, ChannelData, ChannelID, ChannelName, ChannelType, ChannelValue,
+        },
         PacketKind, SomeData,
     },
     transport::{
@@ -98,10 +108,11 @@ fn main() -> Result<()> {
                     // sleep forever
                     *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
                     // set the led indicator
-                    let mut indicator = PinDriver::output(Peripherals::take().unwrap().pins.gpio1).unwrap();
+                    let mut indicator =
+                        PinDriver::output(Peripherals::take().unwrap().pins.gpio1).unwrap();
                     indicator.set_high().unwrap();
 
-                    sleep(Duration::from_secs(10*60));
+                    sleep(Duration::from_secs(10 * 60));
 
                     esp_sleep_disable_wakeup_source(
                         esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
@@ -273,6 +284,11 @@ fn main() -> Result<()> {
                 value: ChannelValue::Float,
                 ty: ChannelType::Periodic,
             },
+            Channel {
+                name: "battery".into(),
+                value: ChannelValue::Float,
+                ty: ChannelType::Periodic,
+            },
         ];
 
         // send init packet
@@ -343,6 +359,7 @@ fn main() -> Result<()> {
                             set("temperature", ChannelData::Float(current_measurements.temperature));
                             set("humidity", ChannelData::Float(current_measurements.humidity));
                             set("pressure", ChannelData::Float(current_measurements.pressure));
+                            set("battery", ChannelData::Float(current_measurements.battery));
                             map
                         }
                     });
@@ -397,7 +414,7 @@ impl MeasureTimers {
     pub fn with_config(cfg: &MeasureConfig) -> Self {
         Self {
             read_timer: Timer::interval(cfg.read_interval),
-            display_update: Timer::interval(cfg.display_interval)
+            display_update: Timer::interval(cfg.display_interval),
         }
     }
 

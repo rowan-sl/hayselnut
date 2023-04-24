@@ -42,10 +42,6 @@ impl KnownStations {
         }
     }
 
-    pub fn gen_id(&self) -> StationID {
-        Uuid::new_v4()
-    }
-
     /// insert station info for a new station, returning Err(new_stations_info) if the info for that station was previously inserted
     pub fn insert_station(
         &mut self,
