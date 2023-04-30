@@ -9,27 +9,19 @@ pub mod lightning;
 pub mod store;
 pub mod wifictl;
 
-use std::{
-    cell::SyncUnsafeCell, collections::HashMap, fmt::Write, net::Ipv4Addr, thread::sleep,
-    time::Duration,
-};
+use std::{cell::SyncUnsafeCell, collections::HashMap, fmt::Write, thread::sleep, time::Duration};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
-use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi};
 use esp_idf_hal::{
     delay, gpio::PinDriver, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    netif::{EspNetif, EspNetifWait},
     nvs::EspDefaultNvsPartition,
-    wifi::{EspWifi, WifiEvent, WifiWait},
+    wifi::{EspWifi, WifiEvent},
 };
-use esp_idf_sys::{
-    self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source, gpio_deep_sleep_hold_en,
-    gpio_hold_en, gpio_num_t_GPIO_NUM_2,
-}; // allways should be imported if `binstart` feature is enabled.
+use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source}; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use smol::{
@@ -53,6 +45,8 @@ use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 use battery::BatteryMonitor;
 use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
+
+use crate::wifictl::Wifi;
 
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -170,33 +164,28 @@ fn main() -> Result<()> {
     // TODO
 
     let sysloop = EspSystemEventLoop::take()?;
-    let (wifi_status_send, wifi_status_recv) = smol::channel::unbounded::<WifiStatusUpdate>();
+    let (wifi_status_send, wifi_status_recv) =
+        smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
     let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
         // println!("Wifi event: {event:?}");
         match event {
             WifiEvent::StaDisconnected => wifi_status_send
-                .try_send(WifiStatusUpdate::Disconnected)
+                .try_send(wifictl::WifiStatusUpdate::Disconnected)
                 .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
             _ => {}
         }
     })?;
 
     write!(display, "Starting wifi...")?;
-    let mut wifi = Box::new(EspWifi::new(
-        peripherals.modem,
+    let mut wifi = Wifi::new(
+        EspWifi::new(
+            peripherals.modem,
+            sysloop.clone(),
+            Some(nvs_partition.clone()),
+        )?,
         sysloop.clone(),
-        Some(nvs_partition.clone()),
-    )?);
-    wifi.set_configuration(&wifi::Configuration::Client(
-        wifi::ClientConfiguration::default(),
-    ))?;
+    );
     wifi.start()?;
-    if !WifiWait::new(&sysloop)?
-        .wait_with_timeout(Duration::from_secs(20), || wifi.is_started().unwrap())
-    {
-        // writeln!(display, "Wifi failed to start")?;
-        bail!("Wifi did not start!");
-    }
 
     // -- NVS station information initialization --
     // performed here since it uses random numbers, and `getrandom` on the esp32
@@ -217,38 +206,15 @@ fn main() -> Result<()> {
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
-    let available_aps = wifi.scan()?;
+    let chosen = wifi.scan()?.expect("Could not find a network");
+    let connected_ssid = chosen.0.ssid.clone().to_string();
 
-    let mut accessable_aps = filter_networks(available_aps, conf::INCLUDE_OPEN_NETWORKS);
-    if accessable_aps.is_empty() {
-        bail!("No accessable networks!!")
-        //TODO eventually this should keep scanning, and not exit
-    }
-    let chosen_ap = accessable_aps.remove(0);
-    drop(accessable_aps);
+    wifi.connect(chosen)?;
 
-    wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
-        ssid: chosen_ap.0.ssid.clone(),
-        password: chosen_ap.1.unwrap_or_default().into(),
-        channel: Some(chosen_ap.0.channel),
-        ..Default::default()
-    }))?;
-
-    wifi.connect()?;
-    if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?.wait_with_timeout(
-        Duration::from_secs(20),
-        || {
-            wifi.is_connected().unwrap()
-                && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
-        },
-    ) {
-        bail!("Wifi did not connect or receive a DHCP lease")
-    }
-
-    let ip_info = wifi.sta_netif().get_ip_info()?;
+    let ip_info = wifi.inner().sta_netif().get_ip_info()?;
     println!("Wifi DHCP info {:?}", ip_info);
 
-    // see docs
+    // see docs -- if not present UdpSocket::bind fails
     wifictl::util::fix_networking()?;
 
     smol::block_on(async {
@@ -331,7 +297,7 @@ fn main() -> Result<()> {
             select_biased! {
                 status = wifi_status_recv.recv().fuse() => {
                     match status? {
-                        WifiStatusUpdate::Disconnected => {
+                        wifictl::WifiStatusUpdate::Disconnected => {
                             let _ = display.clear();
                             write!(display, "WIFI disconnected, please restart the device")?;
                             todo!("wifi disconnect not handled currently")
@@ -373,7 +339,7 @@ fn main() -> Result<()> {
                     write!(
                         display,
                         "ON:{}\nIP:{}\nBAT:{:.1} TEMP:{:.0}F",
-                        chosen_ap.0.ssid,
+                        connected_ssid,
                         ip_info.ip,
                         current_measurements.battery,
                         current_measurements.temperature * 1.8 + 32.0
@@ -433,50 +399,4 @@ pub struct Observations {
     pressure: f32,
     /// battery voltage (volts)
     battery: f32,
-}
-
-/// find and return all known wifi networks, or ones that have no password,
-/// in order of signal strength. known networks are prioritized
-/// over ones with no password, and networks with no password can be removed entierly
-/// with the `include_open_networks` option
-///
-/// Returns a list of networks and their passwords (None=needs no password)
-pub fn filter_networks(
-    networks: Vec<AccessPointInfo>,
-    include_open_networks: bool,
-) -> Vec<(AccessPointInfo, Option<&'static str>)> {
-    // signal strength is measured in dBm (Decibls referenced to a miliwatt)
-    // larger value = stronger signal
-    // should be in the range of ??? (30dBm = 1W transmission power) to -100(min wifi net received)
-    let mut found = networks
-        .into_iter()
-        .filter_map(|net| {
-            conf::WIFI_CFG
-                .iter()
-                .find(|(ssid, _)| ssid == &net.ssid.as_str())
-                .map(|(_, pass)| (net.clone(), Some(*pass)))
-                .or(
-                    if net.auth_method == AuthMethod::None && include_open_networks {
-                        Some((net, None))
-                    } else {
-                        None
-                    },
-                )
-        })
-        .collect::<Vec<_>>();
-    found.sort_by(|a, b| {
-        use std::cmp::Ordering::{Equal, Greater, Less};
-        match (a.1, b.1) {
-            (Some(..), None) => Greater,
-            (None, Some(..)) => Less,
-            (..) => Equal,
-        }
-        .then(a.0.signal_strength.cmp(&b.0.signal_strength))
-    });
-    found
-}
-
-#[derive(Debug, Clone)]
-pub enum WifiStatusUpdate {
-    Disconnected,
 }

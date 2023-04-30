@@ -1,6 +1,5 @@
 use std::mem::size_of;
 
-use embedded_svc::storage::RawStorage;
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsPartitionId};
 use esp_idf_sys::EspError;
 use serde::{Deserialize, Serialize};
