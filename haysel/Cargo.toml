@@ -35,7 +35,11 @@ rmpv = { version = "1.0.0", features = ["serde", "serde_bytes", "with-serde"] }
 path = "squirrel"
 features = ["server-utils", "tokio"]
 
+[dependencies.mycelium]
+path = "mycelium"
+
 [workspace]
 members = [
-    "squirrel"
+    "squirrel",
+    "mycelium",
 ]
