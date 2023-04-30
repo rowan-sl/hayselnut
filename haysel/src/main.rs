@@ -23,7 +23,7 @@ use std::{
     time::Duration,
     fmt::Write as _,
 };
-use tokio::{fs::{self, OpenOptions}, net::UdpSocket, select, signal::ctrl_c, spawn, sync, io::AsyncWriteExt};
+use tokio::{fs::{self, OpenOptions}, net::{UdpSocket, UnixListener}, select, signal::ctrl_c, spawn, sync, io::{AsyncWriteExt, self}};
 use tracing::metadata::LevelFilter;
 use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::config as resolveconf;
@@ -56,6 +56,8 @@ pub struct Args {
         help = "directory for weather + station ID records to be placed"
     )]
     records_path: PathBuf,
+    #[arg(short, long, help = "path of the unix socket for the servers IPC API")]
+    ipc_sock: PathBuf,
     #[arg(short, long, help = "url of the server that this is to be run on")]
     url: String,
     #[arg(short, long, help = "port to run the server on")]
@@ -155,6 +157,12 @@ async fn main() -> anyhow::Result<()> {
 
         let mut handle = shutdown.handle();
         let temp_log_path = records_dir.path("data.txt");
+        //TODO: integrate IPC with Router system
+        #[derive(Debug)]
+        enum IPCCtrlMsg {
+            Readings(mycelium::LatestReadings),
+        }
+        let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCCtrlMsg>();
         let main_task = spawn(async move {
             async move {
             // file stuff 
@@ -222,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                             PacketKind::Data(data) => {
                                                 let mut buf = String::new();
-                                                for (chid, dat) in data.per_channel {
+                                                for (chid, dat) in data.per_channel.clone() {
                                                     if let Some(ch) = channels.get_channel(&chid) {
                                                         //TODO: verify that types match
                                                         let _ = writeln!(buf, "Channel {chid} ({}) => {:?}", <ChannelName as Into<String>>::into(ch.name.clone()), dat);
@@ -238,6 +246,13 @@ async fn main() -> anyhow::Result<()> {
                                                     }
                                                 }
                                                 info!("Received data:\n{buf}");
+                                                let chv = |name: &str| data.per_channel.get(&channels.id_by_name(&name.to_string().into()).unwrap()).unwrap();
+                                                ipc_task_tx.send_async(IPCCtrlMsg::Readings(mycelium::LatestReadings {
+                                                    temperature: chv("temperature").unwrap_f32(),
+                                                    humidity: chv("humidity").unwrap_f32(),
+                                                    pressure: chv("pressure").unwrap_f32(),
+                                                    battery: chv("battery").unwrap_f32(),
+                                                })).await?;
                                             }
                                             _ => warn!("received unexpected packet, ignoring"),
                                         }
@@ -264,6 +279,65 @@ async fn main() -> anyhow::Result<()> {
         }.await.unwrap()
         });
 
+        let mut handle = shutdown.handle();
+        let ipc_task = spawn(async move {
+            let mut shutdown_ipc = Shutdown::new();
+            let listener = UnixListener::bind(args.ipc_sock).unwrap();
+            let (latest_readings_queue, _) = sync::broadcast::channel(10);
+
+            let res = async {
+                loop {
+                    select! {
+                        _ = handle.wait_for_shutdown() => { break; }
+                        recv = ipc_task_rx.recv_async() => {
+                            match recv? {
+                                IPCCtrlMsg::Readings(r) => {
+                                    let num = latest_readings_queue.send(r).unwrap_or(0);
+                                    trace!("Sent IPC message to {num} tasks");
+                                }
+                            }
+                        }
+                        res = listener.accept() => {
+                            let (mut sock, addr) = res?;
+                            let mut recv = latest_readings_queue.subscribe();
+                            let mut handle = shutdown_ipc.handle();
+                            debug!("Connecting to new IPC client at {addr:?}");
+                            spawn(async move {
+                                let res = async move {
+                                    loop {
+                                        select! {
+                                            // TODO: notify clients of server closure
+                                            _ = handle.wait_for_shutdown() => { break; }
+                                            res = recv.recv() => {
+                                                match mycelium::ipc_send(&mut sock, &res?).await {
+                                                    Ok(()) => {}
+                                                    // Err(mycelium::IPCError::IO(e)) if e.kind() == io::ErrorKind::=> {
+                                                    //     debug!("IPC Client {addr:?} disconnected");
+                                                    //     break;
+                                                    // }
+                                                    Err(e) => Err(e)?
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Ok::<(), anyhow::Error>(())
+                                }.await;
+                                debug!("IPC client {addr:?} disconnected");
+                                match res {
+                                    Ok(()) => {}
+                                    Err(e) => error!("IPC task (for: addr:?) exited with error: {e:?}"),
+                                }
+                            });
+                        }
+                    };
+                }
+                Ok::<(), anyhow::Error>(())
+            }.await;
+            shutdown_ipc.trigger_shutdown();
+            shutdown_ipc.wait_for_completion().await;
+            res.unwrap();
+        });
+
         // let mut router = Router::new();
         // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
         //
@@ -272,97 +346,10 @@ async fn main() -> anyhow::Result<()> {
         // router.close().await;
 
         info!("running -- press ctrl+c to exit");
-        select! { _ = ctrlc.recv() => {} _ = main_task => {} }
+        select! { _ = ctrlc.recv() => {} _ = main_task => {} _ = ipc_task => {} }
         shutdown.trigger_shutdown();
     }
     shutdown.wait_for_completion().await;
 
     Ok(())
-
-    // #[derive(Debug, Clone, Copy, Serialize, FromBytes, AsBytes)]
-    // #[repr(C)]
-    // struct TestData {
-    //     num1: u32,
-    // }
-    //
-    // let mut db = DB::<TestData>::open(&"test.tsdb".parse::<PathBuf>().unwrap()).await?;
-    // // info!("attempting insert");
-    // // db.insert(Local::now(), TestData { num1: 100 }).await?;
-    // // db.insert(Local::now() - chrono::Duration::days(1), TestData { num1: 50 }).await?;
-    // // info!("db.insert ran successfully!");
-    // // info!("DB structure debug:\n{}", serde_json::to_string_pretty(&db.debug_structure().await?)?);
-    // let records = db.query(NaiveDateTime::new(
-    //     Local::now().naive_local().date(),
-    //     NaiveTime::from_hms_opt(0, 0, 0).unwrap()
-    // ).and_local_timezone(Local).unwrap(),
-    // NaiveDateTime::new(
-    //     Local::now().naive_local().date(),
-    //     NaiveTime::from_hms_opt(23, 59, 59).unwrap()
-    // ).and_local_timezone(Local).unwrap()).await?;
-    // info!("Query: {records:#?}");
-    // db.close().await?;
-    // info!("db closed");
-
-    // Ok(())
-
-    // let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    // socket.connect(args.addr).await?;
-    // let mut log = OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .write(true)
-    //     .open("readings.csv")
-    //     .await?;
-    // let mut id = 0u32;
-    // let mut buf = vec![0u8; 1024];
-    // let mut wait = false;
-    // loop {
-    //     if wait {
-    //         time::sleep(Duration::from_secs_f64(args.delay)).await;
-    //         wait = false;
-    //     }
-    //     id = id.wrapping_add(1);
-    //     socket
-    //         .send(&bincode::serialize(&RequestPacket {
-    //             magic: REQUEST_PACKET_MAGIC,
-    //             id,
-    //         })?)
-    //         .await?;
-    //     let amnt = tokio::select! {
-    //         amnt = socket.recv(&mut buf) => { amnt? }
-    //         () = time::sleep(Duration::from_secs(1)) => {
-    //             eprintln!("id:{id} timed out");
-    //             continue;
-    //         }
-    //     };
-    //     if amnt > buf.len() {
-    //         eprintln!(
-    //             "Received packet {} larger than receiving buffer",
-    //             amnt - buf.len()
-    //         );
-    //         continue;
-    //     }
-    //     let Ok(pkt) = bincode::deserialize::<DataPacket>(&buf[0..amnt]) else { eprintln!("Failed to deserialize packet"); continue; };
-    //     if pkt.id != id {
-    //         eprintln!(
-    //             "Received packet out of order: expect {} recv {}",
-    //             id, pkt.id
-    //         );
-    //         continue;
-    //     }
-    //     log.write_all(
-    //         format!(
-    //             "{},{},{},{},{}\n",
-    //             chrono::Utc::now(),
-    //             pkt.observations.temperature,
-    //             pkt.observations.humidity,
-    //             pkt.observations.pressure,
-    //             pkt.observations.battery,
-    //         )
-    //         .as_bytes(),
-    //     )
-    //     .await?;
-    //     wait = true;
-    // }
-    //
 }

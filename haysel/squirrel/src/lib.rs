@@ -8,4 +8,5 @@ extern crate tracing;
 
 pub mod api;
 mod net;
+#[cfg(any(feature = "tokio", feature = "smol"))]
 pub mod transport;

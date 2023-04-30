@@ -1,7 +1,44 @@
-#[macro_use] extern crate serde;
+//! data sent over IPC should be serialized with json
 
+#[macro_use] extern crate serde;
+#[macro_use] extern crate thiserror;
+
+use serde::{Serialize, de::DeserializeOwned};
 pub use squirrel;
 pub use squirrel::api::station;
+use tokio::io::{self, AsyncWriteExt, AsyncReadExt};
+
+#[derive(Debug, Error)]
+pub enum IPCError {
+    #[error("IO Operation failed {0}")]
+    IO(#[from] io::Error),
+    #[error("Serialize/Deserialize failed {0}")]
+    Serde(#[from] serde_json::Error),
+}
+
+/// Write a IPC packet to a stream.
+///
+/// Receive packet with `ipc_recv`
+pub async fn ipc_send<T: Serialize>(socket: &mut (impl AsyncWriteExt + Unpin), packet: &T) -> Result<(), IPCError> {
+    let serialized = serde_json::to_vec(packet)?;
+    let len_bytes = (serialized.len() as u64).to_be_bytes();
+    socket.write_all(&len_bytes).await?;
+    socket.write_all(&serialized).await?;
+    Ok(())
+}
+
+/// Reads an IPC packet from `socket`
+///
+/// this will only work if *every previous packet received was correct*
+/// or if the stream was 'reset', as in no bytes from previous packets are left over
+pub async fn ipc_recv<T: DeserializeOwned>(socket: &mut (impl AsyncReadExt + Unpin)) -> Result<T, IPCError> {
+    let mut buf = [0u8; 8];//u64
+    socket.read_exact(&mut buf).await?;
+    let amnt = u64::from_be_bytes(buf);
+    let mut buf = vec![0u8; amnt as _];
+    socket.read_exact(&mut buf).await?;
+    Ok(serde_json::from_slice(&buf)?)
+}
 
 // temporary API for sending updates of the latest readings
 // final version will not use hardcoded fields

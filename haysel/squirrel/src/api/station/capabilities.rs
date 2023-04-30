@@ -22,6 +22,15 @@ pub enum ChannelData {
     Event
 }
 
+impl ChannelData {
+    pub fn unwrap_f32(&self) -> f32 {
+        match self {
+            Self::Float(f) => *f,
+            s => panic!("Expected Float(..), found {s:?}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")] //internally tagged
 pub enum ChannelType {
