@@ -8,8 +8,9 @@ pub mod conf;
 pub mod lightning;
 pub mod store;
 pub mod wifictl;
+pub mod periph;
 
-use std::{cell::SyncUnsafeCell, collections::HashMap, fmt::Write, thread::sleep, time::Duration};
+use std::{cell::SyncUnsafeCell, collections::HashMap, fmt::Write, thread::sleep, time::{Duration, Instant}};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
@@ -123,11 +124,11 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
-    let _ = pins.gpio1; // used for other things
+    let _ = pins.gpio1; // used for other things (error flag)
 
     let nvs_partition = EspDefaultNvsPartition::take()?;
 
-    // initializing connectiosn to things
+    // -- initializing peripherals --
     // battery monitor
     let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio0)?;
     // i2c bus (shared with display, and sensors)
@@ -147,21 +148,25 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("Failed to init bme280: {e:?}"))?;
 
     // oled display used for status on the device
-    let display_interface = I2CDisplayInterface::new(i2c_bus.acquire_i2c());
-    let mut display = Ssd1306::new(
-        display_interface,
-        ssd1306::size::DisplaySize128x64,
-        ssd1306::rotation::DisplayRotation::Rotate0,
-    )
-    .into_terminal_mode();
-    display
-        .init()
-        .map_err(|e| anyhow!("Failed to init display: {e:?}"))?;
-    let _ = display.clear();
+    let mut display = {
+        let display_interface = I2CDisplayInterface::new(i2c_bus.acquire_i2c());
+        let mut display = Ssd1306::new(
+            display_interface,
+            ssd1306::size::DisplaySize128x64,
+            ssd1306::rotation::DisplayRotation::Rotate0,
+        )
+        .into_terminal_mode();
+        display
+            .init()
+            .map_err(|e| anyhow!("Failed to init display: {e:?}"))?;
+        let _ = display.clear();
+        display
+    };
     writeln!(display, "Starting...")?;
     // lightning sensor
     // IRQ is on pin 6
     // TODO
+    // -- end peripheral initialization -- 
 
     let sysloop = EspSystemEventLoop::take()?;
     let (wifi_status_send, wifi_status_recv) =
@@ -206,13 +211,17 @@ fn main() -> Result<()> {
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
-    let chosen = wifi.scan()?.expect("Could not find a network");
-    let connected_ssid = chosen.0.ssid.clone().to_string();
-
-    wifi.connect(chosen)?;
+    let connected_ssid;
+    {
+        let before = Instant::now();
+        let chosen = wifi.scan()?.expect("Could not find a network");
+        connected_ssid = chosen.0.ssid.clone().to_string();
+        wifi.connect(chosen)?;
+        info!("Connected to WIFI in {:?}", before.elapsed());
+    }
 
     let ip_info = wifi.inner().sta_netif().get_ip_info()?;
-    println!("Wifi DHCP info {:?}", ip_info);
+    info!("Wifi DHCP info {:?}", ip_info);
 
     // see docs -- if not present UdpSocket::bind fails
     wifictl::util::fix_networking()?;
@@ -353,6 +362,7 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
 
 #[derive(Debug, Clone)]
 pub struct MeasureConfig {
