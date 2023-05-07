@@ -6,11 +6,17 @@ extern crate log;
 pub mod battery;
 pub mod conf;
 pub mod lightning;
+pub mod periph;
 pub mod store;
 pub mod wifictl;
-pub mod periph;
 
-use std::{cell::SyncUnsafeCell, collections::HashMap, fmt::Write, thread::sleep, time::{Duration, Instant}};
+use std::{
+    cell::SyncUnsafeCell,
+    collections::HashMap,
+    fmt::Write,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, Result};
 use bme280::i2c::BME280;
@@ -166,7 +172,7 @@ fn main() -> Result<()> {
     // lightning sensor
     // IRQ is on pin 6
     // TODO
-    // -- end peripheral initialization -- 
+    // -- end peripheral initialization --
 
     let sysloop = EspSystemEventLoop::take()?;
     let (wifi_status_send, wifi_status_recv) =
@@ -362,7 +368,6 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
 
 #[derive(Debug, Clone)]
 pub struct MeasureConfig {

@@ -1,26 +1,37 @@
-use std::error::Error;
+use squirrel::api::station::capabilities::{Channel, ChannelData, ChannelID};
+use std::collections::HashMap;
 
-
+pub mod bme280;
 
 #[derive(Debug)]
-pub struct PeripheralState<TOk, TErr, E: Error> {
+pub struct PeripheralState<TOk, TErr, E> {
     /// Err if init fails
     /// None if panic occurs while doing `retry_init`
     state: Option<Result<TOk, TErr>>,
     error: Option<E>,
 }
 
-impl<TOk, TErr, E: Error> PeripheralState<TOk, TErr, E> {
+impl<TOk, TErr, E> PeripheralState<TOk, TErr, E> {
     pub fn new(init_fn: impl FnOnce() -> Result<TOk, (TErr, E)>) -> Self {
         match init_fn() {
-            Ok(state) => Self { state: Some(Ok(state)), error: None },
-            Err((estate, error)) => Self { state: Some(Err(estate)), error: Some(error) }
+            Ok(state) => Self {
+                state: Some(Ok(state)),
+                error: None,
+            },
+            Err((estate, error)) => Self {
+                state: Some(Err(estate)),
+                error: Some(error),
+            },
         }
     }
 
     /// Retrys failed initialization. if initialization has previously succeded, nothing is done
     pub fn retry_init(&mut self, init_fn: impl FnOnce(TErr, E) -> Result<TOk, (TErr, E)>) {
-        match self.state.take().expect("panic previously occurred in `retry_init`, state has been lost") {
+        match self
+            .state
+            .take()
+            .expect("panic previously occurred in `retry_init`, state has been lost")
+        {
             Ok(state) => self.state = Some(Ok(state)),
             Err(estate) => match init_fn(estate, self.error.take().unwrap()) {
                 Ok(state) => self.state = Some(Ok(state)),
@@ -28,7 +39,7 @@ impl<TOk, TErr, E: Error> PeripheralState<TOk, TErr, E> {
                     self.state = Some(Err(estate));
                     self.error = Some(err)
                 }
-            }
+            },
         }
     }
 
@@ -60,8 +71,23 @@ impl<TOk, TErr, E: Error> PeripheralState<TOk, TErr, E> {
         }
     }
 
+    pub fn is_init(&self) -> bool {
+        self.state.as_ref().map(|v| v.is_ok()).unwrap_or(false)
+    }
+
     pub fn err(&self) -> Option<&E> {
         self.error.as_ref()
     }
 }
 
+pub trait Peripheral {
+    fn fix(&mut self);
+}
+
+pub trait SensorPeripheral: Peripheral {
+    fn channels(&self) -> Vec<Channel>;
+    fn read(
+        &mut self,
+        map_fn: impl Fn(&str) -> &ChannelID,
+    ) -> Option<HashMap<ChannelID, ChannelData>>;
+}
