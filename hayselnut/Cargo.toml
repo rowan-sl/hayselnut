@@ -45,7 +45,7 @@ embedded-svc = { version = "0.24.0", default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
 bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
-shared-bus = { version = "0.2.5", features = ["eh-alpha"] }
+shared-bus = { version = "0.2.5", features = ["eh-alpha", "std"] }
 embedded-graphics = "0.7.1"
 ssd1306 = "0.7.1"
 smol = "1.2.5"

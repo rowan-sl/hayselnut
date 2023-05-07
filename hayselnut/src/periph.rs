@@ -81,13 +81,15 @@ impl<TOk, TErr, E> PeripheralState<TOk, TErr, E> {
 }
 
 pub trait Peripheral {
+    type Error;
     fn fix(&mut self);
+    fn err(&self) -> Option<&Self::Error>;
 }
 
 pub trait SensorPeripheral: Peripheral {
     fn channels(&self) -> Vec<Channel>;
     fn read(
         &mut self,
-        map_fn: impl Fn(&str) -> &ChannelID,
+        map_fn: &impl Fn(&str) -> ChannelID,
     ) -> Option<HashMap<ChannelID, ChannelData>>;
 }

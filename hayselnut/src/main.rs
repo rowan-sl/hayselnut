@@ -19,9 +19,12 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Result};
-use bme280::i2c::BME280;
 use esp_idf_hal::{
-    delay, gpio::PinDriver, i2c, peripherals::Peripherals, reset::ResetReason, units::FromValueType,
+    gpio::PinDriver,
+    i2c::{self, I2cDriver},
+    peripherals::Peripherals,
+    reset::ResetReason,
+    units::FromValueType,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -53,7 +56,10 @@ use battery::BatteryMonitor;
 use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
 
-use crate::wifictl::Wifi;
+use crate::{
+    periph::{bme280::PeriphBME280, Peripheral, SensorPeripheral},
+    wifictl::Wifi,
+};
 
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -145,13 +151,11 @@ fn main() -> Result<()> {
         pins.gpio5,
         &i2c::config::Config::new().baudrate(100.kHz().into()),
     )?;
-    let i2c_bus = shared_bus::BusManagerSimple::new(i2c_driver);
+    let i2c_bus = shared_bus::new_std!(I2cDriver = i2c_driver)
+        .expect("unreachable -- can only create one shared bus instance");
 
     // temp/humidity/pressure
-    let mut bme280 = BME280::new(i2c_bus.acquire_i2c(), 0x77);
-    bme280
-        .init(&mut delay::Ets)
-        .map_err(|e| anyhow!("Failed to init bme280: {e:?}"))?;
+    let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
 
     // oled display used for status on the device
     let mut display = {
@@ -249,28 +253,13 @@ fn main() -> Result<()> {
         println!("connected to: {:?}", sock.peer_addr()?);
 
         let mut uid_gen = UidGenerator::new();
-        let channels = vec![
-            Channel {
-                name: "temperature".into(),
-                value: ChannelValue::Float,
-                ty: ChannelType::Periodic,
-            },
-            Channel {
-                name: "humidity".into(),
-                value: ChannelValue::Float,
-                ty: ChannelType::Periodic,
-            },
-            Channel {
-                name: "pressure".into(),
-                value: ChannelValue::Float,
-                ty: ChannelType::Periodic,
-            },
-            Channel {
-                name: "battery".into(),
-                value: ChannelValue::Float,
-                ty: ChannelType::Periodic,
-            },
-        ];
+        let mut channels = vec![Channel {
+            name: "battery".into(),
+            value: ChannelValue::Float,
+            ty: ChannelType::Periodic,
+        }];
+        // add channels from sensors
+        channels.extend_from_slice(&bme280.channels());
 
         // send init packet
         info!("sending init info");
@@ -320,16 +309,19 @@ fn main() -> Result<()> {
                     }
                 }
                 _ = timers.read_timer.next().fuse() => {
-                    let bme280::Measurements { temperature, pressure, humidity, .. }
-                        = bme280.measure(&mut delay::Ets)
-                        .map_err(|e| anyhow!("Failed to read bme280 sensor: {e:?}"))?;
+                    let map_fn = |id: &str| *mappings.map.get(&ChannelName::from(id)).expect("could not find mapping for id {id:?}");
+                    let bme_readings = match bme280.read(&map_fn) {
+                        Some(v) => v,
+                        None => {
+                            warn!("BME280 sensor peripheral error: {:?}, fixing...", bme280.err());
+                            bme280.fix();
+                            Default::default()
+                        }
+                    };
 
                     let battery_voltage = batt_mon.read()?;
 
                     current_measurements = Observations {
-                        temperature,
-                        pressure,
-                        humidity,
                         battery: battery_voltage,
                     };
 
@@ -337,10 +329,10 @@ fn main() -> Result<()> {
                         per_channel: {
                             let mut map = HashMap::<ChannelID, ChannelData>::new();
                             let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
-                            set("temperature", ChannelData::Float(current_measurements.temperature));
-                            set("humidity", ChannelData::Float(current_measurements.humidity));
-                            set("pressure", ChannelData::Float(current_measurements.pressure));
                             set("battery", ChannelData::Float(current_measurements.battery));
+                            for (k, v) in bme_readings {
+                                map.insert(k, v);
+                            }
                             map
                         }
                     });
@@ -353,11 +345,10 @@ fn main() -> Result<()> {
                     let _ = display.clear();
                     write!(
                         display,
-                        "ON:{}\nIP:{}\nBAT:{:.1} TEMP:{:.0}F",
+                        "ON:{}\nIP:{}\nBAT:{:.1}",
                         connected_ssid,
                         ip_info.ip,
                         current_measurements.battery,
-                        current_measurements.temperature * 1.8 + 32.0
                     )?;
                 }
             }
@@ -406,12 +397,6 @@ impl MeasureTimers {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Observations {
-    /// degrees c
-    temperature: f32,
-    /// relative humidity (precentage)
-    humidity: f32,
-    /// pressure (pascals)
-    pressure: f32,
     /// battery voltage (volts)
     battery: f32,
 }

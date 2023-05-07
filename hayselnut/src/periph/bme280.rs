@@ -27,6 +27,7 @@ impl<T: I2c> PeriphBME280<T> {
 }
 
 impl<T: I2c> Peripheral for PeriphBME280<T> {
+    type Error = bme280::Error<T::Error>;
     fn fix(&mut self) {
         self.inner
             .retry_init(|mut bme, _err| match bme.init(&mut delay::Ets) {
@@ -38,6 +39,9 @@ impl<T: I2c> Peripheral for PeriphBME280<T> {
             // this will fix things if it disconencted due to loosing power
             bme.init(&mut delay::Ets)
         });
+    }
+    fn err(&self) -> Option<&Self::Error> {
+        self.inner.err()
     }
 }
 
@@ -64,11 +68,11 @@ impl<T: I2c> SensorPeripheral for PeriphBME280<T> {
 
     fn read(
         &mut self,
-        map_fn: impl Fn(&str) -> &ChannelID,
+        map_fn: &impl Fn(&str) -> ChannelID,
     ) -> Option<HashMap<ChannelID, ChannelData>> {
         self.inner.map(|bme| {
             let mut map = HashMap::new();
-            let mut set = |key, val| map.insert(*map_fn(key), ChannelData::Float(val));
+            let mut set = |key, val| map.insert(map_fn(key), ChannelData::Float(val));
             let _ = bme.measure(&mut delay::Ets)?;
             let Measurements {
                 temperature,
