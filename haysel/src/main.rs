@@ -282,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
         let mut handle = shutdown.handle();
         let ipc_task = spawn(async move {
             let mut shutdown_ipc = Shutdown::new();
-            let listener = UnixListener::bind(args.ipc_sock).unwrap();
+            let listener = UnixListener::bind(args.ipc_sock.clone()).unwrap();
             let (latest_readings_queue, _) = sync::broadcast::channel(10);
 
             let res = async {
@@ -333,6 +333,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok::<(), anyhow::Error>(())
             }.await;
+            drop(listener);
+            let _ =tokio::fs::remove_file(args.ipc_sock).await;
             shutdown_ipc.trigger_shutdown();
             shutdown_ipc.wait_for_completion().await;
             res.unwrap();
