@@ -1,6 +1,7 @@
 use squirrel::api::station::capabilities::{Channel, ChannelData, ChannelID};
 use std::collections::HashMap;
 
+pub mod battery;
 pub mod bme280;
 
 #[derive(Debug)]

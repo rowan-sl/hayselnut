@@ -3,8 +3,8 @@
 #[macro_use]
 extern crate log;
 
-pub mod battery;
 pub mod conf;
+pub mod error;
 pub mod lightning;
 pub mod periph;
 pub mod store;
@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail};
 use esp_idf_hal::{
     gpio::PinDriver,
     i2c::{self, I2cDriver},
@@ -52,16 +52,16 @@ use squirrel::{
 };
 use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
-use battery::BatteryMonitor;
 use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
 
 use crate::{
-    periph::{bme280::PeriphBME280, Peripheral, SensorPeripheral},
+    error::ErrExt as _,
+    periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
     wifictl::Wifi,
 };
 
-fn main() -> Result<()> {
+fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
@@ -140,11 +140,10 @@ fn main() -> Result<()> {
     let pins = peripherals.pins;
     let _ = pins.gpio1; // used for other things (error flag)
 
-    let nvs_partition = EspDefaultNvsPartition::take()?;
-
-    // -- initializing peripherals --
+    // -- initializing core peripherals --
     // battery monitor
-    let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio0)?;
+    let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio0)
+        .unwrap_hwerr("failed to initialize battery monitor");
     // i2c bus (shared with display, and sensors)
     // NOTE: slow baudrate (for lightning sensor compat) will make the display slow
     let i2c_driver = i2c::I2cDriver::new(
@@ -152,15 +151,18 @@ fn main() -> Result<()> {
         pins.gpio4,
         pins.gpio5,
         &i2c::config::Config::new().baudrate(100.kHz().into()),
-    )?;
+    )
+    .unwrap_hwerr("failed to initialize battery monitor");
     let i2c_bus = shared_bus::new_std!(I2cDriver = i2c_driver)
-        .expect("unreachable -- can only create one shared bus instance");
+        .expect("[sanity check] can only create one shared bus instance");
 
+    // -- initializing peripherals --
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
 
-    // oled display used for status on the device
+    // OLED display used for status on the device
+    // for now, all calls to display functions can just be .unwrap()ed since this functionality will be removed sometime soon
     let mut display = {
         let display_interface = I2CDisplayInterface::new(i2c_bus.acquire_i2c());
         let mut display = Ssd1306::new(
@@ -171,56 +173,80 @@ fn main() -> Result<()> {
         .into_terminal_mode();
         display
             .init()
-            .map_err(|e| anyhow!("Failed to init display: {e:?}"))?;
+            .map_err(|e| anyhow!("Failed to init display: {e:?}"))
+            .unwrap();
         let _ = display.clear();
         display
     };
-    writeln!(display, "Starting...")?;
+    writeln!(display, "Starting...");
     info!("Connected all peripherals");
     // lightning sensor
     // IRQ is on pin 6
     // TODO
     // -- end peripheral initialization --
 
-    let sysloop = EspSystemEventLoop::take()?;
+    let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
     let (wifi_status_send, wifi_status_recv) =
         smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
-    let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
-        // println!("Wifi event: {event:?}");
-        match event {
-            WifiEvent::StaDisconnected => wifi_status_send
-                .try_send(wifictl::WifiStatusUpdate::Disconnected)
-                .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
-            _ => {}
-        }
-    })?;
+    let _wifi_event_sub = sysloop
+        .subscribe(move |event: &WifiEvent| {
+            // println!("Wifi event: {event:?}");
+            match event {
+                WifiEvent::StaDisconnected => wifi_status_send
+                    .try_send(wifictl::WifiStatusUpdate::Disconnected)
+                    .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
+                _ => {}
+            }
+        })
+        .unwrap_hwerr("could not subscribe to system envent loop");
 
-    write!(display, "Starting wifi...")?;
+    write!(display, "Starting wifi...");
+    let nvs_partition = EspDefaultNvsPartition::take()
+        .unwrap_hwerr("could not take default nonvolatile storage partition");
     let mut wifi = Wifi::new(
         EspWifi::new(
             peripherals.modem,
             sysloop.clone(),
             Some(nvs_partition.clone()),
-        )?,
+        )
+        .unwrap_hwerr("failed to create ESP WIFI instance"),
         sysloop.clone(),
     );
-    wifi.start()?;
+    'x: {
+        let max = 5;
+        for i in 0..max {
+            if let Err(e) = wifi.start() {
+                match e {
+                    wifictl::WifiError::Esp(e) => {
+                        Err(e).unwrap_hwerr("failed to start ESP WIFI instance")
+                    }
+                    wifictl::WifiError::TimedOut => {
+                        warn!("Failed to start WIFI (attempt {i}/{max} timed out), retrying");
+                    }
+                }
+            } else {
+                break 'x;
+            }
+        }
+        error::_panic_hwerr(error::EmptyError, "Failed to start WIFI: Timed out");
+    }
 
     // -- NVS station information initialization --
     // performed here since it uses random numbers, and `getrandom` on the esp32
     // requires wifi / bluetooth to be enabled for true random numbers
     // - performed before the wifi is connected, because in the future this might store info on known networks
-    let mut store = StationStoreAccess::new(nvs_partition.clone())?;
-    let station_info = if !store.exists()? {
+    let mut store =
+        StationStoreAccess::new(nvs_partition.clone()).unwrap_hwerr("error accessing NVS");
+    let station_info = if !store.exists().unwrap_hwerr("error accessing NVS") {
         warn!("Performing first-time initialization of station information");
         let default = StationStoreData {
             station_uuid: Uuid::new_v4(),
         };
         warn!("Picked a UUID of {}", default.station_uuid);
-        store.write(&default)?;
+        store.write(&default).unwrap_hwerr("error accessing NVS");
         default
     } else {
-        store.read()?.unwrap()
+        store.read().unwrap_hwerr("error accessing NVS").unwrap()
     };
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
@@ -228,17 +254,40 @@ fn main() -> Result<()> {
     let connected_ssid;
     {
         let before = Instant::now();
-        let chosen = wifi.scan()?.expect("Could not find a network");
+        // TODO: not panic when no network is found
+        let chosen = wifi
+            .scan()
+            .unwrap_hwerr("error scaning for WIFI networks")
+            .expect("Could not find a network");
         connected_ssid = chosen.0.ssid.clone().to_string();
-        wifi.connect(chosen)?;
+        'x: {
+            let max = 5;
+            for i in 0..max {
+                if let Err(e) = wifi.connect(chosen.clone()) {
+                    match e {
+                        wifictl::WifiError::Esp(e) => {
+                            Err(e).unwrap_hwerr("failed to connect to WIFI")
+                        }
+                        wifictl::WifiError::TimedOut => {
+                            warn!(
+                                "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
+                            );
+                        }
+                    }
+                } else {
+                    break 'x;
+                }
+            }
+            error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
+        }
         info!("Connected to WIFI in {:?}", before.elapsed());
     }
 
-    let ip_info = wifi.inner().sta_netif().get_ip_info()?;
+    let ip_info = wifi.inner().sta_netif().get_ip_info().unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
     info!("Wifi DHCP info {:?}", ip_info);
 
     // see docs -- if not present UdpSocket::bind fails
-    wifictl::util::fix_networking()?;
+    wifictl::util::fix_networking().unwrap_hwerr("call to wifictl::util::fix_networking failed");
 
     smol::block_on(async {
         println!("Async executor started");
@@ -357,11 +406,10 @@ fn main() -> Result<()> {
                 }
             }
         }
-
-        //Ok::<(), anyhow::Error>(())
-    })?;
-
-    Ok(())
+        // type hint
+        #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    }).unwrap();
 }
 
 #[derive(Debug, Clone)]
