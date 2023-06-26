@@ -134,6 +134,8 @@ fn main() -> Result<()> {
 
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    info!("starting");
+
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
     let _ = pins.gpio1; // used for other things (error flag)
@@ -155,6 +157,7 @@ fn main() -> Result<()> {
         .expect("unreachable -- can only create one shared bus instance");
 
     // temp/humidity/pressure
+    // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
 
     // oled display used for status on the device
@@ -173,6 +176,7 @@ fn main() -> Result<()> {
         display
     };
     writeln!(display, "Starting...")?;
+    info!("Connected all peripherals");
     // lightning sensor
     // IRQ is on pin 6
     // TODO
@@ -272,11 +276,11 @@ fn main() -> Result<()> {
             &rmp_serde::to_vec_named(&packet).unwrap(),
             &mut uid_gen,
         )
-        .await;
+        .await?;
 
         info!("receiving channel mappings");
         let recv = loop {
-            match mvp_recv(&sock, &mut uid_gen).await {
+            match mvp_recv(&sock, &mut uid_gen).await? {
                 Some(p) => break p,
                 None => {
                     debug!("retry receive in 5s (got empty response = no packet ready yet)");
@@ -339,7 +343,7 @@ fn main() -> Result<()> {
 
                     let to_send_raw = rmp_serde::to_vec_named(&to_send)?;
 
-                    mvp_send(&sock, &to_send_raw, &mut uid_gen).await;
+                    mvp_send(&sock, &to_send_raw, &mut uid_gen).await?;
                 }
                 _ = timers.display_update.next().fuse() => {
                     let _ = display.clear();

@@ -1,13 +1,22 @@
+use std::time::Duration;
+
 use crate::net::UdpSocket;
 
 use crate::transport::{
-    shared::send_and_wait, Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE,
-    PACKET_TYPE_COMMAND, PACKET_TYPE_FRAME,
+    shared::{self, send_and_wait},
+    Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE, PACKET_TYPE_COMMAND,
+    PACKET_TYPE_FRAME,
 };
 
-pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator) {
+const MAX_ATTEMPTS: usize = 5;
+const RETRY_WAIT_DUR: Duration = Duration::from_millis(5000);
+
+pub async fn mvp_send(
+    sock: &UdpSocket,
+    data: &[u8],
+    uid_gen: &mut UidGenerator,
+) -> Result<(), shared::SendError> {
     assert!(sock.peer_addr().is_ok(), "Socket must be connected");
-    //info!("Trying to send {data:?} to {:?}", sock.peer_addr().unwrap());
 
     let Packet::Cmd(Cmd { packet: mut respond_to, .. }) = send_and_wait(
         sock,
@@ -18,9 +27,10 @@ pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator)
             command: CmdKind::Tx as _,
             padding: Default::default(),
         }),
-        Some(PACKET_TYPE_COMMAND),
-        Some(CmdKind::Confirm),
-    ).await else { unreachable!() };
+        shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+        MAX_ATTEMPTS,
+        RETRY_WAIT_DUR,
+    ).await? else { unreachable!() };
 
     for chunk in data.chunks(FRAME_BUF_SIZE) {
         let mut arr_chunk = [0u8; FRAME_BUF_SIZE];
@@ -36,9 +46,10 @@ pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator)
                 len: chunk.len() as u16,
                 data: arr_chunk,
             }),
-            Some(PACKET_TYPE_COMMAND),
-            Some(CmdKind::Confirm),
-        ).await else { unreachable!() };
+            shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+            MAX_ATTEMPTS,
+            RETRY_WAIT_DUR,
+        ).await? else { unreachable!() };
 
         respond_to = c.packet;
     }
@@ -52,13 +63,18 @@ pub async fn mvp_send(sock: &UdpSocket, data: &[u8], uid_gen: &mut UidGenerator)
             command: CmdKind::Complete as _,
             padding: Default::default(),
         }),
-        Some(PACKET_TYPE_COMMAND),
-        Some(CmdKind::Confirm),
-    ).await else { unreachable!() };
+        shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+        MAX_ATTEMPTS,
+        RETRY_WAIT_DUR,
+    ).await? else { unreachable!() };
+    Ok(())
 }
 
 /// Returns `None` if no frames were received (nothing was ready to send by the server)
-pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Vec<u8>> {
+pub async fn mvp_recv(
+    sock: &UdpSocket,
+    uid_gen: &mut UidGenerator,
+) -> Result<Option<Vec<u8>>, shared::SendError> {
     assert!(sock.peer_addr().is_ok(), "Socket must be connected");
 
     let first_frame = match send_and_wait(
@@ -70,14 +86,17 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
             command: CmdKind::Rx as _,
             padding: Default::default(),
         }),
-        None,
-        Some(CmdKind::Complete),
+        shared::ExpectedResponse::FrameOrCommand {
+            cmd: CmdKind::Complete,
+        },
+        MAX_ATTEMPTS,
+        RETRY_WAIT_DUR,
     )
-    .await
+    .await?
     {
         Packet::Cmd(c) => {
             debug_assert_eq!(c.command, CmdKind::Complete as _); // validated in `send_and_wait`
-            return None;
+            return Ok(None);
         }
         Packet::Frame(f) => f,
     };
@@ -95,10 +114,13 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
                 command: CmdKind::Confirm as _,
                 padding: Default::default(),
             }),
-            None,
-            Some(CmdKind::Complete),
+            shared::ExpectedResponse::FrameOrCommand {
+                cmd: CmdKind::Complete,
+            },
+            MAX_ATTEMPTS,
+            RETRY_WAIT_DUR,
         )
-        .await
+        .await?
         {
             Packet::Cmd(c) => {
                 //TODO: actually utilize this way of sending no-op Rx, and make it work with Tx as well
@@ -112,5 +134,5 @@ pub async fn mvp_recv(sock: &UdpSocket, uid_gen: &mut UidGenerator) -> Option<Ve
         };
     }
 
-    Some(buf)
+    Ok(Some(buf))
 }

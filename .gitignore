@@ -5,3 +5,4 @@
 **/*.rs.bk
 /hayselnut/src/conf.rs
 /hayselnut/hardware
+/haysel/tools
