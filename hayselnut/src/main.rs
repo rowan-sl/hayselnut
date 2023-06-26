@@ -13,12 +13,11 @@ pub mod error;
 use std::{
     cell::SyncUnsafeCell,
     collections::HashMap,
-    fmt::Write,
     thread::sleep,
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use esp_idf_hal::{
     gpio::PinDriver,
     i2c::{self, I2cDriver},
@@ -50,7 +49,6 @@ use squirrel::{
         UidGenerator,
     },
 };
-use ssd1306::{prelude::DisplayConfig, I2CDisplayInterface, Ssd1306};
 
 use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
@@ -160,24 +158,6 @@ fn main() {
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
 
-    // OLED display used for status on the device
-    // for now, all calls to display functions can just be .unwrap()ed since this functionality will be removed sometime soon
-    let mut display = {
-        let display_interface = I2CDisplayInterface::new(i2c_bus.acquire_i2c());
-        let mut display = Ssd1306::new(
-            display_interface,
-            ssd1306::size::DisplaySize128x64,
-            ssd1306::rotation::DisplayRotation::Rotate0,
-        )
-        .into_terminal_mode();
-        display
-            .init()
-            .map_err(|e| anyhow!("Failed to init display: {e:?}")).unwrap();
-        let _ = display.clear();
-        display
-    };
-    writeln!(display, "Starting...");
-    info!("Connected all peripherals");
     // lightning sensor
     // IRQ is on pin 6
     // TODO
@@ -196,7 +176,6 @@ fn main() {
         }
     }).unwrap_hwerr("could not subscribe to system envent loop");
 
-    write!(display, "Starting wifi...");
     let nvs_partition = EspDefaultNvsPartition::take().unwrap_hwerr("could not take default nonvolatile storage partition");
     let mut wifi = Wifi::new(
         EspWifi::new(
@@ -240,12 +219,10 @@ fn main() {
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
-    let connected_ssid;
     {
         let before = Instant::now();
         // TODO: not panic when no network is found
         let chosen = wifi.scan().unwrap_hwerr("error scaning for WIFI networks").expect("Could not find a network");
-        connected_ssid = chosen.0.ssid.clone().to_string();
         'x: {
             let max = 5;
             for i in 0..max {
@@ -271,8 +248,6 @@ fn main() {
 
     smol::block_on(async {
         println!("Async executor started");
-        let _ = display.clear();
-        write!(display, "connecting to server")?;
         // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
         let ips = resolve(conf::SERVER).await?;
@@ -326,7 +301,6 @@ fn main() {
 
         info!("channel mappings: {mappings:#?}");
 
-        let mut current_measurements = Observations::default();
         // todo: not hardcode
         let config = MeasureConfig::default();
         let mut timers = MeasureTimers::with_config(&config);
@@ -335,8 +309,6 @@ fn main() {
                 status = wifi_status_recv.recv().fuse() => {
                     match status? {
                         wifictl::WifiStatusUpdate::Disconnected => {
-                            let _ = display.clear();
-                            write!(display, "WIFI disconnected, please restart the device")?;
                             todo!("wifi disconnect not handled currently")
                         }
                     }
@@ -354,15 +326,11 @@ fn main() {
 
                     let battery_voltage = batt_mon.read()?;
 
-                    current_measurements = Observations {
-                        battery: battery_voltage,
-                    };
-
                     let to_send = PacketKind::Data(SomeData {
                         per_channel: {
                             let mut map = HashMap::<ChannelID, ChannelData>::new();
                             let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
-                            set("battery", ChannelData::Float(current_measurements.battery));
+                            set("battery", ChannelData::Float(battery_voltage));
                             for (k, v) in bme_readings {
                                 map.insert(k, v);
                             }
@@ -373,16 +341,6 @@ fn main() {
                     let to_send_raw = rmp_serde::to_vec_named(&to_send)?;
 
                     mvp_send(&sock, &to_send_raw, &mut uid_gen).await?;
-                }
-                _ = timers.display_update.next().fuse() => {
-                    let _ = display.clear();
-                    write!(
-                        display,
-                        "ON:{}\nIP:{}\nBAT:{:.1}",
-                        connected_ssid,
-                        ip_info.ip,
-                        current_measurements.battery,
-                    )?;
                 }
             }
         }
@@ -395,7 +353,6 @@ fn main() {
 #[derive(Debug, Clone)]
 pub struct MeasureConfig {
     read_interval: Duration,
-    display_interval: Duration,
 }
 
 impl Default for MeasureConfig {
@@ -403,7 +360,6 @@ impl Default for MeasureConfig {
         //TODO not hardcode values
         Self {
             read_interval: Duration::from_secs(30),
-            display_interval: Duration::from_secs(15),
         }
     }
 }
@@ -411,14 +367,12 @@ impl Default for MeasureConfig {
 #[derive(Debug)]
 pub struct MeasureTimers {
     pub read_timer: Timer,
-    pub display_update: Timer,
 }
 
 impl MeasureTimers {
     pub fn with_config(cfg: &MeasureConfig) -> Self {
         Self {
             read_timer: Timer::interval(cfg.read_interval),
-            display_update: Timer::interval(cfg.display_interval),
         }
     }
 
