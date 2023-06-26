@@ -19,7 +19,7 @@ pub enum ChannelValue {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChannelData {
     Float(f32),
-    Event
+    Event,
 }
 
 impl ChannelData {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use self::station::{
-    capabilities::{Channel, ChannelID, ChannelName, ChannelData},
+    capabilities::{Channel, ChannelData, ChannelID, ChannelName},
     identity::StationID,
 };
 
@@ -31,6 +31,5 @@ pub struct ChannelMappings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SomeData {
-    pub per_channel: HashMap<ChannelID, ChannelData>
+    pub per_channel: HashMap<ChannelID, ChannelData>,
 }
-

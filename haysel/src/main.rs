@@ -9,24 +9,25 @@ use clap::Parser;
 use squirrel::{
     api::{
         station::{
-            capabilities::{ChannelID, ChannelName, KnownChannels, ChannelData},
+            capabilities::{ChannelData, ChannelID, ChannelName, KnownChannels},
             identity::{KnownStations, StationInfo},
         },
         ChannelMappings, PacketKind,
     },
-    transport::server::{DispatchEvent, ClientInterface, recv_next_packet},
+    transport::server::{recv_next_packet, ClientInterface, DispatchEvent},
 };
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-    fmt::Write as _,
+use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, path::PathBuf, time::Duration};
+use tokio::{
+    fs::{self, OpenOptions},
+    io::{self, AsyncWriteExt},
+    net::{UdpSocket, UnixListener},
+    select,
+    signal::ctrl_c,
+    spawn, sync,
 };
-use tokio::{fs::{self, OpenOptions}, net::{UdpSocket, UnixListener}, select, signal::ctrl_c, spawn, sync, io::{AsyncWriteExt, self}};
 use tracing::metadata::LevelFilter;
-use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::config as resolveconf;
+use trust_dns_resolver::TokioAsyncResolver;
 
 mod consumer;
 mod paths;
@@ -141,12 +142,16 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
-        info!("Performing DNS lookup of server's extranal IP (url={})", args.url);
+        info!(
+            "Performing DNS lookup of server's extranal IP (url={})",
+            args.url
+        );
         let resolver = TokioAsyncResolver::tokio(
             resolveconf::ResolverConfig::default(),
-            resolveconf::ResolverOpts::default()
+            resolveconf::ResolverOpts::default(),
         )?;
-        let addrs = resolver.lookup_ip(args.url)
+        let addrs = resolver
+            .lookup_ip(args.url)
             .await?
             .into_iter()
             .map(|addr| {
@@ -334,7 +339,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok::<(), anyhow::Error>(())
             }.await;
             drop(listener);
-            let _ =tokio::fs::remove_file(args.ipc_sock).await;
+            let _ = tokio::fs::remove_file(args.ipc_sock).await;
             shutdown_ipc.trigger_shutdown();
             shutdown_ipc.wait_for_completion().await;
             res.unwrap();
