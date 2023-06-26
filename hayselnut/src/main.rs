@@ -4,11 +4,11 @@
 extern crate log;
 
 pub mod conf;
-pub mod error;
 pub mod lightning;
 pub mod periph;
 pub mod store;
 pub mod wifictl;
+pub mod error;
 
 use std::{
     cell::SyncUnsafeCell,
@@ -56,9 +56,9 @@ use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
 
 use crate::{
-    error::ErrExt as _,
-    periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
+    periph::{bme280::PeriphBME280, battery::BatteryMonitor, Peripheral, SensorPeripheral},
     wifictl::Wifi,
+    error::ErrExt as _,
 };
 
 fn main() {
@@ -151,8 +151,7 @@ fn main() {
         pins.gpio4,
         pins.gpio5,
         &i2c::config::Config::new().baudrate(100.kHz().into()),
-    )
-    .unwrap_hwerr("failed to initialize battery monitor");
+    ).unwrap_hwerr("failed to initialize battery monitor");
     let i2c_bus = shared_bus::new_std!(I2cDriver = i2c_driver)
         .expect("[sanity check] can only create one shared bus instance");
 
@@ -173,8 +172,7 @@ fn main() {
         .into_terminal_mode();
         display
             .init()
-            .map_err(|e| anyhow!("Failed to init display: {e:?}"))
-            .unwrap();
+            .map_err(|e| anyhow!("Failed to init display: {e:?}")).unwrap();
         let _ = display.clear();
         display
     };
@@ -188,43 +186,35 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
     let (wifi_status_send, wifi_status_recv) =
         smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
-    let _wifi_event_sub = sysloop
-        .subscribe(move |event: &WifiEvent| {
-            // println!("Wifi event: {event:?}");
-            match event {
-                WifiEvent::StaDisconnected => wifi_status_send
-                    .try_send(wifictl::WifiStatusUpdate::Disconnected)
-                    .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
-                _ => {}
-            }
-        })
-        .unwrap_hwerr("could not subscribe to system envent loop");
+    let _wifi_event_sub = sysloop.subscribe(move |event: &WifiEvent| {
+        // println!("Wifi event: {event:?}");
+        match event {
+            WifiEvent::StaDisconnected => wifi_status_send
+                .try_send(wifictl::WifiStatusUpdate::Disconnected)
+                .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
+            _ => {}
+        }
+    }).unwrap_hwerr("could not subscribe to system envent loop");
 
     write!(display, "Starting wifi...");
-    let nvs_partition = EspDefaultNvsPartition::take()
-        .unwrap_hwerr("could not take default nonvolatile storage partition");
+    let nvs_partition = EspDefaultNvsPartition::take().unwrap_hwerr("could not take default nonvolatile storage partition");
     let mut wifi = Wifi::new(
         EspWifi::new(
             peripherals.modem,
             sysloop.clone(),
             Some(nvs_partition.clone()),
-        )
-        .unwrap_hwerr("failed to create ESP WIFI instance"),
+        ).unwrap_hwerr("failed to create ESP WIFI instance"),
         sysloop.clone(),
     );
     'x: {
         let max = 5;
         for i in 0..max {
-            if let Err(e) = wifi.start() {
-                match e {
-                    wifictl::WifiError::Esp(e) => {
-                        Err(e).unwrap_hwerr("failed to start ESP WIFI instance")
-                    }
-                    wifictl::WifiError::TimedOut => {
-                        warn!("Failed to start WIFI (attempt {i}/{max} timed out), retrying");
-                    }
+            if let Err(e) = wifi.start() { match e {
+                wifictl::WifiError::Esp(e) => Err(e).unwrap_hwerr("failed to start ESP WIFI instance"),
+                wifictl::WifiError::TimedOut => {
+                    warn!("Failed to start WIFI (attempt {i}/{max} timed out), retrying");
                 }
-            } else {
+            }} else {
                 break 'x;
             }
         }
@@ -235,8 +225,7 @@ fn main() {
     // performed here since it uses random numbers, and `getrandom` on the esp32
     // requires wifi / bluetooth to be enabled for true random numbers
     // - performed before the wifi is connected, because in the future this might store info on known networks
-    let mut store =
-        StationStoreAccess::new(nvs_partition.clone()).unwrap_hwerr("error accessing NVS");
+    let mut store = StationStoreAccess::new(nvs_partition.clone()).unwrap_hwerr("error accessing NVS");
     let station_info = if !store.exists().unwrap_hwerr("error accessing NVS") {
         warn!("Performing first-time initialization of station information");
         let default = StationStoreData {
@@ -255,26 +244,17 @@ fn main() {
     {
         let before = Instant::now();
         // TODO: not panic when no network is found
-        let chosen = wifi
-            .scan()
-            .unwrap_hwerr("error scaning for WIFI networks")
-            .expect("Could not find a network");
+        let chosen = wifi.scan().unwrap_hwerr("error scaning for WIFI networks").expect("Could not find a network");
         connected_ssid = chosen.0.ssid.clone().to_string();
         'x: {
             let max = 5;
             for i in 0..max {
-                if let Err(e) = wifi.connect(chosen.clone()) {
-                    match e {
-                        wifictl::WifiError::Esp(e) => {
-                            Err(e).unwrap_hwerr("failed to connect to WIFI")
-                        }
-                        wifictl::WifiError::TimedOut => {
-                            warn!(
-                                "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
-                            );
-                        }
+                if let Err(e) = wifi.connect(chosen.clone()) { match e {
+                    wifictl::WifiError::Esp(e) => Err(e).unwrap_hwerr("failed to connect to WIFI"),
+                    wifictl::WifiError::TimedOut => {
+                        warn!("Failed to connect to WIFI (attempt {i}/{max} timed out), retrying");
                     }
-                } else {
+                }} else {
                     break 'x;
                 }
             }
