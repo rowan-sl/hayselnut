@@ -1,4 +1,5 @@
 #![feature(sync_unsafe_cell)]
+#![feature(io_error_more)]
 
 #[macro_use]
 extern crate log;
@@ -13,11 +14,12 @@ pub mod wifictl;
 use std::{
     cell::SyncUnsafeCell,
     collections::HashMap,
+    io,
     thread::sleep,
     time::{Duration, Instant},
 };
 
-use anyhow::bail;
+use embedded_svc::wifi::Wifi as _;
 use esp_idf_hal::{
     gpio::PinDriver,
     i2c::{self, I2cDriver},
@@ -27,6 +29,7 @@ use esp_idf_hal::{
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
+    log::EspLogger,
     nvs::EspDefaultNvsPartition,
     wifi::{EspWifi, WifiEvent},
 };
@@ -46,6 +49,7 @@ use squirrel::{
     },
     transport::{
         client::{mvp_recv, mvp_send},
+        shared::SendError,
         UidGenerator,
     },
 };
@@ -54,10 +58,12 @@ use store::{StationStoreAccess, StationStoreData};
 use uuid::Uuid;
 
 use crate::{
-    error::ErrExt as _,
+    error::{ErrExt as _, _panic_hwerr},
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
     wifictl::Wifi,
 };
+
+const NO_WIFI_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -130,7 +136,14 @@ fn main() {
         }
     }
 
-    esp_idf_svc::log::EspLogger::initialize_default();
+    EspLogger::initialize_default();
+    EspLogger.set_target_level("*", log::LevelFilter::Trace);
+    trace!("[logger] logging level trace");
+    debug!("[logger] logging level debug");
+    info!("[logger] logging level info");
+    warn!("[logger] logging level warn");
+    error!("[logger] logging level error");
+    println!("done");
 
     info!("starting");
 
@@ -229,144 +242,236 @@ fn main() {
     info!("Loaded station info: {station_info:#?}");
     // -- end NVS info init --
 
-    {
-        let before = Instant::now();
-        // TODO: not panic when no network is found
-        let chosen = wifi
-            .scan()
-            .unwrap_hwerr("error scaning for WIFI networks")
-            .expect("Could not find a network");
-        'x: {
-            let max = 5;
-            for i in 0..max {
-                if let Err(e) = wifi.connect(chosen.clone()) {
-                    match e {
-                        wifictl::WifiError::Esp(e) => {
-                            Err(e).unwrap_hwerr("failed to connect to WIFI")
-                        }
-                        wifictl::WifiError::TimedOut => {
-                            warn!(
-                                "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
-                            );
-                        }
-                    }
-                } else {
-                    break 'x;
-                }
-            }
-            error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
-        }
-        info!("Connected to WIFI in {:?}", before.elapsed());
-    }
-
-    let ip_info = wifi.inner().sta_netif().get_ip_info().unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
-    info!("Wifi DHCP info {:?}", ip_info);
-
-    // see docs -- if not present UdpSocket::bind fails
+    // -- here is code that needs to go before the error-retry loops --
+    // see [fix_networking] docs -- if not present UdpSocket::bind fails
     wifictl::util::fix_networking().unwrap_hwerr("call to wifictl::util::fix_networking failed");
 
+    // init some persistant information for use later
+    let mut uid_gen = UidGenerator::new();
+    let mut channels = vec![Channel {
+        name: "battery".into(),
+        value: ChannelValue::Float,
+        ty: ChannelType::Periodic,
+    }];
+    // add channels from sensors
+    channels.extend_from_slice(&bme280.channels());
+
+    // -- start the executor (before retry loops) --
     smol::block_on(async {
-        println!("Async executor started");
-        // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
-        let sock = UdpSocket::bind("0.0.0.0:0").await?;
-        let ips = resolve(conf::SERVER).await?;
-        if ips.len() == 0 {
-            bail!("Failed to resolve server address -- DNS lookup found nothing");
-        } else if ips.len() > 1 {
-            bail!("Faild to respolve server address -- multiple results ({ips:?})");
-        }
+        println!();
+        // not an error, just make the message stand out
+        error!("----     ----    async executor + main loop started    ----    ----\n");
 
-        sock.connect(ips[0]).await?;
-        println!("connected to: {:?}", sock.peer_addr()?);
-
-        let mut uid_gen = UidGenerator::new();
-        let mut channels = vec![Channel {
-            name: "battery".into(),
-            value: ChannelValue::Float,
-            ty: ChannelType::Periodic,
-        }];
-        // add channels from sensors
-        channels.extend_from_slice(&bme280.channels());
-
-        // send init packet
-        info!("sending init info");
-        let packet = PacketKind::Connect(squirrel::api::OnConnect {
-            station_id: station_info.station_uuid,
-            channels,
-        });
-        mvp_send(
-            &sock,
-            &rmp_serde::to_vec_named(&packet).unwrap(),
-            &mut uid_gen,
-        )
-        .await?;
-
-        info!("receiving channel mappings");
-        let recv = loop {
-            match mvp_recv(&sock, &mut uid_gen).await? {
-                Some(p) => break p,
-                None => {
-                    debug!("retry receive in 5s (got empty response = no packet ready yet)");
-                    Timer::after(Duration::from_secs(5)).await;
+        'retry_wifi: loop {
+            {
+                info!("Connecting to WIFI");
+                // clear the disconnect queue
+                while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv()
+                {
                 }
+                // -- connecting to wifi --
+                let before = Instant::now();
+                // -- finding a known network --
+                let chosen = loop {
+                    if let Some(chosen) =
+                        wifi.scan().unwrap_hwerr("error scaning for WIFI networks")
+                    {
+                        break chosen;
+                    } else {
+                        error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
+                        sleep(NO_WIFI_RETRY_INTERVAL);
+                    }
+                };
+                'retry: {
+                    let max = 5;
+                    for i in 0..max {
+                        if let Err(e) = wifi.connect(chosen.clone()) {
+                            match e {
+                                wifictl::WifiError::Esp(e) => {
+                                    Err(e).unwrap_hwerr("failed to connect to WIFI")
+                                }
+                                wifictl::WifiError::TimedOut => {
+                                    warn!(
+                                        "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
+                                    );
+                                    sleep(Duration::from_millis(1000));
+                                    if let Ok(wifictl::WifiStatusUpdate::Disconnected) =
+                                        wifi_status_recv.try_recv()
+                                    {
+                                    } else {
+                                        warn!("unexpectedly did not receive a disconnect message after a failed connect attempt");
+                                    };
+                                }
+                            }
+                        } else {
+                            break 'retry;
+                        }
+                    }
+                    error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
+                }
+                info!("Connected to WIFI in {:?}", before.elapsed());
+                let ip_info = wifi.inner()
+                    .sta_netif()
+                    .get_ip_info()
+                    .unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
+                info!("Wifi DHCP info {:?}", ip_info);
             }
-        };
 
-        let mappings = match rmp_serde::from_slice(&recv) {
-            Ok(PacketKind::ChannelMappings(map)) => map,
-            Ok(other) => bail!("Expected channel mappings, got {other:?}"),
-            Err(..) => bail!("Failed to deserialize received data"),
-        };
+            // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
+            let sock = UdpSocket::bind("0.0.0.0:0")
+                .await
+                .unwrap_hwerr("call to UdpSocket bind failed [unkwnown cause]");
 
-        info!("channel mappings: {mappings:#?}");
+            'retry_server: loop {
+                // re-do DNS in here (not the wifi loop) just in case it changing causing this
+                let ips = resolve(conf::SERVER)
+                    .await
+                    .unwrap_hwerr("call to DNS resolve failed [unknown cause]");
+                if ips.len() == 0 {
+                    error!("failed to resolve server address (DNS lookup for {:?} returned no IP results)", conf::SERVER);
+                    if !wifi
+                        .inner()
+                        .is_connected()
+                        .unwrap_hwerr("error checking wifi status")
+                    {
+                        warn!("[cause of error]: wifi was not connected");
+                        continue 'retry_wifi;
+                    }
+                } else if ips.len() > 1 {
+                    _panic_hwerr(
+                        error::EmptyError,
+                        "Faild to respolve server address -- multiple results ({ips:?})",
+                    );
+                }
 
-        // todo: not hardcode
-        let config = MeasureConfig::default();
-        let mut timers = MeasureTimers::with_config(&config);
-        loop {
-            select_biased! {
-                status = wifi_status_recv.recv().fuse() => {
-                    match status? {
-                        wifictl::WifiStatusUpdate::Disconnected => {
-                            todo!("wifi disconnect not handled currently")
+                // works even if wifi is not connected. only operations that actually use the network will break.
+                sock.connect(ips[0])
+                    .await
+                    .unwrap_hwerr("call to sock.connect failed [unknown cause]");
+                info!(
+                    "linking socket to server at: {:?} (this does not mean that the server is actually running here)",
+                    sock.peer_addr().unwrap_hwerr("socket.peer_addr failed [unknown cause]")
+                );
+
+                // macro to handle network errors (needs to be a macro so it can use local loop labels)
+                // on scucess, returns the resulting value.
+                // on error, if handleable it deals with it, if not it bails
+                macro_rules! handle_netres {
+                    ($res:expr) => {
+                        match $res {
+                            Ok(v) => v,
+                            Err(SendError::IOError(e)) if e.kind() == io::ErrorKind::HostUnreachable => {
+                                error!("I/O Error: host unreachable (the network is down)");
+                                error!("attempting to reconnect WIFI");
+                                continue 'retry_wifi;
+                            }
+                            Err(e @ SendError::IOError(..)) => {
+                                _panic_hwerr(e, "I/O Error went unhandled (not known to be caused by a fixable problem)");
+                            },
+                            Err(SendError::TimedOut) => {
+                                error!("initial communication with the server failed (connection timed out -- is it running?)");
+                                error!("trying to connect with the server [again]");
+                                continue 'retry_server;
+                            }
+                        }
+                    };
+                }
+
+                // send init packet
+                info!("sending init info");
+                handle_netres!(
+                    mvp_send(
+                        &sock,
+                        &rmp_serde::to_vec_named(&PacketKind::Connect(squirrel::api::OnConnect {
+                            station_id: station_info.station_uuid,
+                            channels: channels.clone(),
+                        }))
+                        .unwrap(),
+                        &mut uid_gen,
+                    )
+                    .await
+                );
+                info!("successfully communicated with the server - it is running");
+
+                info!("requesting channel mappings");
+                let recv = loop {
+                    match handle_netres!(mvp_recv(&sock, &mut uid_gen).await) {
+                        Some(p) => break p,
+                        None => {
+                            // we are connected to the server, it just does not have any packets for us
+                            warn!("retry receive in 5s (got empty response = no packet ready yet)");
+                            Timer::after(Duration::from_secs(5)).await;
+                        }
+                    }
+                };
+
+                let mappings = match rmp_serde::from_slice(&recv) {
+                    Ok(PacketKind::ChannelMappings(map)) => map,
+                    Ok(other) => {
+                        error!("The server is misbehaving! (expected ChannelMappings, received {other:?})");
+                        error!("this would be caused by broken server code, or a malicious actor.");
+                        error!("we cant do much about this, exiting");
+                        //FIXME: mabey try again in a while?
+                        panic!()
+                    }
+                    Err(e) => {
+                        error!("The server is misbehaving! (failed to deserialize a packet)");
+                        error!("The error is: {e:?}");
+                        error!("this would be caused by broken server code, or a malicious actor.");
+                        error!("we cant do much about this, exiting");
+                        // see above
+                        panic!();
+                    }
+                };
+
+                info!("channel mappings: {mappings:#?}");
+
+                // todo: not hardcode
+                let config = MeasureConfig::default();
+                let mut timers = MeasureTimers::with_config(&config);
+                loop {
+                    select_biased! {
+                        status = wifi_status_recv.recv().fuse() => {
+                            match status.unwrap_hwerr("wifi status queue broken") {
+                                wifictl::WifiStatusUpdate::Disconnected => {
+                                    error!("notified of WIFI disconnect, reconnecting...");
+                                    continue 'retry_wifi;
+                                }
+                            }
+                        }
+                        _ = timers.read_timer.next().fuse() => {
+                            info!("reading sensors and sending");
+                            let map_fn = |id: &str| *mappings.map.get(&ChannelName::from(id)).expect("could not find mapping for id {id:?}");
+                            let bme_readings = match bme280.read(&map_fn) {
+                                Some(v) => v,
+                                None => {
+                                    warn!("BME280 sensor peripheral error: {:?}, fixing...", bme280.err());
+                                    bme280.fix();
+                                    Default::default()
+                                }
+                            };
+
+                            let battery_voltage = batt_mon.read().unwrap_hwerr("failed to read battery voltage");
+
+                            let to_send = PacketKind::Data(SomeData {
+                                per_channel: {
+                                    let mut map = HashMap::<ChannelID, ChannelData>::new();
+                                    let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
+                                    set("battery", ChannelData::Float(battery_voltage));
+                                    bme_readings.into_iter().for_each(|(k, v)| { map.insert(k, v); });
+                                    map
+                                }
+                            });
+
+                            let to_send_raw = rmp_serde::to_vec_named(&to_send).unwrap_hwerr("failed to serialize data being sent");
+
+                            handle_netres!(mvp_send(&sock, &to_send_raw, &mut uid_gen).await);
                         }
                     }
                 }
-                _ = timers.read_timer.next().fuse() => {
-                    let map_fn = |id: &str| *mappings.map.get(&ChannelName::from(id)).expect("could not find mapping for id {id:?}");
-                    let bme_readings = match bme280.read(&map_fn) {
-                        Some(v) => v,
-                        None => {
-                            warn!("BME280 sensor peripheral error: {:?}, fixing...", bme280.err());
-                            bme280.fix();
-                            Default::default()
-                        }
-                    };
-
-                    let battery_voltage = batt_mon.read()?;
-
-                    let to_send = PacketKind::Data(SomeData {
-                        per_channel: {
-                            let mut map = HashMap::<ChannelID, ChannelData>::new();
-                            let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
-                            set("battery", ChannelData::Float(battery_voltage));
-                            for (k, v) in bme_readings {
-                                map.insert(k, v);
-                            }
-                            map
-                        }
-                    });
-
-                    let to_send_raw = rmp_serde::to_vec_named(&to_send)?;
-
-                    mvp_send(&sock, &to_send_raw, &mut uid_gen).await?;
-                }
             }
         }
-        // type hint
-        #[allow(unreachable_code)]
-        Ok::<(), anyhow::Error>(())
-    }).unwrap();
+    });
 }
 
 #[derive(Debug, Clone)]
