@@ -174,9 +174,12 @@ fn main() {
     // lightning sensor
     // IRQ is on pin 6
     // TODO
-    // -- end peripheral initialization --
 
+    // -- wifi initialization --
     let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
+    let nvs_partition = EspDefaultNvsPartition::take()
+        .unwrap_hwerr("could not take default nonvolatile storage partition");
+
     let (wifi_status_send, wifi_status_recv) =
         smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
     let _wifi_event_sub = sysloop
@@ -191,8 +194,6 @@ fn main() {
         })
         .unwrap_hwerr("could not subscribe to system envent loop");
 
-    let nvs_partition = EspDefaultNvsPartition::take()
-        .unwrap_hwerr("could not take default nonvolatile storage partition");
     let mut wifi = Wifi::new(
         EspWifi::new(
             peripherals.modem,
@@ -203,17 +204,7 @@ fn main() {
         sysloop.clone(),
     );
     // this doesn't need to be retried, have never seen this fail
-    if let Err(e) = wifi.start() {
-        match e {
-            wifictl::WifiError::Esp(e) => {
-                Err(e).unwrap_hwerr("failed to start ESP WIFI instance")
-            }
-            wifictl::WifiError::TimedOut => {
-                error::_panic_hwerr(error::EmptyError, "Failed to start WIFI: Timed out");
-            }
-        }
-    }
-
+    wifi.start().unwrap_hwerr("failed to start WIFI");
 
     // -- NVS station information initialization --
     // performed here since it uses random numbers, and `getrandom` on the esp32
@@ -247,60 +238,10 @@ fn main() {
         error!("----     ----    async executor + main loop started    ----    ----\n");
 
         'retry_wifi: loop {
-            {
-                info!("Connecting to WIFI");
-                // clear the disconnect queue
-                while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv()
-                {
-                }
-                // -- connecting to wifi --
-                let before = Instant::now();
-                // -- finding a known network --
-                let chosen = loop {
-                    if let Some(chosen) =
-                        wifi.scan().unwrap_hwerr("error scaning for WIFI networks")
-                    {
-                        break chosen;
-                    } else {
-                        error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
-                        sleep(NO_WIFI_RETRY_INTERVAL);
-                    }
-                };
-                'retry: {
-                    let max = 5;
-                    for i in 0..max {
-                        if let Err(e) = wifi.connect(chosen.clone()) {
-                            match e {
-                                wifictl::WifiError::Esp(e) => {
-                                    Err(e).unwrap_hwerr("failed to connect to WIFI")
-                                }
-                                wifictl::WifiError::TimedOut => {
-                                    warn!(
-                                        "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
-                                    );
-                                    sleep(Duration::from_millis(1000));
-                                    if let Ok(wifictl::WifiStatusUpdate::Disconnected) =
-                                        wifi_status_recv.try_recv()
-                                    {
-                                    } else {
-                                        warn!("unexpectedly did not receive a disconnect message after a failed connect attempt");
-                                    };
-                                }
-                            }
-                        } else {
-                            break 'retry;
-                        }
-                    }
-                    error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
-                }
-                info!("Connected to WIFI in {:?}", before.elapsed());
-                let ip_info = wifi.inner()
-                    .sta_netif()
-                    .get_ip_info()
-                    .unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
-                info!("Wifi DHCP info {:?}", ip_info);
-            }
-
+            connect_wifi(
+                &mut wifi,
+                &wifi_status_recv,
+            );
             // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
             let sock = UdpSocket::bind("0.0.0.0:0")
                 .await
@@ -457,6 +398,63 @@ fn main() {
             }
         }
     });
+}
+
+fn connect_wifi(
+    wifi: &mut Wifi,
+    wifi_status_recv: &smol::channel::Receiver<wifictl::WifiStatusUpdate>,
+) {
+    info!("Connecting to WIFI");
+    // clear the disconnect queue
+    while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv()
+    {
+    }
+    // -- connecting to wifi --
+    let before = Instant::now();
+    // -- finding a known network --
+    let chosen = loop {
+        if let Some(chosen) =
+            wifi.scan().unwrap_hwerr("error scaning for WIFI networks")
+        {
+            break chosen;
+        } else {
+            error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
+            sleep(NO_WIFI_RETRY_INTERVAL);
+        }
+    };
+    'retry: {
+        let max = 5;
+        for i in 0..max {
+            if let Err(e) = wifi.connect(chosen.clone()) {
+                match e {
+                    wifictl::WifiError::Esp(e) => {
+                        Err(e).unwrap_hwerr("failed to connect to WIFI")
+                    }
+                    wifictl::WifiError::TimedOut => {
+                        warn!(
+                            "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
+                        );
+                        sleep(Duration::from_millis(1000));
+                        if let Ok(wifictl::WifiStatusUpdate::Disconnected) =
+                            wifi_status_recv.try_recv()
+                        {
+                        } else {
+                            warn!("unexpectedly did not receive a disconnect message after a failed connect attempt");
+                        };
+                    }
+                }
+            } else {
+                break 'retry;
+            }
+        }
+        error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
+    }
+    info!("Connected to WIFI in {:?}", before.elapsed());
+    let ip_info = wifi.inner()
+        .sta_netif()
+        .get_ip_info()
+        .unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
+    info!("Wifi DHCP info {:?}", ip_info);
 }
 
 #[derive(Debug, Clone)]
