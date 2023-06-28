@@ -54,8 +54,7 @@ use squirrel::{
     },
 };
 
-use store::{StationStoreAccess, StationStoreData};
-use uuid::Uuid;
+use store::{StationStore, StationStoreCached};
 
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
@@ -203,44 +202,25 @@ fn main() {
         .unwrap_hwerr("failed to create ESP WIFI instance"),
         sysloop.clone(),
     );
-    'x: {
-        let max = 5;
-        for i in 0..max {
-            if let Err(e) = wifi.start() {
-                match e {
-                    wifictl::WifiError::Esp(e) => {
-                        Err(e).unwrap_hwerr("failed to start ESP WIFI instance")
-                    }
-                    wifictl::WifiError::TimedOut => {
-                        warn!("Failed to start WIFI (attempt {i}/{max} timed out), retrying");
-                    }
-                }
-            } else {
-                break 'x;
+    // this doesn't need to be retried, have never seen this fail
+    if let Err(e) = wifi.start() {
+        match e {
+            wifictl::WifiError::Esp(e) => {
+                Err(e).unwrap_hwerr("failed to start ESP WIFI instance")
+            }
+            wifictl::WifiError::TimedOut => {
+                error::_panic_hwerr(error::EmptyError, "Failed to start WIFI: Timed out");
             }
         }
-        error::_panic_hwerr(error::EmptyError, "Failed to start WIFI: Timed out");
     }
+
 
     // -- NVS station information initialization --
     // performed here since it uses random numbers, and `getrandom` on the esp32
     // requires wifi / bluetooth to be enabled for true random numbers
     // - performed before the wifi is connected, because in the future this might store info on known networks
-    let mut store =
-        StationStoreAccess::new(nvs_partition.clone()).unwrap_hwerr("error accessing NVS");
-    let station_info = if !store.exists().unwrap_hwerr("error accessing NVS") {
-        warn!("Performing first-time initialization of station information");
-        let default = StationStoreData {
-            station_uuid: Uuid::new_v4(),
-        };
-        warn!("Picked a UUID of {}", default.station_uuid);
-        store.write(&default).unwrap_hwerr("error accessing NVS");
-        default
-    } else {
-        store.read().unwrap_hwerr("error accessing NVS").unwrap()
-    };
-    info!("Loaded station info: {station_info:#?}");
-    // -- end NVS info init --
+    let store: Box<dyn StationStore> = Box::new(StationStoreCached::init(nvs_partition.clone()).unwrap_hwerr("error accessing NVS"));
+    info!("Loaded station info: {:#?}", store.read());
 
     // -- here is code that needs to go before the error-retry loops --
     // see [fix_networking] docs -- if not present UdpSocket::bind fails
@@ -430,15 +410,13 @@ fn main() {
                 // send init packet
                 info!("sending init info");
                 send!(&PacketKind::Connect(squirrel::api::OnConnect {
-                    station_id: station_info.station_uuid,
+                    station_id: store.read().station_uuid,
                     channels: channels.clone(),
                 }));
-                info!("successfully communicated with the server - it is running");
-
+                info!("server is up");
                 info!("requesting channel mappings");
                 let mappings = recv!(PacketKind::ChannelMappings);
-
-                info!("channel mappings: {mappings:#?}");
+                info!("received channel mappings: {mappings:#?}");
 
                 loop {
                     select_biased! {

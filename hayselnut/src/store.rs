@@ -17,7 +17,63 @@ pub const STORE_DATA_SIZE: usize = 48;
 
 const_assert!(NAMESPACE.len() <= 15); // namespace must be <15 chars
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct StationStoreCached<T: NvsPartitionId> {
+    access: StationStoreAccess<T>,
+    cache: StationStoreData,
+}
+
+impl<T: NvsPartitionId> StationStoreCached<T> {
+    pub fn init(partition: EspNvsPartition<T>) -> Result<Self, EspError> {
+        let mut store =
+            StationStoreAccess::new(partition)?;
+        let station_info = if !store.exists()? {
+            warn!("Performing first-time initialization of station information");
+            let default = StationStoreData {
+                station_uuid: Uuid::new_v4(),
+            };
+            warn!("Picked a UUID of {}", default.station_uuid);
+            store.write(&default)?;
+            default
+        } else {
+            store.read()?.unwrap()
+        };
+        Ok(Self {
+            access: store,
+            cache: station_info,
+        })
+    }
+}
+
+impl<T: NvsPartitionId> StationStore for StationStoreCached<T> {
+    fn read(&self) -> &StationStoreData {
+        &self.cache
+    }
+    #[doc(hidden)]
+    fn write(&mut self, new: StationStoreData) -> Result<(), EspError> {
+        self.access.write(&new)?;
+        self.cache = new;
+        Ok(())
+    }
+}
+
+// trait objects cant use generics, you say?
+impl dyn StationStore {
+    fn modify(&mut self, f: impl FnOnce(&mut StationStoreData)) -> Result<(), EspError> {
+        let mut v = *self.read(); // copy
+        f(&mut v);
+        if v != *self.read() {
+            self.write(v)?;
+        }
+        Ok(())
+    }
+}
+
+pub trait StationStore {
+    fn read(&self) -> &StationStoreData;
+    fn write(&mut self, new: StationStoreData) -> Result<(), EspError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StationStoreData {
     pub station_uuid: Uuid,
 }
