@@ -10,11 +10,6 @@ partition_table = "partitions.csv"
 
 [patch.crates-io]
 smol = { git = "https://github.com/esp-rs-compat/smol" }
-polling = { git = "https://github.com/esp-rs-compat/polling/" }
-socket2 = { git = "https://github.com/esp-rs-compat/socket2" }
-getrandom = { version = "0.2", git = "https://github.com/esp-rs-compat/getrandom.git" }
-# getrandom1 = { version = "0.1", git = "https://github.com/esp-rs-compat/getrandom.git", package = "getrandom", branch = "0.1" }
-embedded-io = { git = "https://github.com/ivmarkov/embedded-io" }
 # remove once the next version is released
 esp-idf-svc = { version = "0.45.0", git = "https://github.com/esp-rs/esp-idf-svc.git" }
 
@@ -63,4 +58,5 @@ features = ["smol"]
 
 [build-dependencies]
 embuild = "0.31"
+chrono = "0.4.26"
 ##anyhow = "1"

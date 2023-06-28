@@ -63,11 +63,23 @@ use crate::{
 };
 
 const NO_WIFI_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+/// metadata on the build (passed using `build.rs`)
+mod build {
+    pub const GIT_REV: &str = env!("BUILD_GIT_REV");
+    pub const DATETIME_PRETTY: &str = env!("BUILD_DATETIME_PRETTY");
+    pub const DATETIME: &str = env!("BUILD_DATETIME");
+}
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
+
+    println!(
+        "hayselnut build metadata:\n    git revision: {}\n    built on: {}",
+        build::GIT_REV,
+        build::DATETIME_PRETTY
+    );
 
     // handles the reset reason (e.g. does something special if reseting from a panic)
     on_reset();
