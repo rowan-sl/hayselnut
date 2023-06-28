@@ -75,6 +75,7 @@ fn main() {
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
 
+    println!("\n\n {bar} Hayselnut Weather Station {bar} \n\n", bar=std::iter::repeat("-~").take(15).collect::<String>());
     println!(
         "hayselnut build metadata:\n    git revision: {}\n    built on: {}",
         build::GIT_REV,
