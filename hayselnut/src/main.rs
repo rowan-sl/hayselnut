@@ -69,86 +69,30 @@ fn main() {
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
 
-    {
-        // stored in RTC fast memory, not powered off by default even in deep sleep
-        // saftey of access: pinky promise that this code is single threadded
-        #[link_section = ".rtc.data"]
-        static DEEP_SLEEP_CAUSE: SyncUnsafeCell<SleepCause> = SyncUnsafeCell::new(SleepCause::None);
+    // handles the reset reason (e.g. does something special if reseting from a panic)
+    on_reset();
 
-        #[derive(Clone, Copy)]
-        enum SleepCause {
-            None,
-            Panic,
-        }
-
-        use ResetReason::*;
-        match ResetReason::get() {
-            // should be normal reset conditions
-            ExternalPin | PowerOn => {}
-            // could be used for something in the future
-            // see https://github.com/esp-rs/esp-idf-hal/issues/128 for a way of storing info between sleeps
-            //  (storing in RTC fast memory, with `#[link_section=".rtc.data"] static mut VAR`)
-            DeepSleep => {
-                match unsafe { *DEEP_SLEEP_CAUSE.get() } {
-                    SleepCause::None => {} // hmmmmm
-                    SleepCause::Panic => {
-                        // esp docs LIE! (somehow, the chip was woken from deep sleep)
-                        // leave the cause as is
-                        // sleep forever (or is it)
-                        unsafe {
-                            esp_deep_sleep_start();
-                        }
-                    }
-                }
-            }
-            //????
-            Software => {}
-            // report and wait (?) -- caused by some software issue (Sdio - unknown what it is)
-            _reason @ (Watchdog | InterruptWatchdog | TaskWatchdog | Sdio) => {}
-            // tentatively continue as normal
-            Unknown => {}
-            // report and wait for reset
-            Panic => {
-                // if printing fails, avoid panicing again
-                let _ = std::panic::catch_unwind(|| {
-                    eprintln!("Chip restarted due to panic -- halting to avoid repeated panicing");
-                    eprintln!("restart chip to exit halted mode");
-                });
-                unsafe {
-                    // sleep forever
-                    *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
-                    // set the led indicator
-                    let mut indicator =
-                        PinDriver::output(Peripherals::take().unwrap().pins.gpio1).unwrap();
-                    indicator.set_high().unwrap();
-
-                    sleep(Duration::from_secs(10 * 60));
-
-                    esp_sleep_disable_wakeup_source(
-                        esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
-                    );
-                    esp_deep_sleep_start();
-                }
-            }
-            // wait for battery to raise above some level
-            Brownout => {}
-        }
-    }
-
+    println!("setting up logging");
     EspLogger::initialize_default();
     EspLogger.set_target_level("*", log::LevelFilter::Trace);
+    // test log levels
     trace!("[logger] logging level trace");
     debug!("[logger] logging level debug");
     info!("[logger] logging level info");
     warn!("[logger] logging level warn");
     error!("[logger] logging level error");
-    println!("done");
 
     info!("starting");
 
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
-    let _ = pins.gpio1; // used for other things (error flag)
+    // used in wifi and station store
+    let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
+    let nvs_partition = EspDefaultNvsPartition::take()
+        .unwrap_hwerr("could not take default nonvolatile storage partition");
+    // used for other things (error flag in `on_reset`, to light an LED indicating an error)
+    // drop it here to prevent it being used for something else
+    drop(pins.gpio1);
 
     // -- initializing core peripherals --
     // battery monitor
@@ -176,60 +120,21 @@ fn main() {
     // TODO
 
     // -- wifi initialization --
-    let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
-    let nvs_partition = EspDefaultNvsPartition::take()
-        .unwrap_hwerr("could not take default nonvolatile storage partition");
-
-    let (wifi_status_send, wifi_status_recv) =
-        smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
-    let _wifi_event_sub = sysloop
-        .subscribe(move |event: &WifiEvent| {
-            // println!("Wifi event: {event:?}");
-            match event {
-                WifiEvent::StaDisconnected => wifi_status_send
-                    .try_send(wifictl::WifiStatusUpdate::Disconnected)
-                    .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
-                _ => {}
-            }
-        })
-        .unwrap_hwerr("could not subscribe to system envent loop");
-
-    let mut wifi = Wifi::new(
-        EspWifi::new(
-            peripherals.modem,
-            sysloop.clone(),
-            Some(nvs_partition.clone()),
-        )
-        .unwrap_hwerr("failed to create ESP WIFI instance"),
-        sysloop.clone(),
-    );
-    // this doesn't need to be retried, have never seen this fail
-    wifi.start().unwrap_hwerr("failed to start WIFI");
+    let (mut wifi, wifi_status_recv) =
+        setup_wifi(&sysloop, peripherals.modem, nvs_partition.clone());
 
     // -- NVS station information initialization --
     // performed here since it uses random numbers, and `getrandom` on the esp32
     // requires wifi / bluetooth to be enabled for true random numbers
     // - performed before the wifi is connected, because in the future this might store info on known networks
-    let store: Box<dyn StationStore> = Box::new(StationStoreCached::init(nvs_partition.clone()).unwrap_hwerr("error accessing NVS"));
+    let store: Box<dyn StationStore> = Box::new(
+        StationStoreCached::init(nvs_partition.clone()).unwrap_hwerr("error accessing NVS"),
+    );
     info!("Loaded station info: {:#?}", store.read());
 
     // -- here is code that needs to go before the error-retry loops --
     // see [fix_networking] docs -- if not present UdpSocket::bind fails
     wifictl::util::fix_networking().unwrap_hwerr("call to wifictl::util::fix_networking failed");
-
-    // init some persistant information for use later
-    let mut uid_gen = UidGenerator::new();
-    let mut channels = vec![Channel {
-        name: "battery".into(),
-        value: ChannelValue::Float,
-        ty: ChannelType::Periodic,
-    }];
-    // add channels from sensors
-    channels.extend_from_slice(&bme280.channels());
-    // setup timers for when to measure things
-    // todo: not hardcode
-    let config = MeasureConfig::default();
-    let mut timers = MeasureTimers::with_config(&config);
 
     // -- start the executor (before retry loops) --
     smol::block_on(async {
@@ -237,15 +142,27 @@ fn main() {
         // not an error, just make the message stand out
         error!("----     ----    async executor + main loop started    ----    ----\n");
 
+        // -- init some persistant information for use later --
+        let mut uid_gen = UidGenerator::new();
+        let mut channels = vec![Channel {
+            name: "battery".into(),
+            value: ChannelValue::Float,
+            ty: ChannelType::Periodic,
+        }];
+        // add channels from sensors
+        channels.extend_from_slice(&bme280.channels());
+        // setup timers for when to measure things
+        // todo: not hardcode
+        let config = MeasureConfig::default();
+        let mut timers = MeasureTimers::with_config(&config);
+
+        // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
+        let sock = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .unwrap_hwerr("call to UdpSocket bind failed [unkwnown cause]");
+
         'retry_wifi: loop {
-            connect_wifi(
-                &mut wifi,
-                &wifi_status_recv,
-            );
-            // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
-            let sock = UdpSocket::bind("0.0.0.0:0")
-                .await
-                .unwrap_hwerr("call to UdpSocket bind failed [unkwnown cause]");
+            connect_wifi(&mut wifi, &wifi_status_recv);
 
             'retry_server: loop {
                 // re-do DNS in here (not the wifi loop) just in case it changing causing this
@@ -400,22 +317,114 @@ fn main() {
     });
 }
 
+// called once on reset to handle any special reset reasons (e.g. panic)
+fn on_reset() {
+    // stored in RTC fast memory, not powered off by default even in deep sleep
+    // saftey of access: pinky promise that this code is single threadded
+    #[link_section = ".rtc.data"]
+    static DEEP_SLEEP_CAUSE: SyncUnsafeCell<SleepCause> = SyncUnsafeCell::new(SleepCause::None);
+
+    #[derive(Clone, Copy)]
+    enum SleepCause {
+        None,
+        Panic,
+    }
+
+    use ResetReason::*;
+    match ResetReason::get() {
+        // should be normal reset conditions
+        ExternalPin | PowerOn => {}
+        // could be used for something in the future
+        // see https://github.com/esp-rs/esp-idf-hal/issues/128 for a way of storing info between sleeps
+        //  (storing in RTC fast memory, with `#[link_section=".rtc.data"] static mut VAR`)
+        DeepSleep => {
+            match unsafe { *DEEP_SLEEP_CAUSE.get() } {
+                SleepCause::None => {} // hmmmmm
+                SleepCause::Panic => {
+                    // esp docs LIE! (somehow, the chip was woken from deep sleep)
+                    // leave the cause as is
+                    // sleep forever (or is it)
+                    unsafe {
+                        esp_deep_sleep_start();
+                    }
+                }
+            }
+        }
+        //????
+        Software => {}
+        // report and wait (?) -- caused by some software issue (Sdio - unknown what it is)
+        _reason @ (Watchdog | InterruptWatchdog | TaskWatchdog | Sdio) => {}
+        // tentatively continue as normal
+        Unknown => {}
+        // report and wait for reset
+        Panic => {
+            // if printing fails, avoid panicing again
+            let _ = std::panic::catch_unwind(|| {
+                eprintln!("Chip restarted due to panic -- halting to avoid repeated panicing");
+                eprintln!("restart chip to exit halted mode");
+            });
+            unsafe {
+                // sleep forever
+                *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
+                // set the led indicator
+                let mut indicator =
+                    PinDriver::output(Peripherals::take().unwrap().pins.gpio1).unwrap();
+                indicator.set_high().unwrap();
+
+                sleep(Duration::from_secs(10 * 60));
+
+                esp_sleep_disable_wakeup_source(
+                    esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
+                );
+                esp_deep_sleep_start();
+            }
+        }
+        // wait for battery to raise above some level
+        Brownout => {}
+    }
+}
+
+fn setup_wifi<'a, M: esp_idf_hal::modem::WifiModemPeripheral>(
+    sysloop: &'a EspSystemEventLoop,
+    modem: impl esp_idf_hal::peripheral::Peripheral<P = M> + 'a,
+    nvs_partition: EspDefaultNvsPartition,
+) -> (Wifi, smol::channel::Receiver<wifictl::WifiStatusUpdate>) {
+    let (wifi_status_send, wifi_status_recv) =
+        smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
+    let _wifi_event_sub = sysloop
+        .subscribe(move |event: &WifiEvent| {
+            // println!("Wifi event: {event:?}");
+            match event {
+                WifiEvent::StaDisconnected => wifi_status_send
+                    .try_send(wifictl::WifiStatusUpdate::Disconnected)
+                    .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
+                _ => {}
+            }
+        })
+        .unwrap_hwerr("could not subscribe to system envent loop");
+
+    let mut wifi = Wifi::new(
+        EspWifi::new(modem, sysloop.clone(), Some(nvs_partition))
+            .unwrap_hwerr("failed to create ESP WIFI instance"),
+        sysloop.clone(),
+    );
+    // this doesn't need to be retried, have never seen this fail
+    wifi.start().unwrap_hwerr("failed to start WIFI");
+    (wifi, wifi_status_recv)
+}
+
 fn connect_wifi(
     wifi: &mut Wifi,
     wifi_status_recv: &smol::channel::Receiver<wifictl::WifiStatusUpdate>,
 ) {
     info!("Connecting to WIFI");
     // clear the disconnect queue
-    while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv()
-    {
-    }
+    while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv() {}
     // -- connecting to wifi --
     let before = Instant::now();
     // -- finding a known network --
     let chosen = loop {
-        if let Some(chosen) =
-            wifi.scan().unwrap_hwerr("error scaning for WIFI networks")
-        {
+        if let Some(chosen) = wifi.scan().unwrap_hwerr("error scaning for WIFI networks") {
             break chosen;
         } else {
             error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
@@ -427,13 +436,9 @@ fn connect_wifi(
         for i in 0..max {
             if let Err(e) = wifi.connect(chosen.clone()) {
                 match e {
-                    wifictl::WifiError::Esp(e) => {
-                        Err(e).unwrap_hwerr("failed to connect to WIFI")
-                    }
+                    wifictl::WifiError::Esp(e) => Err(e).unwrap_hwerr("failed to connect to WIFI"),
                     wifictl::WifiError::TimedOut => {
-                        warn!(
-                            "Failed to connect to WIFI (attempt {i}/{max} timed out), retrying"
-                        );
+                        warn!("Failed to connect to WIFI (attempt {i}/{max} timed out), retrying");
                         sleep(Duration::from_millis(1000));
                         if let Ok(wifictl::WifiStatusUpdate::Disconnected) =
                             wifi_status_recv.try_recv()

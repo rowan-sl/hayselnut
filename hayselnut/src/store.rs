@@ -24,8 +24,7 @@ pub struct StationStoreCached<T: NvsPartitionId> {
 
 impl<T: NvsPartitionId> StationStoreCached<T> {
     pub fn init(partition: EspNvsPartition<T>) -> Result<Self, EspError> {
-        let mut store =
-            StationStoreAccess::new(partition)?;
+        let mut store = StationStoreAccess::new(partition)?;
         let station_info = if !store.exists()? {
             warn!("Performing first-time initialization of station information");
             let default = StationStoreData {
