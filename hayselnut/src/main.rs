@@ -255,6 +255,10 @@ fn main() {
     }];
     // add channels from sensors
     channels.extend_from_slice(&bme280.channels());
+    // setup timers for when to measure things
+    // todo: not hardcode
+    let config = MeasureConfig::default();
+    let mut timers = MeasureTimers::with_config(&config);
 
     // -- start the executor (before retry loops) --
     smol::block_on(async {
@@ -377,58 +381,65 @@ fn main() {
                     };
                 }
 
+                macro_rules! send {
+                    ($packet:expr) => {
+                        handle_netres!(
+                            mvp_send(
+                                &sock,
+                                &rmp_serde::to_vec_named(&$packet)
+                                    .unwrap_hwerr("failed to serialize data to send"),
+                                &mut uid_gen,
+                            )
+                            .await
+                        )
+                    };
+                }
+
+                macro_rules! recv {
+                    ($kind:path) => {
+                        match rmp_serde::from_slice(&loop {
+                            match handle_netres!(mvp_recv(&sock, &mut uid_gen).await) {
+                                Some(packet) => break packet,
+                                None => {
+                                    warn!("receive timed out (got empty response, retrying in 5s)");
+                                    //TODO: have some sort of failure mode that does not loop forever
+                                    Timer::after(Duration::from_secs(5)).await;
+                                }
+                            }
+                        }) {
+                            Ok($kind(map)) => map,
+                            Ok(other) => {
+                                error!("The server is misbehaving! (expected {}, received {other:?})", stringify!($kind));
+                                error!("this would be caused by broken server code, or a malicious actor.");
+                                error!("we cant do much about this, exiting");
+                                //FIXME: mabey try again in a while?
+                                panic!()
+                            }
+                            Err(e) => {
+                                error!("The server is misbehaving! (failed to deserialize a packet)");
+                                error!("The error is: {e:?}");
+                                error!("this would be caused by broken server code, or a malicious actor.");
+                                error!("we cant do much about this, exiting");
+                                // see above
+                                panic!();
+                            }
+                        }
+                    }
+                }
+
                 // send init packet
                 info!("sending init info");
-                handle_netres!(
-                    mvp_send(
-                        &sock,
-                        &rmp_serde::to_vec_named(&PacketKind::Connect(squirrel::api::OnConnect {
-                            station_id: station_info.station_uuid,
-                            channels: channels.clone(),
-                        }))
-                        .unwrap(),
-                        &mut uid_gen,
-                    )
-                    .await
-                );
+                send!(&PacketKind::Connect(squirrel::api::OnConnect {
+                    station_id: station_info.station_uuid,
+                    channels: channels.clone(),
+                }));
                 info!("successfully communicated with the server - it is running");
 
                 info!("requesting channel mappings");
-                let recv = loop {
-                    match handle_netres!(mvp_recv(&sock, &mut uid_gen).await) {
-                        Some(p) => break p,
-                        None => {
-                            // we are connected to the server, it just does not have any packets for us
-                            warn!("retry receive in 5s (got empty response = no packet ready yet)");
-                            Timer::after(Duration::from_secs(5)).await;
-                        }
-                    }
-                };
-
-                let mappings = match rmp_serde::from_slice(&recv) {
-                    Ok(PacketKind::ChannelMappings(map)) => map,
-                    Ok(other) => {
-                        error!("The server is misbehaving! (expected ChannelMappings, received {other:?})");
-                        error!("this would be caused by broken server code, or a malicious actor.");
-                        error!("we cant do much about this, exiting");
-                        //FIXME: mabey try again in a while?
-                        panic!()
-                    }
-                    Err(e) => {
-                        error!("The server is misbehaving! (failed to deserialize a packet)");
-                        error!("The error is: {e:?}");
-                        error!("this would be caused by broken server code, or a malicious actor.");
-                        error!("we cant do much about this, exiting");
-                        // see above
-                        panic!();
-                    }
-                };
+                let mappings = recv!(PacketKind::ChannelMappings);
 
                 info!("channel mappings: {mappings:#?}");
 
-                // todo: not hardcode
-                let config = MeasureConfig::default();
-                let mut timers = MeasureTimers::with_config(&config);
                 loop {
                     select_biased! {
                         status = wifi_status_recv.recv().fuse() => {
@@ -453,7 +464,7 @@ fn main() {
 
                             let battery_voltage = batt_mon.read().unwrap_hwerr("failed to read battery voltage");
 
-                            let to_send = PacketKind::Data(SomeData {
+                            send!(PacketKind::Data(SomeData {
                                 per_channel: {
                                     let mut map = HashMap::<ChannelID, ChannelData>::new();
                                     let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
@@ -461,11 +472,7 @@ fn main() {
                                     bme_readings.into_iter().for_each(|(k, v)| { map.insert(k, v); });
                                     map
                                 }
-                            });
-
-                            let to_send_raw = rmp_serde::to_vec_named(&to_send).unwrap_hwerr("failed to serialize data being sent");
-
-                            handle_netres!(mvp_send(&sock, &to_send_raw, &mut uid_gen).await);
+                            }));
                         }
                     }
                 }
