@@ -19,7 +19,7 @@ use squirrel::{
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{
     fs::{self, OpenOptions},
-    io::{self, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{UdpSocket, UnixListener},
     select,
     signal::ctrl_c,
@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
                                                     })
                                                     .collect::<HashMap<ChannelName, ChannelID>>();
                                                 if let Some(_) = stations.get_info(&data.station_id) {
-                                                    info!("connecting to known station [{}] at IP {:?}", data.station_id, ip);
+                                                    info!("connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}", data.station_id, ip, data.station_build_rev, data.station_build_date);
                                                     stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
                                                 } else {
                                                     info!("connected to new station [{}] at IP {:?}", data.station_id, ip);

@@ -21,6 +21,9 @@ pub enum PacketKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnConnect {
     pub station_id: StationID,
+    pub station_build_rev: String,
+    // chrono rfc3339 timestamp
+    pub station_build_date: String,
     pub channels: Vec<Channel>,
 }
 
