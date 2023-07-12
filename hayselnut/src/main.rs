@@ -106,9 +106,6 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
     let nvs_partition = EspDefaultNvsPartition::take()
         .unwrap_hwerr("could not take default nonvolatile storage partition");
-    // used for other things (error flag in `on_reset`, to light an LED indicating an error)
-    // drop it here to prevent it being used for something else
-    drop(pins.gpio1);
 
     // -- initializing core peripherals --
     // battery monitor
@@ -118,8 +115,8 @@ fn main() {
     // NOTE: slow baudrate (for lightning sensor compat) will make the display slow
     let i2c_driver = i2c::I2cDriver::new(
         peripherals.i2c0,
-        pins.gpio4,
-        pins.gpio5,
+        pins.gpio1,
+        pins.gpio3,
         &i2c::config::Config::new().baudrate(100.kHz().into()),
     )
     .unwrap_hwerr("failed to initialize battery monitor");
@@ -129,10 +126,10 @@ fn main() {
     // -- initializing peripherals --
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
+    warn!("connecting to BME sensor - if it is disconnected this will hang here");
     let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
 
     // lightning sensor
-    // IRQ is on pin 6
     // TODO
 
     // -- wifi initialization --
@@ -384,10 +381,6 @@ fn on_reset() {
             unsafe {
                 // sleep forever
                 *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
-                // set the led indicator
-                let mut indicator =
-                    PinDriver::output(Peripherals::take().unwrap().pins.gpio1).unwrap();
-                indicator.set_high().unwrap();
 
                 sleep(Duration::from_secs(10 * 60));
 

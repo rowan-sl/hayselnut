@@ -2,9 +2,9 @@
 let
   nixpkgs-esp-dev = builtins.fetchGit {
     url = "https://github.com/mirrexagon/nixpkgs-esp-dev.git";
-
     # Optionally pin to a specific commit of `nixpkgs-esp-dev`.
-    # rev = "<commit hash>";
+    # using a more up to date version fails with /nix/store/esp-something-something is not a git repository
+    rev = "a508ca95b27141185b3b9f466248fdd210bc1668";
   };
 
   pkgs = import <nixpkgs> { overlays = [ (import "${nixpkgs-esp-dev}/overlay.nix") ]; };
