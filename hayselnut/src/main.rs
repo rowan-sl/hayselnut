@@ -129,8 +129,8 @@ fn main() {
     // -- initializing peripherals --
     // lightning
     // CS=7 MISO(MI)=6 MOSI(DA)=5 CLK=10 IRQ=4
-    wifictl::util::fix_networking().unwrap_hwerr("e");
-    smol::block_on(async {
+    //TODO: intergrate this with the peripheral system for error handleing
+    let (mut lightning_sensor, lightning_setup_interrupt) = {
         let (cs, miso, mosi, clk, irq) = (
             PinDriver::output(pins.gpio7).unwrap(),
             PinDriver::input(pins.gpio6).unwrap(),
@@ -141,45 +141,40 @@ fn main() {
         let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
         sensor.perform_initial_configuration().unwrap();
         sensor.configure_defaults().unwrap();
-        sensor
-            .configure_sensor_placing(&lightning::repr::SensorLocation::Indoor)
-            .unwrap();
+        let mode = &lightning::repr::SensorLocation::Indoor;
+        info!("the lightning sensor currently set to {mode:?} location mode");
+        sensor.configure_sensor_placing(mode).unwrap();
         // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
-        sensor.configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false));
-        sensor.configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0));
-        sensor.configure_minimum_lightning_threshold(
-            &lightning::repr::MinimumLightningThreshold::One,
-        );
-        sensor.configure_signal_verification_threshold(
-            &lightning::repr::SignalVerificationThreshold(0),
-        );
-        sensor.configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0));
-        let flag = Flag::new();
-        let flag2 = flag.clone();
-        unsafe {
+        warn!("the lightning sensor currently has all of its noise rejection disabled for testing. this will yield many false positives");
+        sensor
+            .configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false))
+            .unwrap();
+        sensor
+            .configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0))
+            .unwrap();
+        sensor
+            .configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One)
+            .unwrap();
+        sensor
+            .configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(
+                0,
+            ))
+            .unwrap();
+        sensor
+            .configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0))
+            .unwrap();
+        let setup_interrupt = move |flag: Flag| unsafe {
             PinDriver::input(irq)
                 .unwrap()
                 .subscribe(move || {
                     // Saftey (this itself is safe, but its executing in an ISR context)
                     // this is only doing atomic memory accesses, which should be fine :shrug:
-                    flag2.signal();
+                    flag.signal();
                 })
                 .unwrap_hwerr("failed to set interrupt");
-        }
-        println!("waiting");
-        println!("event: {:#?}", sensor.get_latest_event_and_reset().unwrap());
-        loop {
-            Timer::interval(Duration::from_secs(1)).await;
-            // flag.clone().await;
-            // flag.reset();
-            println!(
-                "event occured: {:#?}",
-                sensor.get_latest_event_and_reset().unwrap()
-            );
-        }
-    });
-
-    return;
+        };
+        (sensor, setup_interrupt)
+    };
 
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
@@ -208,6 +203,10 @@ fn main() {
         println!();
         // not an error, just make the message stand out
         error!("----     ----    async executor + main loop started    ----    ----\n");
+
+        info!("setting lightning sensor interrupt");
+        let lightning_flag = Flag::new();
+        lightning_setup_interrupt(lightning_flag.clone());
 
         // -- init some persistant information for use later --
         let mut uid_gen = UidGenerator::new();
@@ -354,6 +353,12 @@ fn main() {
                                     continue 'retry_wifi;
                                 }
                             }
+                        }
+                        _ = lightning_flag.clone().fuse() => {
+                            lightning_flag.reset();
+                            Timer::interval(lightning::IRQ_TRIGGER_TO_READY_DELAY).await;
+                            let event = lightning_sensor.get_latest_event_and_reset().unwrap();
+                            println!("received a lightning event! {:#?}", event);
                         }
                         _ = timers.read_timer.next().fuse() => {
                             info!("reading sensors and sending");

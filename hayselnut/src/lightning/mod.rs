@@ -16,7 +16,7 @@ use repr::{
 use self::repr::SpikeRejectionSetting;
 
 const CLOCK_GENERATION_DELAY: Duration = Duration::from_millis(2);
-const IRQ_TRIGGER_TO_READY_DELAY: Duration = Duration::from_millis(2);
+pub const IRQ_TRIGGER_TO_READY_DELAY: Duration = Duration::from_millis(2);
 const LIGHTNING_CALCULATION_DELAY: Duration = Duration::from_millis(2);
 // const DISTURBER_DEACTIVATION_PERIOD: Duration = Duration::from_millis(1500);
 // const APPROXIMATE_MINIMUM_LIGHTNING_INTERVAL: Duration = Duration::from_secs(1);
