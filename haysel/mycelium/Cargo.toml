@@ -13,3 +13,4 @@ thiserror = "1.0"
 
 [dependencies.squirrel]
 path = "../squirrel"
+features = ["server-utils"]
