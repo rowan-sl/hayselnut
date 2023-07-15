@@ -215,7 +215,7 @@ fn main() {
                 name: "battery".into(),
                 value: ChannelValue::Float,
                 ty: ChannelType::Periodic,
-            }
+            },
             Channel {
                 name: "lightning".into(),
                 value: ChannelValue::Event(HashMap::from([
@@ -223,9 +223,10 @@ fn main() {
                     ("disturbance_detected".into(), vec![]),
                     ("noise_level_too_high".into(), vec![]),
                     ("invalid_interrupt".into(), vec![]),
-                    ("lightning".into(), vec!["distance".into()])
-                ]))
-            }
+                    ("lightning".into(), vec!["distance".into()]),
+                ])),
+                ty: ChannelType::Triggered,
+            },
         ];
         // add channels from sensors
         channels.extend_from_slice(&bme280.channels());
@@ -374,7 +375,7 @@ fn main() {
                             send!(PacketKind::Data(SomeData {
                                 per_channel: {
                                     HashMap::<ChannelID, ChannelData>::from([(
-                                        mappings.map.get(&ChannelName::from("lightning")).unwrap(),
+                                        *mappings.map.get(&ChannelName::from("lightning")).unwrap(),
                                         ChannelData::Event {
                                             sub: match event {
                                                 lightning::Event::DistanceEstimationChanged => "distance_estimation_changed",
