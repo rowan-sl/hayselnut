@@ -66,7 +66,7 @@ pub struct LatestReadings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IPCMsg {
-    kind: IPCMsgKind,
+    pub kind: IPCMsgKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
