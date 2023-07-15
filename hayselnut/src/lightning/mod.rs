@@ -69,7 +69,10 @@ pub enum Event {
     DistanceEstimationChanged,
     DisturbanceDetected,
     NoiseLevelTooHigh,
-    Lightning { distance: DistanceEstimate },
+    /// NOTE: this is the *estimated distance to the head of the storm*, not the distance to a lightning strike
+    Lightning {
+        distance: DistanceEstimate,
+    },
     InvalidInt(u8),
 }
 

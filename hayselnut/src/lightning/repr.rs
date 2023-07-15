@@ -282,7 +282,10 @@ impl Into<u8> for FrequencyDivisionRatio {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DistanceEstimate {
     OutOfRange,
-    InRange(u8),
+    InRange(
+        // distance to the estimated HEAD OF THE STORM in km (not the strike)
+        u8,
+    ),
     Overhead,
 }
 
@@ -290,8 +293,22 @@ impl From<u8> for DistanceEstimate {
     fn from(byte: u8) -> Self {
         match byte {
             0b111111 => Self::OutOfRange,
+            0b101000 => Self::InRange(40),
+            0b100101 => Self::InRange(37),
+            0b100010 => Self::InRange(34),
+            0b011111 => Self::InRange(31),
+            0b011011 => Self::InRange(27),
+            0b011000 => Self::InRange(24),
+            0b010100 => Self::InRange(20),
+            0b010001 => Self::InRange(17),
+            0b001110 => Self::InRange(14),
+            0b001100 => Self::InRange(12),
+            0b001010 => Self::InRange(10),
+            0b001000 => Self::InRange(8),
+            0b000110 => Self::InRange(6),
+            0b000101 => Self::InRange(5),
             0b000001 => Self::Overhead,
-            dist => Self::InRange(dist),
+            _ => panic!("invalid distance estimate received"),
         }
     }
 }
