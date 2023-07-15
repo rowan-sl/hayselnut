@@ -10,6 +10,7 @@ pub mod lightning;
 pub mod periph;
 pub mod store;
 pub mod wifictl;
+pub mod flag;
 
 use std::{
     cell::SyncUnsafeCell,
@@ -21,11 +22,10 @@ use std::{
 
 use embedded_svc::wifi::Wifi as _;
 use esp_idf_hal::{
-    gpio::PinDriver,
     i2c::{self, I2cDriver},
     peripherals::Peripherals,
     reset::ResetReason,
-    units::FromValueType,
+    units::FromValueType, gpio::PinDriver,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -59,7 +59,7 @@ use store::{StationStore, StationStoreCached};
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
-    wifictl::Wifi,
+    wifictl::Wifi, lightning::LightningSensor, flag::Flag,
 };
 
 const NO_WIFI_RETRY_INTERVAL: Duration = Duration::from_secs(60);
@@ -124,13 +124,60 @@ fn main() {
         .expect("[sanity check] can only create one shared bus instance");
 
     // -- initializing peripherals --
+    // lightning
+    // CS=7 MISO(MI)=6 MOSI(DA)=5 CLK=10 IRQ=4
+    wifictl::util::fix_networking().unwrap_hwerr("e");
+    smol::block_on(async {
+        let (
+            cs,
+            miso,
+            mosi,
+            clk,
+            irq,
+        ) = (
+            PinDriver::output(pins.gpio7).unwrap(),
+            PinDriver::input(pins.gpio6).unwrap(),
+            PinDriver::output(pins.gpio5).unwrap(),
+            PinDriver::output(pins.gpio10).unwrap(),
+            pins.gpio4,
+        );
+        let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
+        sensor.perform_initial_configuration().unwrap();
+        sensor.configure_defaults().unwrap();
+        sensor.configure_sensor_placing(&lightning::repr::SensorLocation::Indoor).unwrap();
+        // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
+        sensor.configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false));
+        sensor.configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0));
+        sensor.configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One);
+        sensor.configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(0));
+        sensor.configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0));
+        let flag = Flag::new();
+        let flag2 = flag.clone();
+        unsafe {
+            PinDriver::input(irq)
+                .unwrap()
+                .subscribe(move || {
+                    // Saftey (this itself is safe, but its executing in an ISR context)
+                    // this is only doing atomic memory accesses, which should be fine :shrug:
+                    flag2.signal();
+                }).unwrap_hwerr("failed to set interrupt");
+        }
+        println!("waiting");
+        println!("event: {:#?}", sensor.get_latest_event_and_reset().unwrap());
+        loop {
+            Timer::interval(Duration::from_secs(1)).await;
+            // flag.clone().await;
+            // flag.reset();
+            println!("event occured: {:#?}", sensor.get_latest_event_and_reset().unwrap());
+        }
+    });
+
+    return;
+
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     warn!("connecting to BME sensor - if it is disconnected this will hang here");
     let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
-
-    // lightning sensor
-    // TODO
 
     // -- wifi initialization --
     let (mut wifi, wifi_status_recv) =

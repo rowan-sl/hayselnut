@@ -13,6 +13,8 @@ use repr::{
     PresetDefaultCmd, SensorLocation, SignalVerificationThreshold,
 };
 
+use self::repr::SpikeRejectionSetting;
+
 const CLOCK_GENERATION_DELAY: Duration = Duration::from_millis(2);
 const IRQ_TRIGGER_TO_READY_DELAY: Duration = Duration::from_millis(2);
 const LIGHTNING_CALCULATION_DELAY: Duration = Duration::from_millis(2);
@@ -311,6 +313,14 @@ where
         ignore_disturbances: &MaskDisturberEvent,
     ) -> Result<()> {
         self.write_reg(registers::MaskDisturber, *ignore_disturbances)?;
+        Ok(())
+    }
+
+    pub fn configure_spike_rejection(
+        &mut self,
+        spike_rejection: &SpikeRejectionSetting,
+    ) -> Result<()> {
+        self.write_reg(registers::SpikeRejection, *spike_rejection)?;
         Ok(())
     }
 }
