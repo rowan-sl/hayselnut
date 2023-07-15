@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use serde::{de::DeserializeOwned, Serialize};
 pub use squirrel;
 pub use squirrel::api::station;
-use squirrel::api::station::{identity::{StationID, KnownStations, StationInfo}, capabilities::{ChannelID, ChannelData, KnownChannels}};
+use squirrel::api::station::{
+    capabilities::{ChannelData, ChannelID, KnownChannels},
+    identity::{KnownStations, StationID, StationInfo},
+};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Error)]
@@ -70,10 +73,10 @@ pub struct IPCMsg {
 pub enum IPCMsgKind {
     Info {
         stations: KnownStations,
-        channels: KnownChannels
+        channels: KnownChannels,
     },
     FreshHotData {
         from: StationID,
-        by_channel: HashMap<ChannelID, ChannelData>
-    }
+        by_channel: HashMap<ChannelID, ChannelData>,
+    },
 }

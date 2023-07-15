@@ -10,7 +10,12 @@ pub enum ChannelValue {
     Float,
     /// Event.
     /// events can have multiple sub-events, which can each have some map of data
-    Event(HashMap<String /* sub-event */, Vec<String /* all possible keys for contained data of this sub-event */>>)
+    Event(
+        HashMap<
+            String, /* sub-event */
+            Vec<String /* all possible keys for contained data of this sub-event */>,
+        >,
+    ),
 }
 
 // not used in describing a channel, but rather in conveying the data of that channel
