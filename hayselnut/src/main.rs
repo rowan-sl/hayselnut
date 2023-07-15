@@ -141,28 +141,28 @@ fn main() {
         let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
         sensor.perform_initial_configuration().unwrap();
         sensor.configure_defaults().unwrap();
-        let mode = &lightning::repr::SensorLocation::Indoor;
+        let mode = &lightning::repr::SensorLocation::Outdoor;
         info!("the lightning sensor currently set to {mode:?} location mode");
         sensor.configure_sensor_placing(mode).unwrap();
         // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
         warn!("the lightning sensor currently has all of its noise rejection disabled for testing. this will yield many false positives");
-        sensor
-            .configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false))
-            .unwrap();
-        sensor
-            .configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0))
-            .unwrap();
-        sensor
-            .configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One)
-            .unwrap();
-        sensor
-            .configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(
-                0,
-            ))
-            .unwrap();
-        sensor
-            .configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0))
-            .unwrap();
+        // sensor
+        //     .configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false))
+        //     .unwrap();
+        // sensor
+        //     .configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0))
+        //     .unwrap();
+        // sensor
+        //     .configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One)
+        //     .unwrap();
+        // sensor
+        //     .configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(
+        //         0,
+        //     ))
+        //     .unwrap();
+        // sensor
+        //     .configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0))
+        //     .unwrap();
         let setup_interrupt = move |flag: Flag| unsafe {
             PinDriver::input(irq)
                 .unwrap()
