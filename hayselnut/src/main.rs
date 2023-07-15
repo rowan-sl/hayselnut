@@ -210,11 +210,23 @@ fn main() {
 
         // -- init some persistant information for use later --
         let mut uid_gen = UidGenerator::new();
-        let mut channels = vec![Channel {
-            name: "battery".into(),
-            value: ChannelValue::Float,
-            ty: ChannelType::Periodic,
-        }];
+        let mut channels = vec![
+            Channel {
+                name: "battery".into(),
+                value: ChannelValue::Float,
+                ty: ChannelType::Periodic,
+            }
+            Channel {
+                name: "lightning".into(),
+                value: ChannelValue::Event(HashMap::from([
+                    ("distance_estimation_changed".into(), vec![]),
+                    ("disturbance_detected".into(), vec![]),
+                    ("noise_level_too_high".into(), vec![]),
+                    ("invalid_interrupt".into(), vec![]),
+                    ("lightning".into(), vec!["distance".into()])
+                ]))
+            }
+        ];
         // add channels from sensors
         channels.extend_from_slice(&bme280.channels());
         // setup timers for when to measure things
@@ -359,6 +371,33 @@ fn main() {
                             Timer::interval(lightning::IRQ_TRIGGER_TO_READY_DELAY).await;
                             let event = lightning_sensor.get_latest_event_and_reset().unwrap();
                             println!("received a lightning event! {:#?}", event);
+                            send!(PacketKind::Data(SomeData {
+                                per_channel: {
+                                    HashMap::<ChannelID, ChannelData>::from([(
+                                        mappings.map.get(&ChannelName::from("lightning")).unwrap(),
+                                        ChannelData::Event {
+                                            sub: match event {
+                                                lightning::Event::DistanceEstimationChanged => "distance_estimation_changed",
+                                                lightning::Event::DisturbanceDetected => "disturbance_detected",
+                                                lightning::Event::NoiseLevelTooHigh => "noise_level_too_high",
+                                                lightning::Event::InvalidInt(..) => "invalid_interrupt",
+                                                lightning::Event::Lightning { .. } => "lightning",
+                                            }.to_string(),
+                                            data: match event {
+                                                lightning::Event::Lightning { distance } => HashMap::from([(
+                                                    "distance".to_string(),
+                                                    match distance {
+                                                        lightning::repr::DistanceEstimate::OutOfRange => f32::INFINITY,
+                                                        lightning::repr::DistanceEstimate::InRange(d) => d as f32,
+                                                        lightning::repr::DistanceEstimate::Overhead => 0f32
+                                                    }
+                                                )]),
+                                                _ => HashMap::new()
+                                            }
+                                        }
+                                    )])
+                                }
+                            }))
                         }
                         _ = timers.read_timer.next().fuse() => {
                             info!("reading sensors and sending");
