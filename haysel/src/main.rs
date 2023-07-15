@@ -242,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
                                                         if let "battery" | "temperature" | "humidity" | "pressure" = ch.name.as_ref().as_str() {
                                                             temp_log.write_all(format!("[{}]:{}={}", chrono::Local::now().to_rfc3339(), ch.name.as_ref(), match dat {
                                                                 ChannelData::Float(f) => f.to_string(),
-                                                                ChannelData::Event => "null".to_string(),
+                                                                ChannelData::Event {..} => "null".to_string(),
                                                             }).as_bytes()).await?;
                                                         }
                                                     } else {
@@ -251,12 +251,13 @@ async fn main() -> anyhow::Result<()> {
                                                     }
                                                 }
                                                 info!("Received data:\n{buf}");
-                                                let chv = |name: &str| data.per_channel.get(&channels.id_by_name(&name.to_string().into()).unwrap()).unwrap();
+                                                let chv = |name: &str| {
+                                                    let ChannelData::Float(f) = data.per_channel.get(&channels.id_by_name(&name.to_string().into()).unwrap()).unwrap() else { panic!() }; *f };
                                                 ipc_task_tx.send_async(IPCCtrlMsg::Readings(mycelium::LatestReadings {
-                                                    temperature: chv("temperature").unwrap_f32(),
-                                                    humidity: chv("humidity").unwrap_f32(),
-                                                    pressure: chv("pressure").unwrap_f32(),
-                                                    battery: chv("battery").unwrap_f32(),
+                                                    temperature: chv("temperature"),
+                                                    humidity: chv("humidity"),
+                                                    pressure: chv("pressure"),
+                                                    battery: chv("battery"),
                                                 })).await?;
                                             }
                                             _ => warn!("received unexpected packet, ignoring"),

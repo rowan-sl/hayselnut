@@ -9,26 +9,19 @@ use uuid::Uuid;
 pub enum ChannelValue {
     /// f32 value
     Float,
-    /// Event with no data
-    Event,
-    // in the future this might include something for custom json events?
-    // this could be used for the lightning sensor or similar
+    /// Event.
+    /// events can have multiple sub-events, which can each have some map of data
+    Event(HashMap<String /* sub-event */, Vec<String /* all possible keys for contained data of this sub-event */>>)
 }
 
 // not used in describing a channel, but rather in conveying the data of that channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChannelData {
     Float(f32),
-    Event,
-}
-
-impl ChannelData {
-    pub fn unwrap_f32(&self) -> f32 {
-        match self {
-            Self::Float(f) => *f,
-            s => panic!("Expected Float(..), found {s:?}"),
-        }
-    }
+    Event {
+        sub: String,
+        data: HashMap<String, f32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
