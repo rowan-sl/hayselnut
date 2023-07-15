@@ -223,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
                                                     info!("connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}", data.station_id, ip, data.station_build_rev, data.station_build_date);
                                                     stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
                                                 } else {
-                                                    info!("connected to new station [{}] at IP {:?}", data.station_id, ip);
+                                                    info!("connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}", data.station_id, ip, data.station_build_rev, data.station_build_date);
                                                     stations.insert_station(data.station_id, StationInfo {
                                                         supports_channels: name_to_id_mappings.values().copied().collect(),
                                                     }).unwrap();
