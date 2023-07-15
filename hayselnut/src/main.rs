@@ -6,11 +6,11 @@ extern crate log;
 
 pub mod conf;
 pub mod error;
+pub mod flag;
 pub mod lightning;
 pub mod periph;
 pub mod store;
 pub mod wifictl;
-pub mod flag;
 
 use std::{
     cell::SyncUnsafeCell,
@@ -22,10 +22,11 @@ use std::{
 
 use embedded_svc::wifi::Wifi as _;
 use esp_idf_hal::{
+    gpio::PinDriver,
     i2c::{self, I2cDriver},
     peripherals::Peripherals,
     reset::ResetReason,
-    units::FromValueType, gpio::PinDriver,
+    units::FromValueType,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -58,8 +59,10 @@ use store::{StationStore, StationStoreCached};
 
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
+    flag::Flag,
+    lightning::LightningSensor,
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
-    wifictl::Wifi, lightning::LightningSensor, flag::Flag,
+    wifictl::Wifi,
 };
 
 const NO_WIFI_RETRY_INTERVAL: Duration = Duration::from_secs(60);
@@ -128,13 +131,7 @@ fn main() {
     // CS=7 MISO(MI)=6 MOSI(DA)=5 CLK=10 IRQ=4
     wifictl::util::fix_networking().unwrap_hwerr("e");
     smol::block_on(async {
-        let (
-            cs,
-            miso,
-            mosi,
-            clk,
-            irq,
-        ) = (
+        let (cs, miso, mosi, clk, irq) = (
             PinDriver::output(pins.gpio7).unwrap(),
             PinDriver::input(pins.gpio6).unwrap(),
             PinDriver::output(pins.gpio5).unwrap(),
@@ -144,12 +141,18 @@ fn main() {
         let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
         sensor.perform_initial_configuration().unwrap();
         sensor.configure_defaults().unwrap();
-        sensor.configure_sensor_placing(&lightning::repr::SensorLocation::Indoor).unwrap();
+        sensor
+            .configure_sensor_placing(&lightning::repr::SensorLocation::Indoor)
+            .unwrap();
         // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
         sensor.configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false));
         sensor.configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0));
-        sensor.configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One);
-        sensor.configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(0));
+        sensor.configure_minimum_lightning_threshold(
+            &lightning::repr::MinimumLightningThreshold::One,
+        );
+        sensor.configure_signal_verification_threshold(
+            &lightning::repr::SignalVerificationThreshold(0),
+        );
         sensor.configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0));
         let flag = Flag::new();
         let flag2 = flag.clone();
@@ -160,7 +163,8 @@ fn main() {
                     // Saftey (this itself is safe, but its executing in an ISR context)
                     // this is only doing atomic memory accesses, which should be fine :shrug:
                     flag2.signal();
-                }).unwrap_hwerr("failed to set interrupt");
+                })
+                .unwrap_hwerr("failed to set interrupt");
         }
         println!("waiting");
         println!("event: {:#?}", sensor.get_latest_event_and_reset().unwrap());
@@ -168,7 +172,10 @@ fn main() {
             Timer::interval(Duration::from_secs(1)).await;
             // flag.clone().await;
             // flag.reset();
-            println!("event occured: {:#?}", sensor.get_latest_event_and_reset().unwrap());
+            println!(
+                "event occured: {:#?}",
+                sensor.get_latest_event_and_reset().unwrap()
+            );
         }
     });
 

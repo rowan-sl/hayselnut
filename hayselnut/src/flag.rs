@@ -1,9 +1,9 @@
 use futures::future::Future;
-use futures::task::{Context, Poll, AtomicWaker};
-use std::sync::Arc;
+use futures::task::{AtomicWaker, Context, Poll};
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::pin::Pin;
+use std::sync::Arc;
 
 struct Inner {
     waker: AtomicWaker,
