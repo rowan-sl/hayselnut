@@ -57,6 +57,7 @@ impl<T: NvsPartitionId> StationStore for StationStoreCached<T> {
 
 // trait objects cant use generics, you say?
 impl dyn StationStore {
+    #[allow(unused)]
     fn modify(&mut self, f: impl FnOnce(&mut StationStoreData)) -> Result<(), EspError> {
         let mut v = *self.read(); // copy
         f(&mut v);

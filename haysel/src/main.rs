@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCCtrlMsg>();
         let main_task = spawn(async move {
             async move {
-            // file stuff 
+            // file stuff
                 let mut temp_log = OpenOptions::new()
                     .write(true)
                     .append(true)
@@ -220,10 +220,28 @@ async fn main() -> anyhow::Result<()> {
                                                     })
                                                     .collect::<HashMap<ChannelName, ChannelID>>();
                                                 if let Some(_) = stations.get_info(&data.station_id) {
-                                                    info!("connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}", data.station_id, ip, data.station_build_rev, data.station_build_date);
-                                                    stations.map_info(&data.station_id, |_id, info| info.supports_channels = name_to_id_mappings.values().copied().collect());
+                                                    info!(
+                                                        "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                                                        data.station_id,
+                                                        ip,
+                                                        data.station_build_rev,
+                                                        data.station_build_date
+                                                    );
+                                                    stations.map_info(
+                                                        &data.station_id,
+                                                        |_id, info| info.supports_channels = name_to_id_mappings
+                                                            .values()
+                                                            .copied()
+                                                            .collect()
+                                                    );
                                                 } else {
-                                                    info!("connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}", data.station_id, ip, data.station_build_rev, data.station_build_date);
+                                                    info!(
+                                                        "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                                                        data.station_id,
+                                                        ip,
+                                                        data.station_build_rev,
+                                                        data.station_build_date
+                                                    );
                                                     stations.insert_station(data.station_id, StationInfo {
                                                         supports_channels: name_to_id_mappings.values().copied().collect(),
                                                     }).unwrap();
@@ -238,12 +256,20 @@ async fn main() -> anyhow::Result<()> {
                                                 for (chid, dat) in data.per_channel.clone() {
                                                     if let Some(ch) = channels.get_channel(&chid) {
                                                         //TODO: verify that types match
-                                                        let _ = writeln!(buf, "Channel {chid} ({}) => {:?}", <ChannelName as Into<String>>::into(ch.name.clone()), dat);
+                                                        let _ = writeln!(
+                                                            buf, "Channel {chid} ({}) => {:?}",
+                                                            <ChannelName as Into<String>>::into(ch.name.clone()), dat
+                                                        );
                                                         if let "battery" | "temperature" | "humidity" | "pressure" = ch.name.as_ref().as_str() {
-                                                            temp_log.write_all(format!("[{}]:{}={}", chrono::Local::now().to_rfc3339(), ch.name.as_ref(), match dat {
-                                                                ChannelData::Float(f) => f.to_string(),
-                                                                ChannelData::Event {..} => "null".to_string(),
-                                                            }).as_bytes()).await?;
+                                                            temp_log.write_all(format!(
+                                                                "[{}]:{}={}",
+                                                                chrono::Local::now().to_rfc3339(),
+                                                                ch.name.as_ref(),
+                                                                match dat {
+                                                                    ChannelData::Float(f) => f.to_string(),
+                                                                    ChannelData::Event {..} => "null".to_string(),
+                                                                }
+                                                            ).as_bytes()).await?;
                                                         }
                                                     } else {
                                                         warn!("Data contains channel id {chid} which is not known to this server");
@@ -252,7 +278,15 @@ async fn main() -> anyhow::Result<()> {
                                                 }
                                                 info!("Received data:\n{buf}");
                                                 let chv = |name: &str| {
-                                                    let ChannelData::Float(f) = data.per_channel.get(&channels.id_by_name(&name.to_string().into()).unwrap()).unwrap() else { panic!() }; *f };
+                                                    let ChannelData::Float(f) = data.per_channel.get(
+                                                        &channels.id_by_name(
+                                                            &name.to_string().into()
+                                                        ).unwrap()
+                                                    ).unwrap() else {
+                                                        panic!()
+                                                    };
+                                                    *f
+                                                };
                                                 ipc_task_tx.send_async(IPCCtrlMsg::Readings(mycelium::LatestReadings {
                                                     temperature: chv("temperature"),
                                                     humidity: chv("humidity"),
