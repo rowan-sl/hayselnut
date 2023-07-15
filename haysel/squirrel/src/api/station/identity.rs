@@ -13,7 +13,7 @@ pub struct StationInfo {
 }
 
 #[cfg(feature = "server-utils")]
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KnownStations {
     ids: HashMap<StationID, StationInfo>,
 }

@@ -5,9 +5,12 @@ extern crate serde;
 #[macro_use]
 extern crate thiserror;
 
+use std::collections::HashMap;
+
 use serde::{de::DeserializeOwned, Serialize};
 pub use squirrel;
 pub use squirrel::api::station;
+use squirrel::api::station::{identity::{StationID, KnownStations, StationInfo}, capabilities::{ChannelID, ChannelData, KnownChannels}};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Error)]
@@ -64,4 +67,13 @@ pub struct IPCMsg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum IPCMsgKind {}
+pub enum IPCMsgKind {
+    Info {
+        stations: KnownStations,
+        channels: KnownChannels
+    },
+    FreshHotData {
+        from: StationID,
+        by_channel: HashMap<ChannelID, ChannelData>
+    }
+}

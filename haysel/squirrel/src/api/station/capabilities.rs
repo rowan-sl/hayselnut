@@ -74,7 +74,7 @@ pub struct Channel {
 pub type ChannelID = Uuid;
 
 #[cfg(feature = "server-utils")]
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KnownChannels {
     channels: HashMap<ChannelID, Channel>,
 }
