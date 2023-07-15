@@ -7,7 +7,10 @@ use std::{
 use flume::Sender;
 use num_enum::TryFromPrimitive;
 
-use crate::net::{SocketAddr, UdpSocket};
+use crate::{
+    api::station::identity::StationID,
+    net::{SocketAddr, UdpSocket},
+};
 
 use super::{
     read_packet, Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE, PACKET_TYPE_COMMAND,
@@ -35,6 +38,12 @@ pub enum DispatchEvent {
     Received(Vec<u8>),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ClientMetadata {
+    /// =None when the station has not made its ID known
+    pub uuid: Option<StationID>,
+}
+
 #[derive(Debug)]
 pub struct ClientInterface {
     state: State,
@@ -51,6 +60,7 @@ pub struct ClientInterface {
     send_buf: Vec<u8>,
     last_sent_send_buf: Vec<u8>,
     dispatch: Sender<(SocketAddr, DispatchEvent)>,
+    meta: ClientMetadata,
 }
 
 impl ClientInterface {
@@ -59,6 +69,7 @@ impl ClientInterface {
         max_transaction_time: Duration,
         addr: SocketAddr,
         dispatch: Sender<(SocketAddr, DispatchEvent)>,
+        meta: ClientMetadata,
     ) -> Self {
         Self {
             state: State::default(),
@@ -73,7 +84,12 @@ impl ClientInterface {
             send_buf: vec![],
             last_sent_send_buf: vec![],
             dispatch,
+            meta,
         }
+    }
+
+    pub fn access_metadata(&mut self) -> &mut ClientMetadata {
+        &mut self.meta
     }
 
     pub fn queue(&mut self, to_send: Vec<u8>) {

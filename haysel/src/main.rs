@@ -6,20 +6,20 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::Parser;
+use mycelium::IPCMsg;
 use squirrel::{
     api::{
         station::{
-            capabilities::{ChannelData, ChannelID, ChannelName, KnownChannels},
+            capabilities::{ChannelID, ChannelName, KnownChannels},
             identity::{KnownStations, StationInfo},
         },
         ChannelMappings, PacketKind,
     },
-    transport::server::{recv_next_packet, ClientInterface, DispatchEvent},
+    transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{
-    fs::{self, OpenOptions},
-    io::AsyncWriteExt,
+    fs,
     net::{UdpSocket, UnixListener},
     select,
     signal::ctrl_c,
@@ -32,7 +32,7 @@ use trust_dns_resolver::TokioAsyncResolver;
 mod consumer;
 mod paths;
 mod registry;
-mod route;
+pub mod route;
 mod shutdown;
 pub mod tsdb;
 
@@ -161,169 +161,154 @@ async fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>();
 
         let mut handle = shutdown.handle();
-        let temp_log_path = records_dir.path("data.txt");
-        //TODO: integrate IPC with Router system
+        //TODO: integrate with the router system
         #[derive(Debug)]
         enum IPCCtrlMsg {
-            Readings(mycelium::LatestReadings),
+            Broadcast(IPCMsg),
         }
         let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCCtrlMsg>();
+        ipc_task_tx
+            .send_async(IPCCtrlMsg::Broadcast(IPCMsg {
+                kind: mycelium::IPCMsgKind::Info {
+                    stations: stations.clone(),
+                    channels: channels.clone(),
+                },
+            }))
+            .await
+            .unwrap();
         let main_task = spawn(async move {
             async move {
-            // file stuff
-                let mut temp_log = OpenOptions::new()
-                    .write(true)
-                    .append(true)
-                    .create(true)
-                    .open(temp_log_path)
-                    .await?;
-            // test code for the network protcol
-            let sock = UdpSocket::bind(addrs.as_slice()).await?;
-            let max_transaction_time = Duration::from_secs(30);
-            let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
-            let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
+                // test code for the network protcol
+                let sock = UdpSocket::bind(addrs.as_slice()).await?;
+                let max_transaction_time = Duration::from_secs(30);
+                let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
+                let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
 
-            loop {
-                select! {
-                    // TODO: complete transactions and inform clients before exit
-                    _ = handle.wait_for_shutdown() => { break; }
-                    recv = dispatch_rx.recv_async() => {
-                        let (ip, event) = recv.unwrap();
-                        match event {
-                            DispatchEvent::Send(packet) => {
-                                //debug!("Sending {packet:#?} to {ip:?}");
-                                sock.send_to(packet.as_bytes(), ip).await.unwrap();
-                            }
-                            DispatchEvent::TimedOut => {
-                                error!("Connection to {ip:?} timed out");
-                            }
-                            DispatchEvent::Received(data) => {
-                                debug!("received [packet] from {ip:?}");
-                                // if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
-                                //     trace!("packet content (msgpack value): {packet:#?}");
-                                // }
-                                match rmp_serde::from_slice::<PacketKind>(&data) {
-                                    Ok(packet) => {
-                                        trace!("packet content: {packet:?}");
-                                        match packet {
-                                            PacketKind::Connect(data) => {
-                                                let name_to_id_mappings = data.channels.iter()
-                                                    .map(|ch| {
-                                                        (
-                                                            ch.name.clone(),
-                                                            channels.id_by_name(&ch.name)
-                                                                .unwrap_or_else(|| {
-                                                                    info!("creating new channel: {ch:?}");
-                                                                    channels.insert_channel(ch.clone()).unwrap()
-                                                                })
-                                                        )
-                                                    })
-                                                    .collect::<HashMap<ChannelName, ChannelID>>();
-                                                if let Some(_) = stations.get_info(&data.station_id) {
-                                                    info!(
-                                                        "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                                                        data.station_id,
-                                                        ip,
-                                                        data.station_build_rev,
-                                                        data.station_build_date
-                                                    );
-                                                    stations.map_info(
-                                                        &data.station_id,
-                                                        |_id, info| info.supports_channels = name_to_id_mappings
-                                                            .values()
-                                                            .copied()
-                                                            .collect()
-                                                    );
-                                                } else {
-                                                    info!(
-                                                        "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                                                        data.station_id,
-                                                        ip,
-                                                        data.station_build_rev,
-                                                        data.station_build_date
-                                                    );
-                                                    stations.insert_station(data.station_id, StationInfo {
-                                                        supports_channels: name_to_id_mappings.values().copied().collect(),
-                                                    }).unwrap();
-                                                }
-                                                let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
-                                                    map: name_to_id_mappings,
-                                                })).unwrap();
-                                                clients.get_mut(&ip).unwrap().queue(resp);
-                                            }
-                                            PacketKind::Data(data) => {
-                                                let mut buf = String::new();
-                                                for (chid, dat) in data.per_channel.clone() {
-                                                    if let Some(ch) = channels.get_channel(&chid) {
-                                                        //TODO: verify that types match
-                                                        let _ = writeln!(
-                                                            buf, "Channel {chid} ({}) => {:?}",
-                                                            <ChannelName as Into<String>>::into(ch.name.clone()), dat
+                loop {
+                    select! {
+                        // TODO: complete transactions and inform clients before exit
+                        _ = handle.wait_for_shutdown() => { break; }
+                        recv = dispatch_rx.recv_async() => {
+                            let (ip, event) = recv.unwrap();
+                            match event {
+                                DispatchEvent::Send(packet) => {
+                                    //debug!("Sending {packet:#?} to {ip:?}");
+                                    sock.send_to(packet.as_bytes(), ip).await.unwrap();
+                                }
+                                DispatchEvent::TimedOut => {
+                                    error!("Connection to {ip:?} timed out");
+                                }
+                                DispatchEvent::Received(recv_data) => {
+                                    debug!("received [packet] from {ip:?}");
+                                    // if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
+                                    //     trace!("packet content (msgpack value): {packet:#?}");
+                                    // }
+                                    match rmp_serde::from_slice::<PacketKind>(&recv_data) {
+                                        Ok(packet) => {
+                                            trace!("packet content: {packet:?}");
+                                            match packet {
+                                                PacketKind::Connect(pkt_data) => {
+                                                    let name_to_id_mappings = pkt_data.channels.iter()
+                                                        .map(|ch| {
+                                                            (
+                                                                ch.name.clone(),
+                                                                channels.id_by_name(&ch.name)
+                                                                    .unwrap_or_else(|| {
+                                                                        info!("creating new channel: {ch:?}");
+                                                                        channels.insert_channel(ch.clone()).unwrap()
+                                                                    })
+                                                            )
+                                                        })
+                                                        .collect::<HashMap<ChannelName, ChannelID>>();
+                                                    if let Some(_) = stations.get_info(&pkt_data.station_id) {
+                                                        info!(
+                                                            "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                                                            pkt_data.station_id,
+                                                            ip,
+                                                            pkt_data.station_build_rev,
+                                                            pkt_data.station_build_date
                                                         );
-                                                        if let "battery" | "temperature" | "humidity" | "pressure" = ch.name.as_ref().as_str() {
-                                                            temp_log.write_all(format!(
-                                                                "[{}]:{}={}",
-                                                                chrono::Local::now().to_rfc3339(),
-                                                                ch.name.as_ref(),
-                                                                match dat {
-                                                                    ChannelData::Float(f) => f.to_string(),
-                                                                    ChannelData::Event {..} => "null".to_string(),
-                                                                }
-                                                            ).as_bytes()).await?;
-                                                        }
+                                                        stations.map_info(
+                                                            &pkt_data.station_id,
+                                                            |_id, info| info.supports_channels = name_to_id_mappings
+                                                                .values()
+                                                                .copied()
+                                                                .collect()
+                                                        );
                                                     } else {
-                                                        warn!("Data contains channel id {chid} which is not known to this server");
-                                                        let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
+                                                        info!(
+                                                            "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                                                            pkt_data.station_id,
+                                                            ip,
+                                                            pkt_data.station_build_rev,
+                                                            pkt_data.station_build_date
+                                                        );
+                                                        stations.insert_station(pkt_data.station_id, StationInfo {
+                                                            supports_channels: name_to_id_mappings.values().copied().collect(),
+                                                        }).unwrap();
                                                     }
+                                                    let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
+                                                        map: name_to_id_mappings,
+                                                    })).unwrap();
+                                                    let client = clients.get_mut(&ip).unwrap();
+                                                    client.queue(resp);
+                                                    client.access_metadata().uuid = Some(pkt_data.station_id);
+                                                    // update info with new station (may not allways be different)
+                                                    ipc_task_tx.send_async(IPCCtrlMsg::Broadcast(IPCMsg { kind: mycelium::IPCMsgKind::Info {
+                                                        stations: stations.clone(),
+                                                        channels: channels.clone(),
+                                                    }})).await.unwrap();
                                                 }
-                                                info!("Received data:\n{buf}");
-                                                let chv = |name: &str| {
-                                                    let ChannelData::Float(f) = data.per_channel.get(
-                                                        &channels.id_by_name(
-                                                            &name.to_string().into()
-                                                        ).unwrap()
-                                                    ).unwrap() else {
-                                                        panic!()
-                                                    };
-                                                    *f
-                                                };
-                                                ipc_task_tx.send_async(IPCCtrlMsg::Readings(mycelium::LatestReadings {
-                                                    temperature: chv("temperature"),
-                                                    humidity: chv("humidity"),
-                                                    pressure: chv("pressure"),
-                                                    battery: chv("battery"),
-                                                })).await?;
+                                                PacketKind::Data(pkt_data) => {
+                                                    let mut buf = String::new();
+                                                    for (chid, dat) in pkt_data.per_channel.clone() {
+                                                        if let Some(ch) = channels.get_channel(&chid) {
+                                                            //TODO: verify that types match
+                                                            let _ = writeln!(
+                                                                buf, "Channel {chid} ({}) => {:?}",
+                                                                <ChannelName as Into<String>>::into(ch.name.clone()), dat
+                                                            );
+                                                        } else {
+                                                            warn!("Data contains channel id {chid} (={dat:?}) which is not known to this server");
+                                                            let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
+                                                        }
+                                                    }
+                                                    info!("Received data:\n{buf}");
+                                                    ipc_task_tx.send_async(IPCCtrlMsg::Broadcast(IPCMsg { kind: mycelium::IPCMsgKind::FreshHotData {
+                                                        from: clients.get_mut(&ip).unwrap().access_metadata().uuid.unwrap(),
+                                                        by_channel: pkt_data.per_channel,
+                                                    }})).await?;
+                                                }
+                                                _ => warn!("received unexpected packet, ignoring"),
                                             }
-                                            _ => warn!("received unexpected packet, ignoring"),
                                         }
-                                    }
-                                    Err(e) => {
-                                        warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
+                                        Err(e) => {
+                                            warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    packet = recv_next_packet(&sock) => {
-                        if let Some((from, packet)) = packet? {
-                            //debug!("Received {packet:#?} from {from:?}");
-                            let cl = clients.entry(from)
-                                .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone()));
-                            cl.handle(packet);
+                        packet = recv_next_packet(&sock) => {
+                            if let Some((from, packet)) = packet? {
+                                //debug!("Received {packet:#?} from {from:?}");
+                                let cl = clients.entry(from)
+                                    .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
+                                cl.handle(packet);
+                            }
                         }
-                    }
-                };
-            }
+                    };
+                }
 
-            Ok::<(), anyhow::Error>(())
-        }.await.unwrap()
+                Ok::<(), anyhow::Error>(())
+            }.await.unwrap()
         });
 
         let mut handle = shutdown.handle();
         let ipc_task = spawn(async move {
             let mut shutdown_ipc = Shutdown::new();
             let listener = UnixListener::bind(args.ipc_sock.clone()).unwrap();
-            let (latest_readings_queue, _) = sync::broadcast::channel(10);
+            let (ipc_broadcast_queue, _) = sync::broadcast::channel::<IPCMsg>(10);
 
             let res = async {
                 loop {
@@ -331,15 +316,15 @@ async fn main() -> anyhow::Result<()> {
                         _ = handle.wait_for_shutdown() => { break; }
                         recv = ipc_task_rx.recv_async() => {
                             match recv? {
-                                IPCCtrlMsg::Readings(r) => {
-                                    let num = latest_readings_queue.send(r).unwrap_or(0);
+                                IPCCtrlMsg::Broadcast(msg) => {
+                                    let num = ipc_broadcast_queue.send(msg).unwrap_or(0);
                                     trace!("Sent IPC message to {num} tasks");
                                 }
-                            }
+                            };
                         }
                         res = listener.accept() => {
                             let (mut sock, addr) = res?;
-                            let mut recv = latest_readings_queue.subscribe();
+                            let mut recv = ipc_broadcast_queue.subscribe();
                             let mut handle = shutdown_ipc.handle();
                             debug!("Connecting to new IPC client at {addr:?}");
                             spawn(async move {
