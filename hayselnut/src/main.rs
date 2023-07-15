@@ -413,6 +413,8 @@ fn setup_wifi<'a, M: esp_idf_hal::modem::WifiModemPeripheral>(
             }
         })
         .unwrap_hwerr("could not subscribe to system envent loop");
+    // keep this task alive forever
+    let _: &'static mut _ = Box::leak(Box::new(_wifi_event_sub));
 
     let mut wifi = Wifi::new(
         EspWifi::new(modem, sysloop.clone(), Some(nvs_partition))
