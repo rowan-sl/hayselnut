@@ -165,15 +165,17 @@ async fn main() -> anyhow::Result<()> {
         #[derive(Debug)]
         enum IPCCtrlMsg {
             Broadcast(IPCMsg),
+            UpdateInfo {
+                stations: KnownStations,
+                channels: KnownChannels,
+            },
         }
         let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCCtrlMsg>();
         ipc_task_tx
-            .send_async(IPCCtrlMsg::Broadcast(IPCMsg {
-                kind: mycelium::IPCMsgKind::Info {
-                    stations: stations.clone(),
-                    channels: channels.clone(),
-                },
-            }))
+            .send_async(IPCCtrlMsg::UpdateInfo {
+                stations: stations.clone(),
+                channels: channels.clone(),
+            })
             .await
             .unwrap();
         let main_task = spawn(async move {
@@ -254,10 +256,13 @@ async fn main() -> anyhow::Result<()> {
                                                     client.queue(resp);
                                                     client.access_metadata().uuid = Some(pkt_data.station_id);
                                                     // update info with new station (may not allways be different)
-                                                    ipc_task_tx.send_async(IPCCtrlMsg::Broadcast(IPCMsg { kind: mycelium::IPCMsgKind::Info {
-                                                        stations: stations.clone(),
-                                                        channels: channels.clone(),
-                                                    }})).await.unwrap();
+                                                    ipc_task_tx
+                                                        .send_async(IPCCtrlMsg::UpdateInfo {
+                                                            stations: stations.clone(),
+                                                            channels: channels.clone(),
+                                                        })
+                                                        .await
+                                                        .unwrap();
                                                 }
                                                 PacketKind::Data(pkt_data) => {
                                                     let mut buf = String::new();
@@ -309,6 +314,8 @@ async fn main() -> anyhow::Result<()> {
             let mut shutdown_ipc = Shutdown::new();
             let listener = UnixListener::bind(args.ipc_sock.clone()).unwrap();
             let (ipc_broadcast_queue, _) = sync::broadcast::channel::<IPCMsg>(10);
+            let (mut cache_stations, mut cache_channels) =
+                (KnownStations::new(), KnownChannels::new());
 
             let res = async {
                 loop {
@@ -318,7 +325,16 @@ async fn main() -> anyhow::Result<()> {
                             match recv? {
                                 IPCCtrlMsg::Broadcast(msg) => {
                                     let num = ipc_broadcast_queue.send(msg).unwrap_or(0);
-                                    trace!("Sent IPC message to {num} tasks");
+                                    trace!("Sent IPC message to {num} IPC clients");
+                                }
+                                IPCCtrlMsg::UpdateInfo { stations, channels } => {
+                                    cache_stations = stations.clone();
+                                    cache_channels = channels.clone();
+                                    let num = ipc_broadcast_queue.send(IPCMsg { kind: mycelium::IPCMsgKind::Info {
+                                        stations,
+                                        channels,
+                                    }}).unwrap_or(0);
+                                    trace!("Sent updated station/channel info to {num} IPC clients");
                                 }
                             };
                         }
@@ -327,21 +343,19 @@ async fn main() -> anyhow::Result<()> {
                             let mut recv = ipc_broadcast_queue.subscribe();
                             let mut handle = shutdown_ipc.handle();
                             debug!("Connecting to new IPC client at {addr:?}");
+                            let initial_packet = IPCMsg { kind: mycelium::IPCMsgKind::Info {
+                                stations: cache_stations.clone(),
+                                channels: cache_channels.clone(),
+                            }};
                             spawn(async move {
                                 let res = async move {
+                                    mycelium::ipc_send(&mut sock, &initial_packet).await?;
                                     loop {
                                         select! {
                                             // TODO: notify clients of server closure
                                             _ = handle.wait_for_shutdown() => { break; }
                                             res = recv.recv() => {
-                                                match mycelium::ipc_send(&mut sock, &res?).await {
-                                                    Ok(()) => {}
-                                                    // Err(mycelium::IPCError::IO(e)) if e.kind() == io::ErrorKind::=> {
-                                                    //     debug!("IPC Client {addr:?} disconnected");
-                                                    //     break;
-                                                    // }
-                                                    Err(e) => Err(e)?
-                                                }
+                                                mycelium::ipc_send(&mut sock, &res?).await?
                                             }
                                         }
                                     }
