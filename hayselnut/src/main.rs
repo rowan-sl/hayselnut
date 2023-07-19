@@ -412,7 +412,9 @@ fn main() {
                                 }
                             };
 
-                            let battery_voltage = batt_mon.read().unwrap_hwerr("failed to read battery voltage");
+                            let battery_voltage = std::iter::repeat_with(|| batt_mon.read().unwrap_hwerr("failed to read battery voltage"))
+                                .take(50)
+                                .sum::<f32>() / 50.0;
 
                             send!(PacketKind::Data(SomeData {
                                 per_channel: {
