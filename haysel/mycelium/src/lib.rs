@@ -12,7 +12,7 @@ pub use squirrel;
 pub use squirrel::api::station;
 use squirrel::api::station::{
     capabilities::{ChannelData, ChannelID, KnownChannels},
-    identity::{KnownStations, StationID, StationInfo},
+    identity::{KnownStations, StationID},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
@@ -51,17 +51,6 @@ pub async fn ipc_recv<T: DeserializeOwned>(
     let mut buf = vec![0u8; amnt as _];
     socket.read_exact(&mut buf).await?;
     Ok(serde_json::from_slice(&buf)?)
-}
-
-// temporary API for sending updates of the latest readings
-// final version will not use hardcoded fields
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[deprecated(note = "Replaced by `mycelium::IPCMsg`")]
-pub struct LatestReadings {
-    pub temperature: f32,
-    pub humidity: f32,
-    pub pressure: f32,
-    pub battery: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
