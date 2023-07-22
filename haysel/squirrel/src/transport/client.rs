@@ -18,7 +18,10 @@ pub async fn mvp_send(
 ) -> Result<(), shared::SendError> {
     assert!(sock.peer_addr().is_ok(), "Socket must be connected");
 
-    let Packet::Cmd(Cmd { packet: mut respond_to, .. }) = send_and_wait(
+    let Packet::Cmd(Cmd {
+        packet: mut respond_to,
+        ..
+    }) = send_and_wait(
         sock,
         Packet::Cmd(Cmd {
             packet: uid_gen.next(),
@@ -27,10 +30,16 @@ pub async fn mvp_send(
             command: CmdKind::Tx as _,
             padding: Default::default(),
         }),
-        shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+        shared::ExpectedResponse::Command {
+            cmd: CmdKind::Confirm,
+        },
         MAX_ATTEMPTS,
         RETRY_WAIT_DUR,
-    ).await? else { unreachable!() };
+    )
+    .await?
+    else {
+        unreachable!()
+    };
 
     for chunk in data.chunks(FRAME_BUF_SIZE) {
         let mut arr_chunk = [0u8; FRAME_BUF_SIZE];
@@ -46,10 +55,16 @@ pub async fn mvp_send(
                 len: chunk.len() as u16,
                 data: arr_chunk,
             }),
-            shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+            shared::ExpectedResponse::Command {
+                cmd: CmdKind::Confirm,
+            },
             MAX_ATTEMPTS,
             RETRY_WAIT_DUR,
-        ).await? else { unreachable!() };
+        )
+        .await?
+        else {
+            unreachable!()
+        };
 
         respond_to = c.packet;
     }
@@ -63,10 +78,16 @@ pub async fn mvp_send(
             command: CmdKind::Complete as _,
             padding: Default::default(),
         }),
-        shared::ExpectedResponse::Command { cmd: CmdKind::Confirm },
+        shared::ExpectedResponse::Command {
+            cmd: CmdKind::Confirm,
+        },
         MAX_ATTEMPTS,
         RETRY_WAIT_DUR,
-    ).await? else { unreachable!() };
+    )
+    .await?
+    else {
+        unreachable!()
+    };
     Ok(())
 }
 

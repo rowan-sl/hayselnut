@@ -73,7 +73,7 @@ impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
         let handle = rt::Handle::current();
         let Ok(serialized) = serde_json::to_string_pretty(&self.value) else {
             error!("JsonLoader sync failed - could not serialize");
-            return
+            return;
         };
         let mut file: File = self.file.take().unwrap();
         let sh_handle = self.sh_handle.take().unwrap();

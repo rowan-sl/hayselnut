@@ -25,7 +25,9 @@ pub async fn recv_next_packet(
     if amnt > buf.len() {
         return Ok(None);
     }
-    let Some(p) = read_packet(&buf[0..amnt]) else { return Ok(None); };
+    let Some(p) = read_packet(&buf[0..amnt]) else {
+        return Ok(None);
+    };
     Ok(Some((from, p)))
 }
 

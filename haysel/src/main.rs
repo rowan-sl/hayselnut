@@ -1,3 +1,6 @@
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 #[macro_use]
 extern crate async_trait;
 #[macro_use]
@@ -35,6 +38,7 @@ mod registry;
 pub mod route;
 mod shutdown;
 pub mod tsdb;
+pub mod tsdb2;
 
 use registry::JsonLoader;
 use shutdown::Shutdown;
