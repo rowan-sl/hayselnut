@@ -1,5 +1,6 @@
 pub mod disk_store;
 pub mod error;
+pub mod object;
 pub mod ptr;
 mod repr;
 #[cfg(test)]
