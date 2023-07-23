@@ -1,3 +1,4 @@
+pub mod disk_store;
 pub mod error;
 pub mod ptr;
 mod repr;
