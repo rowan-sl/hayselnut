@@ -457,12 +457,15 @@ pub mod alloc {
 
     #[cfg(test)]
     mod tests {
+        use tracing_test::traced_test;
+
         use super::{
             ptr::{Ptr, Void},
             Allocator, Storage,
         };
 
         #[tokio::test]
+        #[traced_test]
         async fn initializing_allocator_doesnt_crash() {
             let store = TestStore::default();
             Allocator::new(store)
@@ -471,6 +474,7 @@ pub mod alloc {
         }
 
         #[tokio::test]
+        #[traced_test]
         async fn allocate_some_stuff() {
             let mut alloc = Allocator::new(TestStore::default())
                 .await
