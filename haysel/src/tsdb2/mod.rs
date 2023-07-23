@@ -454,4 +454,71 @@ pub mod alloc {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            ptr::{Ptr, Void},
+            Allocator, Storage,
+        };
+
+        #[tokio::test]
+        async fn initializing_allocator_doesnt_crash() {
+            let store = TestStore::default();
+            Allocator::new(store)
+                .await
+                .expect("failed to create allocator");
+        }
+
+        #[tokio::test]
+        async fn allocate_some_stuff() {
+            let mut alloc = Allocator::new(TestStore::default())
+                .await
+                .expect("failed to create allocator");
+            alloc.allocate::<[u8; 512]>().await.unwrap();
+            alloc.allocate::<[u128; 16]>().await.unwrap();
+        }
+
+        #[derive(thiserror::Error, Debug)]
+        enum VoidError {}
+
+        #[derive(Default)]
+        struct TestStore {
+            backing: Vec<u8>,
+        }
+
+        #[async_trait::async_trait(?Send)]
+        impl Storage for TestStore {
+            type Error = VoidError;
+            async fn read_buf(
+                &mut self,
+                at: Ptr<Void>,
+                amnt: u64,
+                into: &mut [u8],
+            ) -> Result<(), Self::Error> {
+                into.copy_from_slice(&self.backing[at.addr as _..(at.addr + amnt) as _]);
+                Ok(())
+            }
+            async fn write_buf(
+                &mut self,
+                at: Ptr<Void>,
+                amnt: u64,
+                from: &[u8],
+            ) -> Result<(), Self::Error> {
+                self.backing[at.addr as _..(at.addr + amnt) as _].copy_from_slice(from);
+                Ok(())
+            }
+            async fn close(self) -> Result<(), Self::Error> {
+                Ok(())
+            }
+            async fn size(&mut self) -> Result<u64, Self::Error> {
+                Ok(self.backing.len() as _)
+            }
+            async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error> {
+                self.backing
+                    .extend_from_slice(vec![0; amnt as _].as_slice());
+                Ok(())
+            }
+        }
+    }
 }
