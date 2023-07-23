@@ -19,9 +19,9 @@ pub struct ChunkHeader {
     pub flags: u32,
     /// length of the chunk
     pub len: u32,
-    /// pointer to the previous free chunk
+    /// pointer to the previous free chunk (null if first)
     pub prev: Ptr<ChunkHeader>,
-    /// pointer to the next free chunk
+    /// pointer to the next free chunk (null if last)
     pub next: Ptr<ChunkHeader>,
 }
 

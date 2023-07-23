@@ -62,6 +62,7 @@ impl<S: Storage> Allocator<S>
 where
     <S as Storage>::Error: Error,
 {
+    #[instrument(skip(store))]
     pub async fn new(mut store: S) -> Result<Self, AllocError<<S as Storage>::Error>> {
         let size = store.size().await?;
 
@@ -99,6 +100,7 @@ where
     }
 
     /// get the head pointer to the linked list of free spaces of size `size`
+    #[instrument(skip(self))]
     async fn free_list_for_size(
         &mut self,
         size: u64,
@@ -110,6 +112,7 @@ where
 
     /// set the head pointer for the linked list of free spaces of size `size`
     /// setting it to null will effectively remove it.
+    #[instrument(skip(self))]
     async fn set_free_list_for_size(
         &mut self,
         size: u64,
@@ -148,6 +151,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn allocate<T: AsBytes + FromBytes>(
         &mut self,
     ) -> Result<Ptr<T>, AllocError<<S as Storage>::Error>> {
@@ -210,5 +214,69 @@ where
             // return a pointer after the header
             return Ok(ptr.offset(mem::size_of::<ChunkHeader>() as i64).cast::<T>());
         }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn free<T: AsBytes + FromBytes>(
+        &mut self,
+        ptr: Ptr<T>,
+    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        // get the location of the chunk this pointer points to
+        let chunk_loc = ptr
+            .offset(-(mem::size_of::<ChunkHeader>() as i64))
+            .cast::<ChunkHeader>();
+        // verify that that actually *is* a valid chunk
+        'validate: {
+            let mut c_ptr = Ptr::<ChunkHeader>::with(mem::size_of::<AllocHeader>() as _);
+            let size = self.store.size().await?;
+            while c_ptr.addr + (mem::size_of::<ChunkHeader>() as u64) < size {
+                if c_ptr == chunk_loc {
+                    break 'validate;
+                }
+                let header = self.store.read_typed(c_ptr).await?;
+                c_ptr = c_ptr.offset((mem::size_of::<ChunkHeader>() + header.len as usize) as _);
+            }
+            error!("attempted to free an invalid pointer");
+            return Err(AllocError::FreeInvalidPointer);
+        }
+        // validate that the chunk matches the pointer
+        let header = self.store.read_typed(chunk_loc).await?;
+        if header.len != mem::size_of::<T>() as u32 {
+            error!("attempted to free data using a pointer with a different data type than was used to allocate it");
+            return Err(AllocError::FreeMismatch);
+        }
+        // and that it has not already been freed
+        let flags = if let Some(flags) = ChunkFlags::from_bits(header.flags) {
+            if flags.contains(ChunkFlags::FREE) {
+                error!("attempted to free the same memory twice!");
+                return Err(AllocError::DoubleFree);
+            }
+            flags
+        } else {
+            error!("corrupt data: chunk flags contains invalid bits");
+            return Err(AllocError::Corrupt);
+        };
+        // modify the header data
+        let mut new_header = header;
+        new_header.flags = (flags | ChunkFlags::FREE).bits();
+        // find the free list for this size, and insert the newly freed chunk at the start of it.
+        if let Some(free_list) = self.free_list_for_size(mem::size_of::<T>() as _).await? {
+            new_header.next = free_list.head;
+        } else {
+            new_header.next = Ptr::null();
+        }
+        new_header.prev = Ptr::null();
+        // write the now free chunk's header, and the updated free list pointer back to the store
+        self.store.write_typed(chunk_loc, &new_header).await?;
+        self.set_free_list_for_size(mem::size_of::<T>() as _, chunk_loc)
+            .await?;
+        // and done!
+        return Ok(());
+    }
+
+    #[instrument(skip(self))]
+    pub async fn close(self) -> Result<(), AllocError<<S as Storage>::Error>> {
+        self.store.close().await?;
+        Ok(())
     }
 }
