@@ -11,11 +11,11 @@ pub enum AllocError<E: Error> {
     #[error("allocator free list has filled up!")]
     FreeListFull,
     #[error(
-        "attempted to free a pointer that does not point to valid data tracked by the allocator"
+        "attempted to use a pointer that does not point to valid data tracked by the allocator"
     )]
-    FreeInvalidPointer,
-    #[error("attempted to free allocated data using a pointer that does not match it!")]
-    FreeMismatch,
-    #[error("attempted to free a pointer that points to already free data")]
-    DoubleFree,
+    PointerInvalid,
+    #[error("attempted to use a pointer that does not match the allocated data it points to")]
+    PointerMismatch,
+    #[error("the expected status (free or in use) of the given pointer is incorrect for the operation used with it")]
+    PointerStatus,
 }

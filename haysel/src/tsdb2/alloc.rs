@@ -217,9 +217,10 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn free<T: AsBytes + FromBytes>(
+    async fn validate_pointer<T: AsBytes + FromBytes>(
         &mut self,
         ptr: Ptr<T>,
+        free: bool,
     ) -> Result<(), AllocError<<S as Storage>::Error>> {
         // get the location of the chunk this pointer points to
         let chunk_loc = ptr
@@ -236,23 +237,48 @@ where
                 let header = self.store.read_typed(c_ptr).await?;
                 c_ptr = c_ptr.offset((mem::size_of::<ChunkHeader>() + header.len as usize) as _);
             }
-            error!("attempted to free an invalid pointer");
-            return Err(AllocError::FreeInvalidPointer);
+            error!("attempted to use an invalid pointer");
+            return Err(AllocError::PointerInvalid);
         }
         // validate that the chunk matches the pointer
         let header = self.store.read_typed(chunk_loc).await?;
         if header.len != mem::size_of::<T>() as u32 {
-            error!("attempted to free data using a pointer with a different data type than was used to allocate it");
-            return Err(AllocError::FreeMismatch);
+            error!(
+                "the pointer's data type does not match the data type that was used to allocate it"
+            );
+            return Err(AllocError::PointerMismatch);
         }
-        // and that it has not already been freed
-        let flags = if let Some(flags) = ChunkFlags::from_bits(header.flags) {
-            if flags.contains(ChunkFlags::FREE) {
-                error!("attempted to free the same memory twice!");
-                return Err(AllocError::DoubleFree);
+        // and that it's free status matches what is requested
+        if let Some(flags) = ChunkFlags::from_bits(header.flags) {
+            if flags.contains(ChunkFlags::FREE) != free {
+                let map = |stat| if stat { "free" } else { "in use" };
+                error!(
+                    "expected the pointer to point to {} memory, but it actually points to {} memory",
+                    map(free),
+                    map(!free)
+                );
+                return Err(AllocError::PointerStatus);
             }
             flags
         } else {
+            error!("corrupt data: chunk flags contains invalid bits");
+            return Err(AllocError::Corrupt);
+        };
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn free<T: AsBytes + FromBytes>(
+        &mut self,
+        ptr: Ptr<T>,
+    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        self.validate_pointer(ptr, false).await?;
+        // get the location of the chunk this pointer points to
+        let chunk_loc = ptr
+            .offset(-(mem::size_of::<ChunkHeader>() as i64))
+            .cast::<ChunkHeader>();
+        let header = self.store.read_typed(chunk_loc).await?;
+        let Some(flags) = ChunkFlags::from_bits(header.flags) else {
             error!("corrupt data: chunk flags contains invalid bits");
             return Err(AllocError::Corrupt);
         };
@@ -272,6 +298,25 @@ where
             .await?;
         // and done!
         return Ok(());
+    }
+
+    #[instrument(skip(self))]
+    pub async fn read<T: AsBytes + FromBytes>(
+        &mut self,
+        at: Ptr<T>,
+    ) -> Result<T, AllocError<<S as Storage>::Error>> {
+        self.validate_pointer(at, false).await?;
+        Ok(self.store.read_typed(at).await?)
+    }
+
+    #[instrument(skip(self, val))]
+    pub async fn write<T: AsBytes + FromBytes>(
+        &mut self,
+        val: T,
+        at: Ptr<T>,
+    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        self.validate_pointer(at, false).await?;
+        Ok(self.store.write_typed(at, &val).await?)
     }
 
     #[instrument(skip(self))]
