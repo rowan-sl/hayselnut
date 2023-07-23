@@ -3,7 +3,7 @@ use crate::tsdb2::alloc::{
     Storage,
 };
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug, PartialEq)]
 pub enum VoidError {}
 
 #[derive(Default)]

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-#[derive(thiserror::Error, Debug, Clone)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq)]
 pub enum AllocError<E: Error> {
     #[error("error in underlying storage: {0:#?}")]
     StoreError(#[from] E),
