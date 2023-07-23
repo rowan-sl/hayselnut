@@ -38,10 +38,16 @@ impl<Store: Storage> Database<Store> {
     #[instrument(skip(store))]
     pub async fn new(store: Store) -> Result<Self, DBError<<Store as Storage>::Error>> {
         let mut alloc = Allocator::new(store).await?;
-        // initialize the entrypoint
-        let entrypoint = Object::new_alloc(&mut alloc, DBEntrypoint {}).await?;
-        alloc.set_entrypoint(entrypoint.pointer().cast()).await?;
-        entrypoint.dispose_sync(&mut alloc).await?;
+        if alloc.get_entrypoint().await?.is_null() {
+            // the entrypoint is null, so this is a fresh database.
+
+            // initialize the new entrypoint
+            // this is the only thing we get access to when freshly opening
+            // the database, and it is used to get at everything else
+            let entrypoint = Object::new_alloc(&mut alloc, DBEntrypoint {}).await?;
+            alloc.set_entrypoint(entrypoint.pointer().cast()).await?;
+            entrypoint.dispose_sync(&mut alloc).await?;
+        }
         todo!()
     }
 
