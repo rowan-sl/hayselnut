@@ -44,6 +44,10 @@ impl<T: AsBytes + FromBytes> Object<T> {
         })
     }
 
+    pub fn pointer(&self) -> Ptr<T> {
+        self.pointer
+    }
+
     /// dispose of the object, ignoring any changes made (do not sync)
     pub fn dispose_ignore(mut self) {
         self.modified = false;
