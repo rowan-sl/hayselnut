@@ -65,7 +65,7 @@ impl<S: Storage> Allocator<S> {
         // if the store is empty, it is probably new and needs to be initialized. do that here
         if size < mem::size_of::<AllocHeader>() as _ {
             warn!("store is empty, intitializing a new database");
-            let new_header = AllocHeader::new();
+            let new_header = AllocHeader::new(Ptr::null());
             store.expand_by(mem::size_of_val(&new_header) as _).await?;
             store
                 .write_typed(Ptr::<AllocHeader>::with(0u64), &new_header)
@@ -145,6 +145,26 @@ impl<S: Storage> Allocator<S> {
         }
         self.store.write_typed(Ptr::null(), &header).await?;
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn set_entrypoint(
+        &mut self,
+        to: Ptr<Void>,
+    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        let mut header: AllocHeader = self.store.read_typed(Ptr::null()).await?;
+        header.entrypoint = to;
+        self.store.write_typed(Ptr::null(), &header).await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn get_entrypoint(&mut self) -> Result<Ptr<Void>, AllocError<<S as Storage>::Error>> {
+        Ok(self
+            .store
+            .read_typed::<AllocHeader>(Ptr::null())
+            .await?
+            .entrypoint)
     }
 
     #[instrument(skip(self))]

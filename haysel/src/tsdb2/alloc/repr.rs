@@ -1,7 +1,10 @@
 use bitflags::bitflags;
 use zerocopy::{AsBytes, FromBytes};
 
-use super::{ptr::Ptr, tuning};
+use super::{
+    ptr::{Ptr, Void},
+    tuning,
+};
 
 pub const MAGIC_BYTES: [u8; 12] = *b"Hayselnut DB";
 
@@ -30,6 +33,9 @@ pub struct ChunkHeader {
 pub struct AllocHeader {
     pub magic_bytes: [u8; 12],
     pub _padding: [u8; 4],
+    /// entrypoint pointer - pointer to something that can be used to get a frame of
+    /// reference to the content stored in the allocator
+    pub entrypoint: Ptr<Void>,
     /// NOTE TO THE VIEWER: this has a hard cap to avoid cursed recursion, where the free
     /// list would contain former entries of itself. it generally makes things much nicer.
     /// also, you are unlikely in this scenario to have more than this many types, and if
@@ -40,10 +46,11 @@ pub struct AllocHeader {
 }
 
 impl AllocHeader {
-    pub fn new() -> Self {
+    pub fn new(entrypoint: Ptr<Void>) -> Self {
         Self {
             magic_bytes: MAGIC_BYTES,
             _padding: [0u8; 4],
+            entrypoint,
             free_list: <_ as FromBytes>::new_zeroed(),
         }
     }
