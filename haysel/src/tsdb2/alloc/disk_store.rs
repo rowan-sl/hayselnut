@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use tokio::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
@@ -10,6 +12,20 @@ use super::{
 
 pub struct DiskStore {
     file: File,
+}
+
+impl DiskStore {
+    #[instrument]
+    pub async fn new(path: &Path) -> Result<Self, <Self as Storage>::Error> {
+        Ok(Self {
+            file: OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .await?,
+        })
+    }
 }
 
 #[async_trait::async_trait(?Send)]
