@@ -27,7 +27,7 @@ pub mod alloc {
     use self::{
         error::AllocError,
         ptr::{Ptr, Void},
-        repr::AllocHeader,
+        repr::{AllocCategoryHeader, AllocHeader, ChunkFlags, ChunkHeader},
     };
 
     /// trait that all storage backings for any allocator must implement.
@@ -105,19 +105,129 @@ pub mod alloc {
 
             // read out the header, listing the available sizes for data
             {
-                let mut list = header.free_by_size;
-                let mut sizes = vec![];
-                loop {
-                    sizes.extend_from_slice(&list.data[0..list.used as _]);
-                    if list.next.is_null() {
-                        break;
-                    }
-                    list = store.read_typed(list.next).await?;
-                }
+                let sizes = header
+                    .free_list
+                    .iter()
+                    .filter(|x| x.size != 0)
+                    .collect::<Vec<_>>();
                 trace!("allocator contains free spaces of size {sizes:?}");
             }
 
             Ok(Self { store })
+        }
+
+        /// get the head pointer to the linked list of free spaces of size `size`
+        async fn free_list_for_size(
+            &mut self,
+            size: u64,
+        ) -> Result<Option<AllocCategoryHeader>, AllocError<<S as Storage>::Error>> {
+            // perform simple iteration through the list, finding the right entry and returning it
+            let header = self.store.read_typed(Ptr::<AllocHeader>::with(0)).await?;
+            Ok(header.free_list.iter().find(|x| x.size == size).copied())
+        }
+
+        /// set the head pointer for the linked list of free spaces of size `size`
+        /// setting it to null will effectively remove it.
+        async fn set_free_list_for_size(
+            &mut self,
+            size: u64,
+            to: Ptr<ChunkHeader>,
+        ) -> Result<(), AllocError<<S as Storage>::Error>> {
+            // perform simple iteration through the list, finding the right entry and modifying it
+            let mut header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
+            // new entry to replace the prev one with.
+            // if `to` is null then we set size and head to null, removing it from the list.
+            let new_entry = AllocCategoryHeader {
+                size: if to.is_null() { 0 } else { size },
+                head: to, // checking if it's null would be redundant
+            };
+            if let Some((entry_idx, _)) = header
+                .free_list
+                .iter_mut()
+                .enumerate()
+                .find(|x| x.1.size == size)
+            {
+                header.free_list[entry_idx] = new_entry;
+            } else {
+                // find an unused entry
+                if let Some((new_entry_idx, _)) = header
+                    .free_list
+                    .iter_mut()
+                    .enumerate()
+                    .find(|x| x.1.size == 0)
+                {
+                    header.free_list[new_entry_idx] = new_entry;
+                } else {
+                    error!("free list is full! since it is hopefully unlikely to have more than {} unique type sizes, this is probably a bug", tuning::FREE_LIST_SIZE);
+                    return Err(AllocError::FreeListFull);
+                }
+            }
+            self.store.write_typed(Ptr::null(), &header).await?;
+            Ok(())
+        }
+
+        pub async fn allocate<T: AsBytes + FromBytes>(
+            &mut self,
+        ) -> Result<Ptr<T>, AllocError<<S as Storage>::Error>> {
+            let allocation_size = mem::size_of::<T>() as u64;
+            if let Some(free_list) = self.free_list_for_size(allocation_size).await? {
+                // there are free spaces - use them!
+                // get the header of the chunk that will eventually be used for the allocated data.
+                // it is the first entry in the free list
+                let mut first_entry = self.store.read_typed(free_list.head).await?;
+                // do some verification of the chunk flags
+                let flags = if let Some(flags) = ChunkFlags::from_bits(first_entry.flags) {
+                    if !flags.contains(ChunkFlags::FREE) {
+                        error!("corrupt data: in-use chunk on free list");
+                        return Err(AllocError::Corrupt);
+                    }
+                    flags
+                } else {
+                    error!("corrupt data: chunk flags contained invalid bits");
+                    return Err(AllocError::Corrupt);
+                };
+                // handle swapping the head of the list to the next free space (if there is any)
+                if first_entry.next.is_null() {
+                    // no free spaces, remove it.
+                    self.set_free_list_for_size(allocation_size, Ptr::null())
+                        .await?;
+                } else {
+                    // change the head entry to remove the first element of the list (which is getting
+                    // used for the newly allocated data)
+                    // ! note that this does not modify free_list.head here, which already had been read !
+                    self.set_free_list_for_size(allocation_size, first_entry.next)
+                        .await?;
+                }
+                // unset the `free` flag for the now in-use chunk
+                first_entry.flags = (flags ^ ChunkFlags::FREE).bits();
+                self.store.write_typed(free_list.head, &first_entry).await?;
+                // return a pointer that is after the chunk header for the chunk (this is where the
+                // data goes)
+                return Ok(free_list
+                    .head
+                    .offset(mem::size_of::<ChunkHeader>() as i64)
+                    .cast::<T>());
+            } else {
+                // no free space - must allocate more.
+                // allocate more empty space past the current limit, and use it.
+                //
+                // this would leave space unused if there is unindexed space at the end of the
+                // file, but that hopefully wont happen
+                let ptr = Ptr::with(self.store.size().await?);
+                self.store
+                    .expand_by(mem::size_of::<ChunkHeader>() as u64 + allocation_size)
+                    .await?;
+                // create and write in the new header
+                let header = ChunkHeader {
+                    flags: ChunkFlags::empty().bits(),
+                    len: allocation_size as u32,
+                    prev: Ptr::null(),
+                    next: Ptr::null(),
+                };
+                self.store.write_typed(ptr, &header).await?;
+                // return a pointer after the header
+                return Ok(ptr.offset(mem::size_of::<ChunkHeader>() as i64).cast::<T>());
+            }
         }
     }
 
@@ -130,6 +240,10 @@ pub mod alloc {
             StoreError(#[from] E),
             #[error("the data contained in the store given to this allocator is not valid")]
             StoreNotAnAllocator,
+            #[error("data in the store is corrupt or misinterpreted")]
+            Corrupt,
+            #[error("allocator free list has filled up!")]
+            FreeListFull,
         }
     }
 
@@ -137,7 +251,7 @@ pub mod alloc {
         use bitflags::bitflags;
         use zerocopy::{AsBytes, FromBytes};
 
-        use super::{ptr::Ptr, tuning, util::ChunkedLinkedList};
+        use super::{ptr::Ptr, tuning};
 
         pub const MAGIC_BYTES: [u8; 12] = *b"Hayselnut DB";
 
@@ -155,9 +269,9 @@ pub mod alloc {
             pub flags: u32,
             /// length of the chunk
             pub len: u32,
-            /// pointer to the previous free chunk (garbage if this chunk is in use, check the flags field)
+            /// pointer to the previous free chunk
             pub prev: Ptr<ChunkHeader>,
-            /// pointer to the next free chunk (also garbage if this chunk is in use)
+            /// pointer to the next free chunk
             pub next: Ptr<ChunkHeader>,
         }
 
@@ -166,8 +280,13 @@ pub mod alloc {
         pub struct AllocHeader {
             pub magic_bytes: [u8; 12],
             pub _padding: [u8; 4],
-            pub free_by_size:
-                ChunkedLinkedList<{ tuning::ALLOC_HEADER_LIST_CHUNK_SIZE }, AllocCategoryHeader>,
+            /// NOTE TO THE VIEWER: this has a hard cap to avoid cursed recursion, where the free
+            /// list would contain former entries of itself. it generally makes things much nicer.
+            /// also, you are unlikely in this scenario to have more than this many types, and if
+            /// you do you have other problems.
+            ///
+            /// unused entries will have the number set to zero.
+            pub free_list: [AllocCategoryHeader; tuning::FREE_LIST_SIZE],
         }
 
         impl AllocHeader {
@@ -175,7 +294,7 @@ pub mod alloc {
                 Self {
                     magic_bytes: MAGIC_BYTES,
                     _padding: [0u8; 4],
-                    free_by_size: ChunkedLinkedList::empty_head(),
+                    free_list: <_ as FromBytes>::new_zeroed(),
                 }
             }
 
@@ -188,12 +307,13 @@ pub mod alloc {
         #[repr(C)]
         pub struct AllocCategoryHeader {
             pub size: u64,
-            pub head: u64,
+            pub head: Ptr<ChunkHeader>,
         }
     }
 
     mod tuning {
-        pub const ALLOC_HEADER_LIST_CHUNK_SIZE: usize = 8;
+        /// this determines the maximum number of sizes of allocations that can be kept track of.
+        pub const FREE_LIST_SIZE: usize = 1024;
     }
 
     pub mod util {
@@ -293,6 +413,12 @@ pub mod alloc {
             }
             pub fn is_null(&self) -> bool {
                 self.addr == 0
+            }
+            pub fn offset(self, by: i64) -> Self {
+                Self::with(self.addr.checked_add_signed(by).unwrap())
+            }
+            pub fn null() -> Self {
+                Self::with(0)
             }
         }
 
