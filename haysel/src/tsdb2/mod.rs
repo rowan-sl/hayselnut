@@ -19,4 +19,20 @@
 //! alloc header:
 //! - [in chunked linked list, or possibly just have a max number of types]: head pointers to the linked list of free data for each size (and the associated size)
 
+use self::{alloc::{Allocator, Storage}, error::DBError};
+
 pub mod alloc;
+pub mod error;
+
+/// the database
+pub struct Database<Store: Storage> {
+    alloc: Allocator<Store>,
+}
+
+impl<Store: Storage> Database<Store> {
+    #[instrument(skip(store))]
+    pub async fn new(store: Store) -> Result<Self, DBError<<Store as Storage>::Error>> {
+        let alloc = Allocator::new(store).await?;
+        todo!()
+    }
+}
