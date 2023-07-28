@@ -29,6 +29,22 @@ pub mod alloc;
 pub mod error;
 pub mod repr;
 
+mod tuning {
+    // low values to force using the list functionality.
+    // for real use, set higher
+    pub const STATION_MAP_CHUNK_SIZE: usize = 1;
+    pub const CHANNEL_MAP_CHUNK_SIZE: usize = 1;
+    pub const DATA_INDEX_CHUNK_SIZE: usize = 1;
+    // optimize for the largest size (ish) that does not exceed the limit of the delta-time system.
+    // must multiply by 2 to get a multiple of 8 (be a multiple of 4) (note: real value is 1 smaller than specified here)
+    //
+    // if periodic data chunks are consistantly left empty decrease this, or if they are consistantly full increase it.
+    // TODO: specify size in a more customizeable way?
+    pub const DATA_GROUP_PERIODIC_SIZE: usize = 1024;
+    /// honestly probably does not matter, as long as having one of them in the database is not too much of a big deal.
+    pub const DATA_GROUP_SPORADIC_SIZE: usize = 1024;
+}
+
 /// the database
 pub struct Database<Store: Storage> {
     alloc: Allocator<Store>,
