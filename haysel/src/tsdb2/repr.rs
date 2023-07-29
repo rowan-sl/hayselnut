@@ -7,9 +7,13 @@ use super::{
     tuning,
 };
 
+pub mod info;
+
 #[derive(Clone, Copy, AsBytes, FromBytes)]
 #[repr(C)]
-pub struct DBEntrypoint {}
+pub struct DBEntrypoint {
+    pub stations: MapStations,
+}
 
 #[derive(Clone, Copy, AsBytes, FromBytes)]
 #[repr(C)]

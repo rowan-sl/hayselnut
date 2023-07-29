@@ -8,7 +8,7 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use mycelium::IPCMsg;
 use squirrel::{
     api::{
@@ -44,17 +44,24 @@ use registry::JsonLoader;
 use shutdown::Shutdown;
 
 #[derive(Parser, Debug)]
-pub struct Args {
-    // #[arg(short, long, help = "IP address of the weather station to connect to")]
-    // addr: SocketAddr,
-    // #[arg(short, long, help = "Delay between readings from station (in seconds)")]
-    // delay: f64,
-    // #[arg(
-    //     short,
-    //     long,
-    //     help = "Path for unix socket to communicate with the web server on"
-    // )]
-    // socket: PathBuf,
+pub struct ArgsParser {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Cmd {
+    /// dump info about the database
+    Infodump,
+    /// run
+    Run {
+        #[command(flatten)]
+        args: RunArgs,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct RunArgs {
     #[arg(
         short,
         long,
@@ -71,7 +78,8 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let args_parsed = ArgsParser::parse();
+    let args: RunArgs;
 
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
@@ -86,7 +94,17 @@ async fn main() -> anyhow::Result<()> {
     )
     .expect("Failed to set tracing subscriber");
 
-    info!("Args: {args:#?}");
+    info!("Args: {args_parsed:#?}");
+
+    match args_parsed.cmd {
+        Cmd::Infodump => {
+            error!(" -------- dumping database info --------");
+            tsdb2::Database::<tsdb2::alloc::disk_store::DiskStore>::infodump().await;
+            error!(" -------- DB infodump complete  --------");
+            return Ok(());
+        }
+        Cmd::Run { args: run_args } => args = run_args,
+    }
 
     let mut shutdown = Shutdown::new();
     // trap the signal, will only start listening later in the main loop

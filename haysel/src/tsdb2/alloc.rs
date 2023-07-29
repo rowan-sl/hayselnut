@@ -5,7 +5,7 @@ pub mod ptr;
 mod repr;
 #[cfg(test)]
 mod test;
-mod util;
+pub mod util;
 
 use std::{error::Error, mem};
 

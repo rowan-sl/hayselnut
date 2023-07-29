@@ -60,11 +60,35 @@ impl<Store: Storage> Database<Store> {
             // initialize the new entrypoint
             // this is the only thing we get access to when freshly opening
             // the database, and it is used to get at everything else
-            let entrypoint = Object::new_alloc(&mut alloc, DBEntrypoint {}).await?;
+            let entrypoint = Object::new_alloc(
+                &mut alloc,
+                DBEntrypoint {
+                    stations: repr::MapStations {
+                        map: alloc::ptr::Ptr::null(),
+                    },
+                },
+            )
+            .await?;
             alloc.set_entrypoint(entrypoint.pointer().cast()).await?;
             entrypoint.dispose_sync(&mut alloc).await?;
         }
         todo!()
+    }
+
+    #[instrument]
+    pub async fn infodump() {
+        use info::Info as _;
+        use repr::*;
+        DBEntrypoint::info();
+        MapStations::info();
+        Station::info();
+        Channel::info();
+        ChannelMetadata::info();
+        DataGroupIndex::info();
+        DataGroup::info();
+        DataGroupType::info();
+        DataGroupPeriodic::info();
+        DataGroupSporadic::info();
     }
 
     #[instrument(skip(self))]
