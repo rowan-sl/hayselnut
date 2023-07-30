@@ -52,7 +52,7 @@ pub struct DataGroupIndex {
     pub after: u64,
     /// pointer to the rest of the data, which is not needed for indexing.
     /// this alllows the rest of the data (large) to be allocated/loaded only when needed
-    pub ptr: Ptr<DataGroup>,
+    pub group: Ptr<DataGroup>,
 }
 
 #[derive(Clone, Copy, AsBytes, FromBytes)]

@@ -77,8 +77,9 @@ impl<Store: Storage> Database<Store> {
 
     #[instrument]
     pub async fn infodump() {
-        use info::Info as _;
+        use info::{print_inf, Info as _};
         use repr::*;
+        print_inf::<DBEntrypoint>();
         DBEntrypoint::info();
         MapStations::info();
         Station::info();
