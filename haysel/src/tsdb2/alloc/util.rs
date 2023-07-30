@@ -4,7 +4,7 @@ pub mod test;
 use std::mem::{align_of, size_of};
 
 use self::comptime_hacks::{Condition, IsTrue};
-use super::ptr::Ptr;
+use super::{object::Object, ptr::Ptr, Allocator, Storage};
 use zerocopy::{AsBytes, FromBytes};
 
 pub mod comptime_hacks {
@@ -54,6 +54,49 @@ where
     #[allow(unused)]
     pub fn empty_head() -> Self {
         Self::new_zeroed()
+    }
+
+    #[instrument(skip(list, alloc, item))]
+    pub async fn push<Store: Storage>(
+        list: Ptr<Self>,
+        alloc: &mut Allocator<Store>,
+        item: T,
+    ) -> Result<(), super::error::AllocError<<Store as Storage>::Error>> {
+        let mut list = Object::new_read(alloc, list).await?;
+        loop {
+            let used = list.used as usize;
+            if used < list.data.len() {
+                list.data[used] = item;
+                list.used += 1;
+                list.dispose_sync(alloc).await?;
+                break;
+            } else if !list.next.is_null() {
+                let next = list.next;
+                list.dispose_immutated();
+                list = Object::new_read(alloc, next).await?;
+                continue;
+            } else {
+                let next = Object::new_alloc(
+                    alloc,
+                    Self {
+                        next: Ptr::null(),
+                        used: 1,
+                        data: {
+                            let mut d = <[T; N]>::new_zeroed();
+                            d[0] = item;
+                            d
+                        },
+                    },
+                )
+                .await?
+                .dispose_sync(alloc)
+                .await?;
+                list.next = next;
+                list.dispose_sync(alloc).await?;
+                break;
+            }
+        }
+        Ok(())
     }
 }
 

@@ -52,6 +52,17 @@ impl<T: AsBytes + FromBytes> Object<T> {
         self.pointer
     }
 
+    pub async fn sync<Store: Storage>(
+        &mut self,
+        alloc: &mut Allocator<Store>,
+    ) -> Result<(), AllocError<<Store as Storage>::Error>> {
+        alloc
+            .write(T::read_from(self.val.as_bytes()).unwrap(), self.pointer)
+            .await?;
+        self.modified = false;
+        Ok(())
+    }
+
     /// dispose of the object, ignoring any changes made (do not sync)
     pub fn dispose_ignore(mut self) {
         self.drop_flag = true;

@@ -35,7 +35,7 @@ pub struct Channel {
     pub id: ChannelID,
     pub metadata: ChannelMetadata,
     pub _pad: [u8; 7],
-    pub data: ChunkedLinkedList<{ tuning::DATA_INDEX_CHUNK_SIZE }, DataGroupIndex>,
+    pub data: Ptr<ChunkedLinkedList<{ tuning::DATA_INDEX_CHUNK_SIZE }, DataGroupIndex>>,
 }
 
 #[derive(Clone, Copy, AsBytes, FromBytes, Info)]

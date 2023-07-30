@@ -19,7 +19,7 @@
 //! alloc header:
 //! - [in chunked linked list, or possibly just have a max number of types]: head pointers to the linked list of free data for each size (and the associated size)
 
-use mycelium::station::identity::StationID;
+use mycelium::station::{capabilities::ChannelID, identity::StationID};
 use zerocopy::FromBytes;
 
 use self::{
@@ -93,49 +93,63 @@ impl<Store: Storage> Database<Store> {
         &mut self,
         id: StationID,
     ) -> Result<(), DBError<<Store as Storage>::Error>> {
+        warn!("TODO: check that a station does not already exist");
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
+        ChunkedLinkedList::push(
+            entry.stations.map,
+            &mut self.alloc,
+            repr::Station {
+                id,
+                channels: Ptr::null(),
+            },
+        )
+        .await?;
+        Ok(())
+    }
 
-        let new_station = repr::Station {
-            id,
-            channels: Ptr::null(),
-        };
+    #[instrument(skip(self))]
+    pub async fn add_channel(
+        &mut self,
+        to: StationID,
+        id: ChannelID,
+        kind: repr::DataGroupType,
+    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+        warn!("TODO: check that the channel does not already exist");
+        let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
+        let entry = Object::new_read(&mut self.alloc, eptr).await?;
+        let mut c_station_list = Object::new_read(&mut self.alloc, entry.stations.map).await?;
+        entry.dispose_immutated();
 
-        let mut list = Object::new_read(&mut self.alloc, entry.stations.map).await?;
-        loop {
-            let used = list.used as usize;
-            if used < list.data.len() {
-                list.data[used] = new_station;
-                list.used += 1;
-                list.dispose_sync(&mut self.alloc).await?;
-                break;
-            } else if !list.next.is_null() {
-                let next = list.next;
-                list.dispose_immutated();
-                list = Object::new_read(&mut self.alloc, next).await?;
-                continue;
+        let c_channel_list = loop {
+            if let Some(station) = c_station_list.data[..c_station_list.used as usize]
+                .iter()
+                .find(|x| x.id == to)
+            {
+                break station.channels;
+            } else if !c_station_list.next.is_null() {
+                let next = c_station_list.next;
+                c_station_list.dispose_immutated();
+                c_station_list = Object::new_read(&mut self.alloc, next).await?;
             } else {
-                let next = Object::new_alloc(
-                    &mut self.alloc,
-                    ChunkedLinkedList::<{ tuning::STATION_MAP_CHUNK_SIZE }, repr::Station> {
-                        next: Ptr::null(),
-                        used: 1,
-                        data: {
-                            let mut d =
-                                <[repr::Station; tuning::STATION_MAP_CHUNK_SIZE]>::new_zeroed();
-                            d[0] = new_station;
-                            d
-                        },
-                    },
-                )
-                .await?
-                .dispose_sync(&mut self.alloc)
-                .await?;
-                list.next = next;
-                list.dispose_sync(&mut self.alloc).await?;
-                break;
+                panic!("Could not find the requested station")
             }
-        }
+        };
+        c_station_list.dispose_immutated();
+
+        ChunkedLinkedList::push(
+            c_channel_list,
+            &mut self.alloc,
+            repr::Channel {
+                id,
+                metadata: repr::ChannelMetadata {
+                    group_type: kind as u8,
+                },
+                _pad: Default::default(),
+                data: Ptr::null(),
+            },
+        )
+        .await?;
         Ok(())
     }
 
