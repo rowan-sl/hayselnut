@@ -13,6 +13,8 @@ pub struct Object<T: AsBytes + FromBytes> {
     val: T,
     modified: bool,
     pointer: Ptr<T>,
+    // set to true to make it safe to drop
+    drop_flag: bool,
 }
 
 impl<T: AsBytes + FromBytes> Object<T> {
@@ -28,6 +30,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
             val,
             modified: false,
             pointer,
+            drop_flag: false,
         })
     }
 
@@ -41,6 +44,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
             val: read,
             modified: false,
             pointer: ptr,
+            drop_flag: true,
         })
     }
 
@@ -50,7 +54,17 @@ impl<T: AsBytes + FromBytes> Object<T> {
 
     /// dispose of the object, ignoring any changes made (do not sync)
     pub fn dispose_ignore(mut self) {
-        self.modified = false;
+        self.drop_flag = true;
+        drop(self)
+    }
+
+    /// dispose of the object, verifying no changes were made (syncing was never needed)
+    pub fn dispose_immutated(mut self) {
+        assert!(
+            !self.modified,
+            "attempted to use dispose_immutated to dispose of a modified object!"
+        );
+        self.drop_flag = true;
         drop(self)
     }
 
@@ -62,6 +76,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
         let copy = T::read_from(self.val.as_bytes()).unwrap();
         alloc.write(copy, self.pointer).await?;
         self.modified = false;
+        self.drop_flag = true;
         let ptr = self.pointer;
         drop(self);
         Ok(ptr)
@@ -84,8 +99,8 @@ impl<T: AsBytes + FromBytes> DerefMut for Object<T> {
 
 impl<T: AsBytes + FromBytes> Drop for Object<T> {
     fn drop(&mut self) {
-        if self.modified {
-            panic!("an object was not propperly handled: this is a bug");
+        if !self.drop_flag {
+            panic!("an object was not propperly handled before being dropped: this is a bug");
         }
     }
 }

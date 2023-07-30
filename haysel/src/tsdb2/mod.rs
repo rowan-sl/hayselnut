@@ -19,6 +19,7 @@
 //! alloc header:
 //! - [in chunked linked list, or possibly just have a max number of types]: head pointers to the linked list of free data for each size (and the associated size)
 
+use mycelium::station::identity::StationID;
 use zerocopy::FromBytes;
 
 use self::{
@@ -84,7 +85,58 @@ impl<Store: Storage> Database<Store> {
             alloc.set_entrypoint(entrypoint.pointer().cast()).await?;
             entrypoint.dispose_sync(&mut alloc).await?;
         }
-        todo!()
+        Ok(Self { alloc })
+    }
+
+    #[instrument(skip(self))]
+    pub async fn add_station(
+        &mut self,
+        id: StationID,
+    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+        let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
+        let entry = Object::new_read(&mut self.alloc, eptr).await?;
+
+        let new_station = repr::Station {
+            id,
+            channels: Ptr::null(),
+        };
+
+        let mut list = Object::new_read(&mut self.alloc, entry.stations.map).await?;
+        loop {
+            let used = list.used as usize;
+            if used < list.data.len() {
+                list.data[used] = new_station;
+                list.used += 1;
+                list.dispose_sync(&mut self.alloc).await?;
+                break;
+            } else if !list.next.is_null() {
+                let next = list.next;
+                list.dispose_immutated();
+                list = Object::new_read(&mut self.alloc, next).await?;
+                continue;
+            } else {
+                let next = Object::new_alloc(
+                    &mut self.alloc,
+                    ChunkedLinkedList::<{ tuning::STATION_MAP_CHUNK_SIZE }, repr::Station> {
+                        next: Ptr::null(),
+                        used: 1,
+                        data: {
+                            let mut d =
+                                <[repr::Station; tuning::STATION_MAP_CHUNK_SIZE]>::new_zeroed();
+                            d[0] = new_station;
+                            d
+                        },
+                    },
+                )
+                .await?
+                .dispose_sync(&mut self.alloc)
+                .await?;
+                list.next = next;
+                list.dispose_sync(&mut self.alloc).await?;
+                break;
+            }
+        }
+        Ok(())
     }
 
     #[instrument]
