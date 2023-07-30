@@ -50,7 +50,7 @@ pub struct ChannelMetadata {
 pub struct DataGroupIndex {
     /// time that this chunk of data is near (unix time, seconds)
     /// all data must be after this time
-    pub after: u64,
+    pub after: i64,
     /// pointer to the rest of the data, which is not needed for indexing.
     /// this alllows the rest of the data (large) to be allocated/loaded only when needed
     pub group: Ptr<DataGroup>,
