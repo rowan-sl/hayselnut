@@ -19,8 +19,10 @@
 //! alloc header:
 //! - [in chunked linked list, or possibly just have a max number of types]: head pointers to the linked list of free data for each size (and the associated size)
 
+use zerocopy::FromBytes;
+
 use self::{
-    alloc::{object::Object, Allocator, Storage},
+    alloc::{object::Object, ptr::Ptr, util::ChunkedLinkedList, Allocator, Storage},
     error::DBError,
     repr::DBEntrypoint,
 };
@@ -60,12 +62,22 @@ impl<Store: Storage> Database<Store> {
             // initialize the new entrypoint
             // this is the only thing we get access to when freshly opening
             // the database, and it is used to get at everything else
+            let map = Object::new_alloc(
+                &mut alloc,
+                ChunkedLinkedList::<{ tuning::STATION_MAP_CHUNK_SIZE }, repr::Station> {
+                    next: Ptr::null(),
+                    used: 0,
+                    data: [repr::Station::new_zeroed(); tuning::STATION_MAP_CHUNK_SIZE],
+                },
+            )
+            .await?
+            .dispose_sync(&mut alloc)
+            .await?;
+
             let entrypoint = Object::new_alloc(
                 &mut alloc,
                 DBEntrypoint {
-                    stations: repr::MapStations {
-                        map: alloc::ptr::Ptr::null(),
-                    },
+                    stations: repr::MapStations { map },
                 },
             )
             .await?;

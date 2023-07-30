@@ -1,13 +1,7 @@
 use std::fmt::Write;
 use std::mem::size_of;
 
-use crate::tsdb2::{
-    alloc::{
-        ptr::{Ptr, Void},
-        util::ChunkedLinkedList,
-    },
-    tuning,
-};
+use crate::tsdb2::{alloc::util::ChunkedLinkedList, tuning};
 
 fn type_name<T>() -> &'static str {
     std::any::type_name::<T>().split(":").last().unwrap()

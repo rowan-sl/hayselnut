@@ -58,12 +58,13 @@ impl<T: AsBytes + FromBytes> Object<T> {
     pub async fn dispose_sync<Store: Storage>(
         mut self,
         alloc: &mut Allocator<Store>,
-    ) -> Result<(), AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Ptr<T>, AllocError<<Store as Storage>::Error>> {
         let copy = T::read_from(self.val.as_bytes()).unwrap();
         alloc.write(copy, self.pointer).await?;
         self.modified = false;
+        let ptr = self.pointer;
         drop(self);
-        Ok(())
+        Ok(ptr)
     }
 }
 
