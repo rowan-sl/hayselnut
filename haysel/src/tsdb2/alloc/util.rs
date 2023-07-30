@@ -56,6 +56,28 @@ where
         Self::new_zeroed()
     }
 
+    #[instrument(skip(list, alloc, cond))]
+    pub async fn find<Store: Storage>(
+        list: Ptr<Self>,
+        alloc: &mut Allocator<Store>,
+        cond: impl Fn(&&T) -> bool,
+    ) -> Result<Option<T>, super::error::AllocError<<Store as Storage>::Error>> {
+        let mut list = Object::new_read(alloc, list).await?;
+        loop {
+            if let Some(entry) = list.data[..list.used as usize].iter().find(&cond) {
+                let entry = T::read_from(entry.as_bytes()).unwrap();
+                list.dispose_immutated();
+                break Ok(Some(entry));
+            } else if !list.next.is_null() {
+                let next = list.next;
+                list.dispose_immutated();
+                list = Object::new_read(alloc, next).await?;
+            } else {
+                break Ok(None);
+            }
+        }
+    }
+
     #[instrument(skip(list, alloc, item))]
     pub async fn push<Store: Storage>(
         list: Ptr<Self>,

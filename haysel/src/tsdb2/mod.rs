@@ -118,27 +118,11 @@ impl<Store: Storage> Database<Store> {
         warn!("TODO: check that the channel does not already exist");
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
-        let mut c_station_list = Object::new_read(&mut self.alloc, entry.stations.map).await?;
-        entry.dispose_immutated();
-
-        let c_channel_list = loop {
-            if let Some(station) = c_station_list.data[..c_station_list.used as usize]
-                .iter()
-                .find(|x| x.id == to)
-            {
-                break station.channels;
-            } else if !c_station_list.next.is_null() {
-                let next = c_station_list.next;
-                c_station_list.dispose_immutated();
-                c_station_list = Object::new_read(&mut self.alloc, next).await?;
-            } else {
-                panic!("Could not find the requested station")
-            }
-        };
-        c_station_list.dispose_immutated();
-
+        let station = ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == id)
+            .await?
+            .expect("did not find requested station");
         ChunkedLinkedList::push(
-            c_channel_list,
+            station.channels,
             &mut self.alloc,
             repr::Channel {
                 id,
@@ -150,6 +134,7 @@ impl<Store: Storage> Database<Store> {
             },
         )
         .await?;
+        entry.dispose_immutated();
         Ok(())
     }
 
