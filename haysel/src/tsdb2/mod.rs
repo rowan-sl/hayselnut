@@ -77,19 +77,9 @@ impl<Store: Storage> Database<Store> {
 
     #[instrument]
     pub async fn infodump() {
-        use info::{print_inf, Info as _};
+        use info::print_inf;
         use repr::*;
         print_inf::<DBEntrypoint>();
-        DBEntrypoint::info();
-        MapStations::info();
-        Station::info();
-        Channel::info();
-        ChannelMetadata::info();
-        DataGroupIndex::info();
-        DataGroup::info();
-        DataGroupType::info();
-        DataGroupPeriodic::info();
-        DataGroupSporadic::info();
     }
 
     #[instrument(skip(self))]
