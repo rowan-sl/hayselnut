@@ -1,3 +1,4 @@
+use haysel_macro::Info;
 use mycelium::station::{capabilities::ChannelID, identity::StationID};
 use num_enum::IntoPrimitive;
 use zerocopy::{AsBytes, FromBytes};
@@ -9,26 +10,26 @@ use super::{
 
 pub mod info;
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct DBEntrypoint {
     pub stations: MapStations,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct MapStations {
     pub map: Ptr<ChunkedLinkedList<{ tuning::STATION_MAP_CHUNK_SIZE }, Station>>,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct Station {
     pub id: StationID,
     pub channels: Ptr<ChunkedLinkedList<{ tuning::CHANNEL_MAP_CHUNK_SIZE }, Channel>>,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct Channel {
     pub id: ChannelID,
@@ -37,14 +38,14 @@ pub struct Channel {
     pub data: ChunkedLinkedList<{ tuning::DATA_INDEX_CHUNK_SIZE }, DataGroupIndex>,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct ChannelMetadata {
     /// DataGroupType, as its primitive value
     pub group_type: u8,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct DataGroupIndex {
     /// time that this chunk of data is near (unix time, seconds)
@@ -55,6 +56,7 @@ pub struct DataGroupIndex {
     pub group: Ptr<DataGroup>,
 }
 
+/// Info impl for this is done manually in the impl module, bc it works differently than most other things
 #[derive(Clone, Copy, AsBytes, FromBytes)]
 #[repr(C)]
 pub union DataGroup {
@@ -69,7 +71,7 @@ pub enum DataGroupType {
     Periodic,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct DataGroupPeriodic {
     /// average time between events (seconds)
@@ -83,7 +85,7 @@ pub struct DataGroupPeriodic {
     pub data: [f32; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
 pub struct DataGroupSporadic {
     /// offset (in seconds) from the start time (can be up to ~136 years, so i think its fine)

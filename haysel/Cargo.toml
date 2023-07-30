@@ -41,8 +41,12 @@ features = ["server-utils", "tokio"]
 [dependencies.mycelium]
 path = "mycelium"
 
+[dependencies.haysel_macro]
+path = "haysel_macro"
+
 [workspace]
 members = [
     "squirrel",
     "mycelium",
+    "haysel_macro",
 ]

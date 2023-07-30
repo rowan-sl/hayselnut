@@ -1,5 +1,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate async_trait;
