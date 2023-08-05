@@ -19,7 +19,11 @@
 //! alloc header:
 //! - [in chunked linked list, or possibly just have a max number of types]: head pointers to the linked list of free data for each size (and the associated size)
 
+use std::iter;
+
+use chrono::{DateTime, Utc};
 use mycelium::station::{capabilities::ChannelID, identity::StationID};
+use num_enum::TryFromPrimitive;
 use zerocopy::FromBytes;
 
 use self::{
@@ -136,6 +140,160 @@ impl<Store: Storage> Database<Store> {
         .await?;
         entry.dispose_immutated();
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn add_data(
+        &mut self,
+        station_id: StationID,
+        channel_id: ChannelID,
+        time: DateTime<Utc>,
+        reading: f32,
+    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+        let time = time.timestamp();
+        let entrypoint = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
+        let entrypoint = Object::new_read(&mut self.alloc, entrypoint).await?;
+        let station = ChunkedLinkedList::find(entrypoint.stations.map, &mut self.alloc, |x| {
+            x.id == station_id
+        })
+        .await?
+        .expect("did not find requested station");
+        let channel =
+            ChunkedLinkedList::find(station.channels, &mut self.alloc, |x| x.id == channel_id)
+                .await?
+                .expect("did not find requested channel");
+        let gtype = repr::DataGroupType::try_from_primitive(channel.metadata.group_type)
+            .expect("invalid group type");
+        let gtype_size = match gtype {
+            repr::DataGroupType::Periodic => tuning::DATA_GROUP_PERIODIC_SIZE,
+            repr::DataGroupType::Sporadic => tuning::DATA_GROUP_SPORADIC_SIZE,
+        } as u64;
+
+        let mut chunk = Object::new_read(&mut self.alloc, channel.data).await?;
+        'find_chunk: loop {
+            'find_entry: for entry in &chunk.data[..chunk.used as usize] {
+                // the first time this is true should be the most recent chunk that works with this data.
+                if entry.after < time {
+                    // ^ the new data belongs in this chunk
+                    // (`time` is after the start time of data in `entry`)
+                    if entry.used < gtype_size {
+                        // ^ the new data fits in this chunk
+                        match gtype {
+                            repr::DataGroupType::Periodic => {
+                                let mut data = Object::new_read(&mut self.alloc, unsafe {
+                                    entry.group.periodic
+                                })
+                                .await?;
+                                let entry_dt = u64::try_from(time - entry.after)
+                                    .expect("unreachable: delta-time negative");
+                                // FIXME: slo cod
+
+                                // instead of calculating the change to avg_dt and then the entry's
+                                // relative dt, which is hard, we simply recalculate it for all
+                                // entries, which is easy, but slower
+                                //
+                                // here we reverse the relative delta calculation, arriving at a
+                                // individual offset from `entry.after` for each entry in `data`
+                                let mut abs_dt = data
+                                    .dt
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, dt)| {
+                                        (i as u64 * data.avg_dt as u64)
+                                            .checked_add_signed(*dt as i64)
+                                            .unwrap()
+                                    })
+                                    .collect::<Vec<u64>>();
+
+                                // make sure that the delta times are in order (to make sure the
+                                // rel -> abs isnt completely wrong, and to make sure the
+                                // `binary_search` used next works right)
+                                debug_assert!(abs_dt.is_sorted());
+
+                                // insert the new entry
+                                let ins_idx =
+                                    abs_dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
+                                let src = ins_idx..entry.used as usize;
+                                let dest = ins_idx + 1;
+                                abs_dt.copy_within(
+                                    src.clone(), /* why does Range not impl Copy */
+                                    dest,
+                                );
+                                data.data.copy_within(src, dest);
+                                abs_dt[ins_idx] = entry_dt;
+                                data.data[ins_idx] = reading;
+                                // make sure that we didnt screw up the ordering
+                                debug_assert!(data.dt.is_sorted());
+
+                                // then calculate the average dt
+                                let avg_dt = u32::try_from(
+                                    iter::once(0u64)
+                                        .chain(abs_dt.iter().copied())
+                                        .zip(abs_dt.iter().copied())
+                                        .map(|(last, next)| (next - last) as u128)
+                                        .sum::<u128>()
+                                        / abs_dt.len() as u128,
+                                )
+                                .expect("average delta-time too large");
+
+                                // then calculate individual offsets (delta from average)
+                                let rel_dt = abs_dt
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, abs_dt)| {
+                                        i16::try_from(
+                                            *abs_dt as i64 - (avg_dt as u64 * i as u64) as i64,
+                                        )
+                                        .expect("relative delta-time too large")
+                                    })
+                                    .collect::<Vec<i16>>();
+
+                                data.avg_dt = avg_dt;
+                                data.dt = rel_dt.try_into().unwrap();
+                                data.dispose_sync(&mut self.alloc).await?;
+                            }
+                            repr::DataGroupType::Sporadic => {
+                                let mut data = Object::new_read(&mut self.alloc, unsafe {
+                                    entry.group.sporadic
+                                })
+                                .await?;
+                                let entry_dt = u32::try_from(time - entry.after)
+                                    .expect("delta-time out of range");
+                                // just make sure that binary_search wont produce garbage
+                                debug_assert!(data.dt.is_sorted());
+                                let ins_idx =
+                                    data.dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
+                                let src = ins_idx..entry.used as usize;
+                                let dest = ins_idx + 1;
+                                data.dt.copy_within(
+                                    src.clone(), /* why does Range not impl Copy */
+                                    dest,
+                                );
+                                data.data.copy_within(src, dest);
+                                data.dt[ins_idx] = entry_dt;
+                                data.data[ins_idx] = reading;
+                                // make sure that we didnt screw up the ordering
+                                debug_assert!(data.dt.is_sorted());
+                                data.dispose_sync(&mut self.alloc).await?;
+                            }
+                        }
+                    } else {
+                        // ^ the new data does not fit in this chunk, a new one must be created
+                        // after this one, and the data in the old one split around this entry,
+                        // the more recent part moved to the new chunk
+                    }
+                    // the data is inserted
+                    break 'find_chunk;
+                } else {
+                    // ^ we need to go back to find the right place.
+                    continue 'find_entry;
+                }
+            }
+            todo!()
+        }
+        chunk.dispose_immutated();
+
+        todo!()
     }
 
     #[instrument]

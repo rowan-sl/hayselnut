@@ -1,6 +1,6 @@
 use haysel_macro::Info;
 use mycelium::station::{capabilities::ChannelID, identity::StationID};
-use num_enum::IntoPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use zerocopy::{AsBytes, FromBytes};
 
 use super::{
@@ -9,6 +9,7 @@ use super::{
 };
 
 pub mod info;
+pub mod time;
 
 #[derive(Clone, Copy, AsBytes, FromBytes, Info)]
 #[repr(C)]
@@ -35,6 +36,7 @@ pub struct Channel {
     pub id: ChannelID,
     pub metadata: ChannelMetadata,
     pub _pad: [u8; 7],
+    /// Entry Order: most recent first
     pub data: Ptr<ChunkedLinkedList<{ tuning::DATA_INDEX_CHUNK_SIZE }, DataGroupIndex>>,
 }
 
@@ -50,10 +52,14 @@ pub struct ChannelMetadata {
 pub struct DataGroupIndex {
     /// time that this chunk of data is near (unix time, seconds)
     /// all data must be after this time
+    ///
+    /// !IMPORTANTLY! all data in this chunk must be from BEFORE the `after` time of the next. no overlaps allowed
     pub after: i64,
+    /// number of entries in use
+    pub used: u64, // (only needs to be u16 probably, but this works for alignment reasons)
     /// pointer to the rest of the data, which is not needed for indexing.
     /// this alllows the rest of the data (large) to be allocated/loaded only when needed
-    pub group: Ptr<DataGroup>,
+    pub group: DataGroup,
 }
 
 /// Info impl for this is done manually in the impl module, bc it works differently than most other things
@@ -64,7 +70,7 @@ pub union DataGroup {
     pub sporadic: Ptr<DataGroupSporadic>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum DataGroupType {
     Sporadic,
@@ -76,8 +82,7 @@ pub enum DataGroupType {
 pub struct DataGroupPeriodic {
     /// average time between events (seconds)
     pub avg_dt: u32, // u16 is not enough for 1 day
-    /// number of entries in use
-    pub used: u16,
+    pub _pad: u16,
     /// delta-times (deveation from the average) (seconds)
     /// the final computed time may not be before `after`
     pub dt: [i16; tuning::DATA_GROUP_PERIODIC_SIZE - 1],

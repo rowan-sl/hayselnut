@@ -4,13 +4,24 @@ pub mod test;
 use std::mem::{align_of, size_of};
 
 use self::comptime_hacks::{Condition, IsTrue};
-use super::{object::Object, ptr::Ptr, Allocator, Storage};
+use super::{
+    object::Object,
+    ptr::{Ptr, Void},
+    Allocator, Storage,
+};
 use zerocopy::{AsBytes, FromBytes};
 
 pub mod comptime_hacks {
     pub struct Condition<const B: bool>;
     pub trait IsTrue {}
     impl IsTrue for Condition<true> {}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CLLIdx {
+    pub chunk_num: u64,
+    pub chunk_ptr: Ptr<Void>,
+    pub data_idx: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -73,9 +84,65 @@ where
                 list.dispose_immutated();
                 list = Object::new_read(alloc, next).await?;
             } else {
+                list.dispose_immutated();
                 break Ok(None);
             }
         }
+    }
+
+    #[instrument(skip(list, alloc, cond))]
+    pub async fn find_best<Store: Storage, C: std::cmp::Ord>(
+        list: Ptr<Self>,
+        alloc: &mut Allocator<Store>,
+        cond: impl Fn(&T) -> Option<C>,
+    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as Storage>::Error>> {
+        let mut list = Object::new_read(alloc, list).await?;
+        let mut chunk_num = 0u64;
+        let mut chunk_ptr = list.pointer().cast::<Void>();
+        let mut data_idx = 0u64;
+        let mut best = None;
+        loop {
+            if let Some((i, e_cond, entry)) = list.data[..list.used as usize]
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| cond(x).map(|c| (i, c, x)))
+                .max_by_key(|(_, _, x)| cond(*x))
+            {
+                let entry = T::read_from(entry.as_bytes()).unwrap();
+                if let Some((p_cond, _)) = &best {
+                    if p_cond < &e_cond {
+                        data_idx = i as u64;
+                        best = Some((e_cond, entry));
+                    }
+                } else {
+                    data_idx = i as u64;
+                    best = Some((e_cond, entry));
+                }
+                if !list.next.is_null() {
+                    let next = list.next;
+                    list.dispose_immutated();
+                    list = Object::new_read(alloc, next).await?;
+                    chunk_num += 1;
+                    chunk_ptr = next.cast::<Void>();
+                } else {
+                    break;
+                }
+            } else {
+                assert!(list.next.is_null());
+                break;
+            }
+        }
+        list.dispose_immutated();
+        Ok(best.map(|x| {
+            (
+                x.1,
+                CLLIdx {
+                    chunk_num,
+                    chunk_ptr,
+                    data_idx,
+                },
+            )
+        }))
     }
 
     #[instrument(skip(list, alloc, item))]
