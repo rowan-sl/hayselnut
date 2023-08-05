@@ -171,7 +171,8 @@ impl<Store: Storage> Database<Store> {
 
         let mut chunk = Object::new_read(&mut self.alloc, channel.data).await?;
         'find_chunk: loop {
-            'find_entry: for entry in &chunk.data[..chunk.used as usize] {
+            let r = ..chunk.used as usize;
+            'find_entry: for (entry_idx, entry) in chunk.data[r].iter_mut().enumerate() {
                 // the first time this is true should be the most recent chunk that works with this data.
                 if entry.after < time {
                     // ^ the new data belongs in this chunk
@@ -222,6 +223,8 @@ impl<Store: Storage> Database<Store> {
                                 data.data.copy_within(src, dest);
                                 abs_dt[ins_idx] = entry_dt;
                                 data.data[ins_idx] = reading;
+                                // increment `used`
+                                entry.used += 1;
                                 // make sure that we didnt screw up the ordering
                                 debug_assert!(data.dt.is_sorted());
 
@@ -272,15 +275,71 @@ impl<Store: Storage> Database<Store> {
                                 data.data.copy_within(src, dest);
                                 data.dt[ins_idx] = entry_dt;
                                 data.data[ins_idx] = reading;
+                                // increment `used`
+                                entry.used += 1;
                                 // make sure that we didnt screw up the ordering
                                 debug_assert!(data.dt.is_sorted());
                                 data.dispose_sync(&mut self.alloc).await?;
                             }
                         }
                     } else {
-                        // ^ the new data does not fit in this chunk, a new one must be created
+                        // ^ the new data does not fit in this index, a new one must be created
                         // after this one, and the data in the old one split around this entry,
                         // the more recent part moved to the new chunk
+
+                        if chunk.used < tuning::DATA_INDEX_CHUNK_SIZE as u64 {
+                            // ^ there is enough space in this chunk for the new index to go
+                            let used = chunk.used;
+                            // move this entry, and all the ones (after in list, before in time) it back
+                            // by 1 to make room for the new entry
+                            chunk
+                                .data
+                                .copy_within(entry_idx..used as usize, entry_idx + 1);
+                            chunk.used += 1;
+                            // insert the new entry
+                            // FIXME: the `after` field is set to the reading time, meaning there is a gap
+                            // between the end of the last entry, and the start of this one. if something
+                            // is inserted in that gap, then a new index will be unnecessarily created.
+                            // this could be fixed in the insertion, or in the vacuum impl. (in insertion
+                            // would be better tho)
+                            let new_entry = repr::DataGroupIndex {
+                                after: time,
+                                used: 1,
+                                group: match gtype {
+                                    repr::DataGroupType::Periodic => {
+                                        let mut data = repr::DataGroupPeriodic {
+                                            // only one entry
+                                            avg_dt: 0,
+                                            _pad: 0,
+                                            dt: [0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                                            data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                                        };
+                                        data.data[0] = reading;
+                                        let pointer = Object::new_alloc(&mut self.alloc, data)
+                                            .await?
+                                            .dispose_sync(&mut self.alloc)
+                                            .await?;
+                                        repr::DataGroup { periodic: pointer }
+                                    }
+                                    repr::DataGroupType::Sporadic => {
+                                        let mut data = repr::DataGroupSporadic {
+                                            dt: [0; tuning::DATA_GROUP_SPORADIC_SIZE],
+                                            data: [0.0; tuning::DATA_GROUP_SPORADIC_SIZE],
+                                        };
+                                        data.data[0] = reading;
+                                        let pointer = Object::new_alloc(&mut self.alloc, data)
+                                            .await?
+                                            .dispose_sync(&mut self.alloc)
+                                            .await?;
+                                        repr::DataGroup { sporadic: pointer }
+                                    }
+                                },
+                            };
+                            chunk.data[entry_idx] = new_entry;
+                        } else {
+                            // ^ we need to create a new entry in the index list
+                            todo!()
+                        }
                     }
                     // the data is inserted
                     break 'find_chunk;
@@ -289,11 +348,25 @@ impl<Store: Storage> Database<Store> {
                     continue 'find_entry;
                 }
             }
-            todo!()
+            if !chunk.next.is_null() {
+                // go to the next newest chunk
+                let next = Object::new_read(&mut self.alloc, chunk.next).await?;
+                chunk.dispose_sync(&mut self.alloc).await?;
+                chunk = next;
+            } else {
+                // there is no index old enough ????
+                if chunk.used < tuning::DATA_INDEX_CHUNK_SIZE as u64 {
+                    // ^ there is enough space in this chunk for the new index to go
+                    todo!()
+                } else {
+                    // ^ we need to create a new entry in the index list
+                    todo!()
+                }
+            }
         }
-        chunk.dispose_immutated();
+        chunk.dispose_sync(&mut self.alloc).await?;
 
-        todo!()
+        Ok(())
     }
 
     #[instrument]
