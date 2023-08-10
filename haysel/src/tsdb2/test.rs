@@ -27,6 +27,10 @@ async fn create_structure() {
     db.add_station(station_id)
         .await
         .expect("add_station failed");
+    let station_id2 = Uuid::new_v4();
+    db.add_station(station_id2)
+        .await
+        .expect("add_station failed");
     let channel_id1 = Uuid::new_v4();
     let channel_id2 = Uuid::new_v4();
     db.add_channel(
