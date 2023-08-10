@@ -73,7 +73,13 @@ impl Storage for DiskStore {
 
     #[instrument(skip(self))]
     async fn size(&mut self) -> Result<u64, Self::Error> {
-        Ok(self.file.metadata().await?.len())
+        let guess = self.file.metadata().await?.len();
+        if guess != 0 {
+            Ok(guess)
+        } else {
+            // deals with block devices on linux yeilding zero as the size
+            Ok(self.file.seek(io::SeekFrom::End(0)).await?)
+        }
     }
 
     #[instrument(skip(self))]
