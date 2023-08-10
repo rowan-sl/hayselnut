@@ -60,6 +60,16 @@ pub enum Cmd {
         #[command(flatten)]
         args: RunArgs,
     },
+    /// test program for TSDB v2
+    DB2 {
+        #[arg(
+            long,
+            help = "allow initializing a database using a file that contains data (may cause silent deletion of corrupted databases, so it is recommended to only use this when running the server for the first time)"
+        )]
+        init_overwrite: bool,
+        #[arg(long, short, help = "database file")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -103,6 +113,18 @@ async fn main() -> anyhow::Result<()> {
             error!(" -------- dumping database info --------");
             tsdb2::Database::<tsdb2::alloc::disk_store::DiskStore>::infodump().await;
             error!(" -------- DB infodump complete  --------");
+            return Ok(());
+        }
+        Cmd::DB2 {
+            init_overwrite,
+            mut file,
+        } => {
+            file = file.canonicalize()?;
+            debug!("{{file}} resolves to {file:?}");
+            use tsdb2::{alloc::disk_store::DiskStore, Database};
+            let store = DiskStore::new(&file).await?;
+            let mut database = Database::new(store, init_overwrite).await?;
+            database.close().await?;
             return Ok(());
         }
         Cmd::Run { args: run_args } => args = run_args,
