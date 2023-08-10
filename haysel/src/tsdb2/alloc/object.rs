@@ -19,6 +19,7 @@ pub struct Object<T: AsBytes + FromBytes> {
 
 impl<T: AsBytes + FromBytes> Object<T> {
     /// create a new object by allocating space for an existing value.
+    #[instrument(skip(alloc, val))]
     pub async fn new_alloc<Store: Storage>(
         alloc: &mut Allocator<Store>,
         val: T,
@@ -35,6 +36,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
     }
 
     /// create a new object by reading it from the allocator
+    #[instrument(skip(alloc, ptr))]
     pub async fn new_read<Store: Storage>(
         alloc: &mut Allocator<Store>,
         ptr: Ptr<T>,
@@ -52,6 +54,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
         self.pointer
     }
 
+    #[instrument(skip(self, alloc))]
     pub async fn sync<Store: Storage>(
         &mut self,
         alloc: &mut Allocator<Store>,
@@ -80,6 +83,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
     }
 
     /// dispose of the object, writing it back to the allocator (sync)
+    #[instrument(skip(self, alloc))]
     pub async fn dispose_sync<Store: Storage>(
         mut self,
         alloc: &mut Allocator<Store>,
