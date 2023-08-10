@@ -615,6 +615,7 @@ dependencies = [
  "haysel_macro",
  "mycelium",
  "num_enum",
+ "rand",
  "rmp-serde",
  "rmpv",
  "serde",
