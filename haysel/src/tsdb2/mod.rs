@@ -35,6 +35,8 @@ use self::{
 pub mod alloc;
 pub mod error;
 pub mod repr;
+#[cfg(test)]
+pub mod test;
 
 mod tuning {
     // low values to force using the list functionality.
@@ -288,6 +290,7 @@ impl<Store: Storage> Database<Store> {
                         // the more recent part moved to the new chunk
 
                         if chunk.used < tuning::DATA_INDEX_CHUNK_SIZE as u64 {
+                            todo!("the data within each final chunk needs to be split at the appropreate time");
                             // ^ there is enough space in this chunk for the new index to go
                             let used = chunk.used;
                             // move this entry, and all the ones (after in list, before in time) it back
@@ -338,7 +341,26 @@ impl<Store: Storage> Database<Store> {
                             chunk.data[entry_idx] = new_entry;
                         } else {
                             // ^ we need to create a new entry in the index list
-                            todo!()
+                            todo!("unfinished + the data must be split at the appropreate time (see above)");
+
+                            // the new entry is farther back in the list, and so will contain older entries
+                            let mut new_index = Object::new_alloc(
+                                &mut self.alloc,
+                                ChunkedLinkedList {
+                                    next: chunk.next,
+                                    used: 0,
+                                    data: <_ as FromBytes>::new_zeroed(),
+                                },
+                            )
+                            .await?;
+                            chunk.next = new_index.pointer();
+                            // move all entries older than the new one into the new index
+                            new_index
+                                .data
+                                .get_mut(..(chunk.data[entry_idx..].len()))
+                                .unwrap()
+                                .copy_from_slice(&chunk.data[entry_idx..]);
+                            // insert the new entry into the current chunk
                         }
                     }
                     // the data is inserted
@@ -379,6 +401,6 @@ impl<Store: Storage> Database<Store> {
     #[instrument(skip(self))]
     pub async fn close(self) -> Result<(), DBError<<Store as Storage>::Error>> {
         self.alloc.close().await?;
-        todo!()
+        Ok(())
     }
 }
