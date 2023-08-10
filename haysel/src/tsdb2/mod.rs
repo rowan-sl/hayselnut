@@ -124,7 +124,7 @@ impl<Store: Storage> Database<Store> {
         warn!("TODO: check that the channel does not already exist");
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
-        let station = ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == id)
+        let station = ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == to)
             .await?
             .expect("did not find requested station");
         ChunkedLinkedList::push(
