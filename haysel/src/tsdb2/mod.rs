@@ -137,6 +137,10 @@ impl<Store: Storage> Database<Store> {
         {
             return Err(DBError::Duplicate);
         }
+        let data = Object::new_alloc(&mut self.alloc, ChunkedLinkedList::empty_head())
+            .await?
+            .dispose_sync(&mut self.alloc)
+            .await?;
         ChunkedLinkedList::push(
             station.channels,
             &mut self.alloc,
@@ -146,7 +150,7 @@ impl<Store: Storage> Database<Store> {
                     group_type: kind as u8,
                 },
                 _pad: Default::default(),
-                data: Ptr::null(),
+                data,
             },
         )
         .await?;
