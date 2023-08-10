@@ -102,13 +102,14 @@ impl<Store: Storage> Database<Store> {
         warn!("TODO: check that a station does not already exist");
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
+        let channels = Object::new_alloc(&mut self.alloc, ChunkedLinkedList::empty_head())
+            .await?
+            .dispose_sync(&mut self.alloc)
+            .await?;
         ChunkedLinkedList::push(
             entry.stations.map,
             &mut self.alloc,
-            repr::Station {
-                id,
-                channels: Ptr::null(),
-            },
+            repr::Station { id, channels },
         )
         .await?;
         Ok(())
