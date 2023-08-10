@@ -99,9 +99,13 @@ impl<Store: Storage> Database<Store> {
         &mut self,
         id: StationID,
     ) -> Result<(), DBError<<Store as Storage>::Error>> {
-        warn!("TODO: check that a station does not already exist");
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
+        if let Some(..) =
+            ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == id).await?
+        {
+            return Err(DBError::Duplicate);
+        }
         let channels = Object::new_alloc(&mut self.alloc, ChunkedLinkedList::empty_head())
             .await?
             .dispose_sync(&mut self.alloc)
