@@ -6,7 +6,7 @@ use super::{error::AllocError, ptr::Ptr, util::test::TestStore, Allocator};
 #[traced_test]
 async fn initializing_allocator_doesnt_crash() {
     let store = TestStore::default();
-    let alloc = Allocator::new(store)
+    let alloc = Allocator::new(store, false)
         .await
         .expect("failed to create allocator");
     alloc.close().await.expect("failed to shutdown allocator");
@@ -15,7 +15,7 @@ async fn initializing_allocator_doesnt_crash() {
 #[tokio::test]
 #[traced_test]
 async fn allocate_some_stuff() {
-    let mut alloc = Allocator::new(TestStore::default())
+    let mut alloc = Allocator::new(TestStore::default(), false)
         .await
         .expect("failed to create allocator");
     alloc.allocate::<[u8; 512]>().await.unwrap();
@@ -39,7 +39,7 @@ async fn allocate_a_thing(alloc: &mut Allocator<TestStore>) -> (Ptr<[u128; 16]>,
 #[tokio::test]
 #[traced_test]
 async fn allocate_and_use() {
-    let mut alloc = Allocator::new(TestStore::default())
+    let mut alloc = Allocator::new(TestStore::default(), false)
         .await
         .expect("failed to create allocator");
     let (ptr, _) = allocate_a_thing(&mut alloc).await;
@@ -50,7 +50,7 @@ async fn allocate_and_use() {
 #[tokio::test]
 #[traced_test]
 async fn use_after_free_errors() {
-    let mut alloc = Allocator::new(TestStore::default())
+    let mut alloc = Allocator::new(TestStore::default(), false)
         .await
         .expect("failed to create allocator");
     let (ptr, _) = allocate_a_thing(&mut alloc).await;
@@ -65,7 +65,7 @@ async fn use_after_free_errors() {
 #[tokio::test]
 #[traced_test]
 async fn bad_pointer_errors() {
-    let mut alloc = Allocator::new(TestStore::default())
+    let mut alloc = Allocator::new(TestStore::default(), false)
         .await
         .expect("failed to create allocator");
     let (ptr, _) = allocate_a_thing(&mut alloc).await;

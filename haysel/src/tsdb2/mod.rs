@@ -61,8 +61,11 @@ pub struct Database<Store: Storage> {
 
 impl<Store: Storage> Database<Store> {
     #[instrument(skip(store))]
-    pub async fn new(store: Store) -> Result<Self, DBError<<Store as Storage>::Error>> {
-        let mut alloc = Allocator::new(store).await?;
+    pub async fn new(
+        store: Store,
+        init_overwrite: bool,
+    ) -> Result<Self, DBError<<Store as Storage>::Error>> {
+        let mut alloc = Allocator::new(store, init_overwrite).await?;
         if alloc.get_entrypoint().await?.is_null() {
             // the entrypoint is null, so this is a fresh database.
 

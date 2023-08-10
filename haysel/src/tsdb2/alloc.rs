@@ -59,12 +59,15 @@ pub struct Allocator<S: Storage> {
 
 impl<S: Storage> Allocator<S> {
     #[instrument(skip(store))]
-    pub async fn new(mut store: S) -> Result<Self, AllocError<<S as Storage>::Error>> {
+    pub async fn new(
+        mut store: S,
+        init_overwrite: bool,
+    ) -> Result<Self, AllocError<<S as Storage>::Error>> {
         let size = store.size().await?;
 
         // if the store is empty, it is probably new and needs to be initialized. do that here
         if size < mem::size_of::<AllocHeader>() as _ {
-            warn!("store is empty, intitializing a new database");
+            warn!("store is empty / too small, intitializing a new database");
             let new_header = AllocHeader::new(Ptr::null());
             store.expand_by(mem::size_of_val(&new_header) as _).await?;
             store
@@ -78,8 +81,18 @@ impl<S: Storage> Allocator<S> {
         // wrong backing [file] was opened instead of a database, and we do not want to
         // overwrite it.)
         if !header.verify() {
-            error!("it appears that the store in use contains data that is NOT an allocator's (magic bytes are missing) - refusing to continue to avoid any damage");
-            return Err(AllocError::StoreNotAnAllocator);
+            if init_overwrite {
+                warn!("overwriting the current contents to initialize the database");
+                // there should be enough space
+                let new_header = AllocHeader::new(Ptr::null());
+                store
+                    .write_typed(Ptr::<AllocHeader>::with(0u64), &new_header)
+                    .await?;
+            } else {
+                error!("it appears that the store in use contains data that is NOT an allocator's (magic bytes are missing) - refusing to continue to avoid any damage");
+                info!("if you are attempting to initialize a database in a fixed-size file, use the `--init-overwrite` flag to overwrite the current content instead of throwing this error");
+                return Err(AllocError::StoreNotAnAllocator);
+            }
         }
 
         // read out the header, listing the available sizes for data
@@ -216,9 +229,21 @@ impl<S: Storage> Allocator<S> {
             // this would leave space unused if there is unindexed space at the end of the
             // file, but that hopefully wont happen
             let ptr = Ptr::with(self.store.size().await?);
-            self.store
-                .expand_by(mem::size_of::<ChunkHeader>() as u64 + allocation_size)
-                .await?;
+            {
+                // expand the store if needed, otherwise just change `used`
+                let expand_by = mem::size_of::<ChunkHeader>() as u64 + allocation_size;
+                let mut header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
+                let size = self.store.size().await?;
+                // make up the difference if the store is too small
+                if size - header.used < expand_by {
+                    let delta = expand_by - (size - header.used);
+                    self.store.expand_by(delta).await?;
+                }
+                header.used += expand_by;
+                self.store
+                    .write_typed(Ptr::<AllocHeader>::null(), &header)
+                    .await?;
+            }
             // create and write in the new header
             let header = ChunkHeader {
                 flags: ChunkFlags::empty().bits(),
@@ -238,15 +263,16 @@ impl<S: Storage> Allocator<S> {
         ptr: Ptr<T>,
         free: bool,
     ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        let alloc_header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         // get the location of the chunk this pointer points to
         let chunk_loc = ptr
             .offset(-(mem::size_of::<ChunkHeader>() as i64))
             .cast::<ChunkHeader>();
         // verify that that actually *is* a valid chunk
+        warn!("-- very inneficient code alert --");
         'validate: {
             let mut c_ptr = Ptr::<ChunkHeader>::with(mem::size_of::<AllocHeader>() as _);
-            let size = self.store.size().await?;
-            while c_ptr.addr + (mem::size_of::<ChunkHeader>() as u64) < size {
+            while c_ptr.addr + (mem::size_of::<ChunkHeader>() as u64) < alloc_header.used {
                 if c_ptr == chunk_loc {
                     break 'validate;
                 }
