@@ -132,6 +132,11 @@ impl<Store: Storage> Database<Store> {
         let station = ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == to)
             .await?
             .expect("did not find requested station");
+        if let Some(..) =
+            ChunkedLinkedList::find(station.channels, &mut self.alloc, |c| c.id == id).await?
+        {
+            return Err(DBError::Duplicate);
+        }
         ChunkedLinkedList::push(
             station.channels,
             &mut self.alloc,
