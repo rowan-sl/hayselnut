@@ -67,6 +67,7 @@ impl Storage for DiskStore {
 
     #[instrument(skip(self))]
     async fn close(mut self) -> Result<(), Self::Error> {
+        self.file.sync_all().await?;
         self.file.shutdown().await?;
         Ok(())
     }
