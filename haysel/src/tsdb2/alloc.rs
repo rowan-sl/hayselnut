@@ -228,11 +228,11 @@ impl<S: Storage> Allocator<S> {
             //
             // this would leave space unused if there is unindexed space at the end of the
             // file, but that hopefully wont happen
-            let ptr = Ptr::with(self.store.size().await?);
-            {
+            let ptr = {
                 // expand the store if needed, otherwise just change `used`
                 let expand_by = mem::size_of::<ChunkHeader>() as u64 + allocation_size;
                 let mut header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
+                let ptr = Ptr::with(header.used);
                 let size = self.store.size().await?;
                 // make up the difference if the store is too small
                 if size - header.used < expand_by {
@@ -243,7 +243,8 @@ impl<S: Storage> Allocator<S> {
                 self.store
                     .write_typed(Ptr::<AllocHeader>::null(), &header)
                     .await?;
-            }
+                ptr
+            };
             // create and write in the new header
             let header = ChunkHeader {
                 flags: ChunkFlags::empty().bits(),
