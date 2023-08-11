@@ -185,8 +185,13 @@ impl<S: Storage> Allocator<S> {
         &mut self,
     ) -> Result<Ptr<T>, AllocError<<S as Storage>::Error>> {
         let allocation_size = mem::size_of::<T>() as u64;
-        if let Some(free_list) = self.free_list_for_size(allocation_size).await? {
-            debug!("free list includes entry for this size");
+        debug!(
+            "alloc {} - {}",
+            std::any::type_name::<T>(),
+            super::repr::info::sfmt(allocation_size as usize).trim(),
+        );
+        let ptr = if let Some(free_list) = self.free_list_for_size(allocation_size).await? {
+            trace!("free list includes entry for this size");
             // there are free spaces - use them!
             // get the header of the chunk that will eventually be used for the allocated data.
             // it is the first entry in the free list
@@ -219,12 +224,12 @@ impl<S: Storage> Allocator<S> {
             self.store.write_typed(free_list.head, &first_entry).await?;
             // return a pointer that is after the chunk header for the chunk (this is where the
             // data goes)
-            return Ok(free_list
+            free_list
                 .head
                 .offset(mem::size_of::<ChunkHeader>() as i64)
-                .cast::<T>());
+                .cast::<T>()
         } else {
-            debug!("no free list entry - expanding");
+            trace!("no free list entry - expanding");
             // no free space - must allocate more.
             // allocate more empty space past the current limit, and use it.
             //
@@ -256,8 +261,15 @@ impl<S: Storage> Allocator<S> {
             };
             self.store.write_typed(ptr, &header).await?;
             // return a pointer after the header
-            return Ok(ptr.offset(mem::size_of::<ChunkHeader>() as i64).cast::<T>());
-        }
+            ptr.offset(mem::size_of::<ChunkHeader>() as i64).cast::<T>()
+        };
+        debug!(
+            "alloc'd {} - {} @ {:#X}",
+            std::any::type_name::<T>(),
+            super::repr::info::sfmt(allocation_size as usize).trim(),
+            ptr.addr,
+        );
+        Ok(ptr)
     }
 
     #[instrument(skip(self))]
@@ -272,7 +284,7 @@ impl<S: Storage> Allocator<S> {
             .offset(-(mem::size_of::<ChunkHeader>() as i64))
             .cast::<ChunkHeader>();
         // verify that that actually *is* a valid chunk
-        warn!("-- very inneficient code alert --");
+        debug!("-- very inneficient code alert --");
         'validate: {
             let mut c_ptr = Ptr::<ChunkHeader>::with(mem::size_of::<AllocHeader>() as _);
             while c_ptr.addr + (mem::size_of::<ChunkHeader>() as u64) < alloc_header.used {
@@ -317,6 +329,12 @@ impl<S: Storage> Allocator<S> {
         &mut self,
         ptr: Ptr<T>,
     ) -> Result<(), AllocError<<S as Storage>::Error>> {
+        debug!(
+            "free {} - {} @ {:#X}",
+            std::any::type_name::<T>(),
+            super::repr::info::sfmt(std::mem::size_of::<T>()).trim(),
+            ptr.addr
+        );
         self.validate_pointer(ptr, false).await?;
         // get the location of the chunk this pointer points to
         let chunk_loc = ptr
