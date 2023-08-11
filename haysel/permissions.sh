@@ -17,7 +17,7 @@ confirm() {
 echo "modifying disk $1"
 confirm || exit 1
 echo "modifying permissions..."
-sudo chown $USER $0 || exit 1
-sudo chmod 700 $0 || exit 1
-export DISK=$0
+sudo chown $USER $1
+sudo chmod 700 $1
+export DISK=$1
 
