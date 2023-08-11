@@ -186,6 +186,7 @@ impl<S: Storage> Allocator<S> {
     ) -> Result<Ptr<T>, AllocError<<S as Storage>::Error>> {
         let allocation_size = mem::size_of::<T>() as u64;
         if let Some(free_list) = self.free_list_for_size(allocation_size).await? {
+            debug!("free list includes entry for this size");
             // there are free spaces - use them!
             // get the header of the chunk that will eventually be used for the allocated data.
             // it is the first entry in the free list
@@ -223,6 +224,7 @@ impl<S: Storage> Allocator<S> {
                 .offset(mem::size_of::<ChunkHeader>() as i64)
                 .cast::<T>());
         } else {
+            debug!("no free list entry - expanding");
             // no free space - must allocate more.
             // allocate more empty space past the current limit, and use it.
             //

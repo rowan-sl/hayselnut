@@ -67,6 +67,7 @@ impl<Store: Storage> Database<Store> {
     ) -> Result<Self, DBError<<Store as Storage>::Error>> {
         let mut alloc = Allocator::new(store, init_overwrite).await?;
         if alloc.get_entrypoint().await?.is_null() {
+            warn!("initializing a new database");
             // the entrypoint is null, so this is a fresh database.
 
             // initialize the new entrypoint
@@ -93,6 +94,8 @@ impl<Store: Storage> Database<Store> {
             .await?;
             alloc.set_entrypoint(entrypoint.pointer().cast()).await?;
             entrypoint.dispose_sync(&mut alloc).await?;
+        } else {
+            info!("found and opened existing database");
         }
         Ok(Self { alloc })
     }
