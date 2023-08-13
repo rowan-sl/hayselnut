@@ -412,9 +412,15 @@ impl<Store: Storage> Database<Store> {
 
     #[instrument]
     pub async fn infodump() {
-        use info::print_inf;
+        use repr::info::print_inf;
         use repr::*;
         print_inf::<DBEntrypoint>();
+    }
+
+    #[instrument(skip(self))]
+    pub async fn infodump_from(&mut self) -> Result<(), DBError<<Store as Storage>::Error>> {
+        self.alloc.infodump_from().await?;
+        Ok(())
     }
 
     #[instrument(skip(self))]

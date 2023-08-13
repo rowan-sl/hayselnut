@@ -95,16 +95,6 @@ impl<S: Storage> Allocator<S> {
             }
         }
 
-        // read out the header, listing the available sizes for data
-        {
-            let sizes = header
-                .free_list
-                .iter()
-                .filter(|x| x.size != 0)
-                .collect::<Vec<_>>();
-            trace!("allocator contains free spaces of size {sizes:?}");
-        }
-
         Ok(Self { store })
     }
 
@@ -380,6 +370,24 @@ impl<S: Storage> Allocator<S> {
     ) -> Result<(), AllocError<<S as Storage>::Error>> {
         self.validate_pointer(at, false).await?;
         Ok(self.store.write_typed(at, &val).await?)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn infodump_from(&mut self) -> Result<(), AllocError<<S as Storage>::Error>> {
+        use super::repr::info::sfmt;
+        let header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
+        let size = self.store.size().await?;
+        info!("Allocator tracking {} / {} (includes space that has been freed)", sfmt(header.used as _), sfmt(size as _));
+        // read out the header, listing the available sizes for data
+        {
+            let sizes = header
+                .free_list
+                .iter()
+                .filter(|x| x.size != 0)
+                .collect::<Vec<_>>();
+            info!("allocator contains free spaces of size {sizes:?}");
+        }
+        Ok(())
     }
 
     #[instrument(skip(self))]

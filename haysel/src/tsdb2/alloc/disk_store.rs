@@ -16,12 +16,12 @@ pub struct DiskStore {
 
 impl DiskStore {
     #[instrument]
-    pub async fn new(path: &Path) -> Result<Self, <Self as Storage>::Error> {
+    pub async fn new(path: &Path, readonly: bool) -> Result<Self, <Self as Storage>::Error> {
         Ok(Self {
             file: OpenOptions::new()
                 .read(true)
-                .write(true)
-                .create(true)
+                .write(!readonly)
+                .create(!readonly)
                 .open(path)
                 .await?,
         })

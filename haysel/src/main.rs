@@ -54,7 +54,10 @@ pub struct ArgsParser {
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// dump info about the database
-    Infodump,
+    Infodump {
+        #[arg(long, help = "if provided, will dump information about the database contained in <file>")]
+        file: Option<PathBuf>,
+    },
     /// run
     Run {
         #[command(flatten)]
@@ -109,9 +112,17 @@ async fn main() -> anyhow::Result<()> {
     info!("Args: {args_parsed:#?}");
 
     match args_parsed.cmd {
-        Cmd::Infodump => {
+        Cmd::Infodump { file } => {
             error!(" -------- dumping database info --------");
             tsdb2::Database::<tsdb2::alloc::disk_store::DiskStore>::infodump().await;
+            if let Some(file) = file {
+                error!(" -------- dumping database info for {file:?} --------");
+                use tsdb2::{alloc::disk_store::DiskStore, Database};
+                let store = DiskStore::new(&file, true).await?;
+                let mut database = Database::new(store, false).await?;
+                database.infodump_from().await?;
+                database.close().await?;
+            }
             error!(" -------- DB infodump complete  --------");
             return Ok(());
         }
@@ -122,8 +133,9 @@ async fn main() -> anyhow::Result<()> {
             file = file.canonicalize()?;
             debug!("{{file}} resolves to {file:?}");
             use tsdb2::{alloc::disk_store::DiskStore, Database};
-            let store = DiskStore::new(&file).await?;
-            let mut database = Database::new(store, init_overwrite).await?;
+            let store = DiskStore::new(&file, false).await?;
+            let database = Database::new(store, init_overwrite).await?;
+
             database.close().await?;
             return Ok(());
         }

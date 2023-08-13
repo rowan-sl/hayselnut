@@ -20,10 +20,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use embedded_svc::wifi::Wifi as _;
+use embedded_svc::wifi;
 use esp_idf_hal::{
-    gpio::PinDriver,
-    i2c::{self, I2cDriver},
+//    gpio::PinDriver,
+//    i2c::{self, I2cDriver},
+    i2c,
     peripherals::Peripherals,
     reset::ResetReason,
     units::FromValueType,
@@ -32,15 +33,13 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     log::EspLogger,
     nvs::EspDefaultNvsPartition,
-    wifi::{EspWifi, WifiEvent},
+    wifi::{EspWifi, AsyncWifi}, timer::EspTaskTimerService,
 };
-use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source}; // allways should be imported if `binstart` feature is enabled.
-use futures::{select_biased, FutureExt, StreamExt};
+use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source, esp_app_desc}; // allways should be imported if `binstart` feature is enabled.
+use futures::{select_biased, FutureExt};
 use serde::{Deserialize, Serialize};
-use smol::{
-    net::{resolve, UdpSocket},
-    Timer,
-};
+use tokio::{net::{lookup_host as resolve, UdpSocket}, time::{Interval, interval}};
+
 use squirrel::{
     api::{
         station::capabilities::{
@@ -59,10 +58,9 @@ use store::{StationStore, StationStoreCached};
 
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
-    flag::Flag,
-    lightning::LightningSensor,
+    // flag::Flag,
+    // lightning::LightningSensor,
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
-    wifictl::Wifi,
 };
 
 const NO_WIFI_RETRY_INTERVAL: Duration = Duration::from_secs(60);
@@ -72,6 +70,8 @@ mod build {
     pub const DATETIME_PRETTY: &str = env!("BUILD_DATETIME_PRETTY");
     pub const DATETIME: &str = env!("BUILD_DATETIME");
 }
+
+esp_app_desc!();
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -93,7 +93,7 @@ fn main() {
 
     println!("setting up logging");
     EspLogger::initialize_default();
-    EspLogger.set_target_level("*", log::LevelFilter::Trace);
+    EspLogger.set_target_level("*", log::LevelFilter::Trace).unwrap_hwerr("failed to set esp log level");
     // test log levels
     trace!("[logger] logging level trace");
     debug!("[logger] logging level debug");
@@ -109,6 +109,7 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().unwrap_hwerr("could not take system event loop");
     let nvs_partition = EspDefaultNvsPartition::take()
         .unwrap_hwerr("could not take default nonvolatile storage partition");
+    let timer = EspTaskTimerService::new().unwrap_hwerr("failed to create task timer service");
 
     // -- initializing core peripherals --
     // battery monitor
@@ -123,314 +124,330 @@ fn main() {
         &i2c::config::Config::new().baudrate(100.kHz().into()),
     )
     .unwrap_hwerr("failed to initialize battery monitor");
-    let i2c_bus = shared_bus::new_std!(I2cDriver = i2c_driver)
-        .expect("[sanity check] can only create one shared bus instance");
+    //let i2c_bus = shared_bus::new_std!(I2cDriver = i2c_driver)
+    //    .expect("[sanity check] can only create one shared bus instance");
+    let i2c_bus = i2c_driver;
 
     // -- initializing peripherals --
     // lightning
     // CS=7 MISO(MI)=6 MOSI(DA)=5 CLK=10 IRQ=4
     //TODO: intergrate this with the peripheral system for error handleing
-    let (mut lightning_sensor, lightning_setup_interrupt) = {
-        let (cs, miso, mosi, clk, irq) = (
-            PinDriver::output(pins.gpio7).unwrap(),
-            PinDriver::input(pins.gpio6).unwrap(),
-            PinDriver::output(pins.gpio5).unwrap(),
-            PinDriver::output(pins.gpio10).unwrap(),
-            pins.gpio4,
-        );
-        let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
-        sensor.perform_initial_configuration().unwrap();
-        sensor.configure_defaults().unwrap();
-        let mode = &lightning::repr::SensorLocation::Outdoor;
-        info!("the lightning sensor currently set to {mode:?} location mode");
-        sensor.configure_sensor_placing(mode).unwrap();
-        // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
-        warn!("the lightning sensor currently has all of its noise rejection disabled for testing. this will yield many false positives");
-        // sensor
-        //     .configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false))
-        //     .unwrap();
-        // sensor
-        //     .configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0))
-        //     .unwrap();
-        // sensor
-        //     .configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One)
-        //     .unwrap();
-        // sensor
-        //     .configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(
-        //         0,
-        //     ))
-        //     .unwrap();
-        // sensor
-        //     .configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0))
-        //     .unwrap();
-        let setup_interrupt = move |flag: Flag| unsafe {
-            PinDriver::input(irq)
-                .unwrap()
-                .subscribe(move || {
-                    // Saftey (this itself is safe, but its executing in an ISR context)
-                    // this is only doing atomic memory accesses, which should be fine :shrug:
-                    flag.signal();
-                })
-                .unwrap_hwerr("failed to set interrupt");
-        };
-        (sensor, setup_interrupt)
-    };
+    // let (mut lightning_sensor, lightning_setup_interrupt) = {
+    //     let (cs, miso, mosi, clk, irq) = (
+    //         PinDriver::output(pins.gpio7).unwrap(),
+    //         PinDriver::input(pins.gpio6).unwrap(),
+    //         PinDriver::output(pins.gpio5).unwrap(),
+    //         PinDriver::output(pins.gpio10).unwrap(),
+    //         pins.gpio4,
+    //     );
+    //     let mut sensor = LightningSensor::new(cs, clk, mosi, miso).unwrap();
+    //     sensor.perform_initial_configuration().unwrap();
+    //     sensor.configure_defaults().unwrap();
+    //     let mode = &lightning::repr::SensorLocation::Outdoor;
+    //     info!("the lightning sensor currently set to {mode:?} location mode");
+    //     sensor.configure_sensor_placing(mode).unwrap();
+    //     // DO SOMETHING GOD DAMNIT (remove literally every single anti-noise and false positive protection)
+    //     warn!("the lightning sensor currently has all of its noise rejection disabled for testing. this will yield many false positives");
+    //     // sensor
+    //     //     .configure_ignore_disturbances(&lightning::repr::MaskDisturberEvent(false))
+    //     //     .unwrap();
+    //     // sensor
+    //     //     .configure_noise_floor_threshold(&lightning::repr::NoiseFloorThreshold(0))
+    //     //     .unwrap();
+    //     // sensor
+    //     //     .configure_minimum_lightning_threshold(&lightning::repr::MinimumLightningThreshold::One)
+    //     //     .unwrap();
+    //     // sensor
+    //     //     .configure_signal_verification_threshold(&lightning::repr::SignalVerificationThreshold(
+    //     //         0,
+    //     //     ))
+    //     //     .unwrap();
+    //     // sensor
+    //     //     .configure_spike_rejection(&lightning::repr::SpikeRejectionSetting(0))
+    //     //     .unwrap();
+    //     let setup_interrupt = move |flag: Flag| unsafe {
+    //         PinDriver::input(irq)
+    //             .unwrap()
+    //             .subscribe(move || {
+    //                 // Saftey (this itself is safe, but its executing in an ISR context)
+    //                 // this is only doing atomic memory accesses, which should be fine :shrug:
+    //                 flag.signal();
+    //             })
+    //             .unwrap_hwerr("failed to set interrupt");
+    //     };
+    //     (sensor, setup_interrupt)
+    // };
 
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     warn!("connecting to BME sensor - if it is disconnected this will hang here");
-    let mut bme280 = PeriphBME280::new(i2c_bus.acquire_i2c());
+    let mut bme280 = PeriphBME280::new(i2c_bus);
+
+    // see [fix_networking] docs -- if not present UdpSocket::bind fails
+    // - also needed for tokio
+    wifictl::util::fix_networking()
+        .unwrap_hwerr("call to wifictl::util::fix_networking failed");
 
     // -- wifi initialization --
-    let (mut wifi, wifi_status_recv) =
-        setup_wifi(&sysloop, peripherals.modem, nvs_partition.clone());
+    let mut wifi = AsyncWifi::wrap(
+        EspWifi::new(
+            peripherals.modem,
+            sysloop.clone(),
+            Some(nvs_partition.clone())
+        ).unwrap_hwerr("failed to initialize wifi"),
+        sysloop.clone(),
+        timer
+    ).unwrap_hwerr("failed to initialize async wifi");
 
-    // -- NVS station information initialization --
-    // performed here since it uses random numbers, and `getrandom` on the esp32
-    // requires wifi / bluetooth to be enabled for true random numbers
-    // - performed before the wifi is connected, because in the future this might store info on known networks
-    let store: Box<dyn StationStore> = Box::new(
-        StationStoreCached::init(nvs_partition.clone()).unwrap_hwerr("error accessing NVS"),
-    );
-    info!("Loaded station info: {:#?}", store.read());
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap_hwerr("failed to initialize async runtime (tokio)")
+        .block_on(async move {
+            // -- the rest of wifi initialization --
+            wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration::default()))
+                    .unwrap_hwerr("failed to set wifi configuration");
+            wifi.start().await.unwrap_hwerr("failed to start wifi");
 
-    // -- here is code that needs to go before the error-retry loops --
-    // see [fix_networking] docs -- if not present UdpSocket::bind fails
-    wifictl::util::fix_networking().unwrap_hwerr("call to wifictl::util::fix_networking failed");
+            // -- NVS station information initialization --
+            // performed here since it uses random numbers, and `getrandom` on the esp32
+            // requires wifi / bluetooth to be enabled for true random numbers
+            // - performed before the wifi is connected, because in the future this might store info on known networks
+            let store: Box<dyn StationStore> = Box::new(
+                StationStoreCached::init(nvs_partition.clone()).unwrap_hwerr("error accessing NVS"),
+            );
+            info!("Loaded station info: {:#?}", store.read());
 
-    // -- start the executor (before retry loops) --
-    smol::block_on(async {
-        println!();
-        // not an error, just make the message stand out
-        error!("----     ----    async executor + main loop started    ----    ----\n");
+            // -- here is code that needs to go before the error-retry loops --
 
-        info!("setting lightning sensor interrupt");
-        let lightning_flag = Flag::new();
-        lightning_setup_interrupt(lightning_flag.clone());
+            println!();
+            // not an error, just make the message stand out
+            error!("----     ----    main loop starting    ----    ----\n");
 
-        // -- init some persistant information for use later --
-        let mut uid_gen = UidGenerator::new();
-        let mut channels = vec![
-            Channel {
-                name: "battery".into(),
-                value: ChannelValue::Float,
-                ty: ChannelType::Periodic,
-            },
-            Channel {
-                name: "lightning".into(),
-                value: ChannelValue::Event(HashMap::from([
-                    ("distance_estimation_changed".into(), vec![]),
-                    ("disturbance_detected".into(), vec![]),
-                    ("noise_level_too_high".into(), vec![]),
-                    ("invalid_interrupt".into(), vec![]),
-                    ("lightning".into(), vec!["distance".into()]),
-                ])),
-                ty: ChannelType::Triggered,
-            },
-        ];
-        // add channels from sensors
-        channels.extend_from_slice(&bme280.channels());
-        // setup timers for when to measure things
-        // todo: not hardcode
-        let config = MeasureConfig::default();
-        let mut timers = MeasureTimers::with_config(&config);
+            //info!("setting lightning sensor interrupt");
+            //let lightning_flag = Flag::new();
+            //lightning_setup_interrupt(lightning_flag.clone());
 
-        // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
-        let sock = UdpSocket::bind("0.0.0.0:0")
-            .await
-            .unwrap_hwerr("call to UdpSocket bind failed [unkwnown cause]");
+            // -- init some persistant information for use later --
+            let mut uid_gen = UidGenerator::new();
+            let mut channels = vec![
+                Channel {
+                    name: "battery".into(),
+                    value: ChannelValue::Float,
+                    ty: ChannelType::Periodic,
+                },
+                Channel {
+                    name: "lightning".into(),
+                    value: ChannelValue::Event(HashMap::from([
+                        ("distance_estimation_changed".into(), vec![]),
+                        ("disturbance_detected".into(), vec![]),
+                        ("noise_level_too_high".into(), vec![]),
+                        ("invalid_interrupt".into(), vec![]),
+                        ("lightning".into(), vec!["distance".into()]),
+                    ])),
+                    ty: ChannelType::Triggered,
+                },
+            ];
+            // add channels from sensors
+            channels.extend_from_slice(&bme280.channels());
+            // setup timers for when to measure things
+            // todo: not hardcode
+            let config = MeasureConfig::default();
+            let mut timers = MeasureTimers::with_config(&config);
 
-        'retry_wifi: loop {
-            connect_wifi(&mut wifi, &wifi_status_recv);
+            // if this call fails, (or any other socket binds) try messing with the number in `wifictl::util::fix_networking`
+            let sock = UdpSocket::bind("0.0.0.0:0")
+                .await
+                .unwrap_hwerr("call to UdpSocket bind failed [unkwnown cause]");
 
-            'retry_server: loop {
-                // re-do DNS in here (not the wifi loop) just in case it changing causing this
-                let ips = resolve(conf::SERVER)
-                    .await
-                    .unwrap_hwerr("call to DNS resolve failed [unknown cause]");
-                if ips.len() == 0 {
-                    error!("failed to resolve server address (DNS lookup for {:?} returned no IP results)", conf::SERVER);
-                    if !wifi
-                        .inner()
-                        .is_connected()
-                        .unwrap_hwerr("error checking wifi status")
-                    {
-                        warn!("[cause of error]: wifi was not connected");
-                        continue 'retry_wifi;
+            'retry_wifi: loop {
+                connect_wifi(&mut wifi).await;
+
+                'retry_server: loop {
+                    // re-do DNS in here (not the wifi loop) just in case it changing causing this
+                    let ips = resolve(conf::SERVER)
+                        .await
+                        .unwrap_hwerr("call to DNS resolve failed [unknown cause]")
+                        .collect::<Vec<_>>();
+                    if ips.len() == 0 {
+                        error!("failed to resolve server address (DNS lookup for {:?} returned no IP results)", conf::SERVER);
+                        if !wifi
+                            .is_connected()
+                            .unwrap_hwerr("error checking wifi status")
+                        {
+                            warn!("[cause of error]: wifi was not connected");
+                            continue 'retry_wifi;
+                        }
+                    } else if ips.len() > 1 {
+                        _panic_hwerr(
+                            error::EmptyError,
+                            "Faild to respolve server address -- multiple results ({ips:?})",
+                        );
                     }
-                } else if ips.len() > 1 {
-                    _panic_hwerr(
-                        error::EmptyError,
-                        "Faild to respolve server address -- multiple results ({ips:?})",
+
+                    // works even if wifi is not connected. only operations that actually use the network will break.
+                    sock.connect(ips[0])
+                        .await
+                        .unwrap_hwerr("call to sock.connect failed [unknown cause]");
+                    info!(
+                        "linking socket to server at: {:?} (this does not mean that the server is actually running here)",
+                        sock.peer_addr().unwrap_hwerr("socket.peer_addr failed [unknown cause]")
                     );
-                }
 
-                // works even if wifi is not connected. only operations that actually use the network will break.
-                sock.connect(ips[0])
-                    .await
-                    .unwrap_hwerr("call to sock.connect failed [unknown cause]");
-                info!(
-                    "linking socket to server at: {:?} (this does not mean that the server is actually running here)",
-                    sock.peer_addr().unwrap_hwerr("socket.peer_addr failed [unknown cause]")
-                );
-
-                // macro to handle network errors (needs to be a macro so it can use local loop labels)
-                // on scucess, returns the resulting value.
-                // on error, if handleable it deals with it, if not it bails
-                macro_rules! handle_netres {
-                    ($res:expr) => {
-                        match $res {
-                            Ok(v) => v,
-                            Err(SendError::IOError(e)) if e.kind() == io::ErrorKind::HostUnreachable => {
-                                error!("I/O Error: host unreachable (the network is down)");
-                                error!("attempting to reconnect WIFI");
-                                continue 'retry_wifi;
-                            }
-                            Err(e @ SendError::IOError(..)) => {
-                                _panic_hwerr(e, "I/O Error went unhandled (not known to be caused by a fixable problem)");
-                            },
-                            Err(SendError::TimedOut) => {
-                                error!("initial communication with the server failed (connection timed out -- is it running?)");
-                                error!("trying to connect with the server [again]");
-                                continue 'retry_server;
-                            }
-                        }
-                    };
-                }
-
-                macro_rules! send {
-                    ($packet:expr) => {
-                        handle_netres!(
-                            mvp_send(
-                                &sock,
-                                &rmp_serde::to_vec_named(&$packet)
-                                    .unwrap_hwerr("failed to serialize data to send"),
-                                &mut uid_gen,
-                            )
-                            .await
-                        )
-                    };
-                }
-
-                macro_rules! recv {
-                    ($kind:path) => {
-                        match rmp_serde::from_slice(&loop {
-                            match handle_netres!(mvp_recv(&sock, &mut uid_gen).await) {
-                                Some(packet) => break packet,
-                                None => {
-                                    warn!("receive timed out (got empty response, retrying in 5s)");
-                                    //TODO: have some sort of failure mode that does not loop forever
-                                    Timer::after(Duration::from_secs(5)).await;
-                                }
-                            }
-                        }) {
-                            Ok($kind(map)) => map,
-                            Ok(other) => {
-                                error!("The server is misbehaving! (expected {}, received {other:?})", stringify!($kind));
-                                error!("this would be caused by broken server code, or a malicious actor.");
-                                error!("we cant do much about this, exiting");
-                                //FIXME: mabey try again in a while?
-                                panic!()
-                            }
-                            Err(e) => {
-                                error!("The server is misbehaving! (failed to deserialize a packet)");
-                                error!("The error is: {e:?}");
-                                error!("this would be caused by broken server code, or a malicious actor.");
-                                error!("we cant do much about this, exiting");
-                                // see above
-                                panic!();
-                            }
-                        }
-                    }
-                }
-
-                // send init packet
-                info!("sending init info");
-                send!(&PacketKind::Connect(squirrel::api::OnConnect {
-                    station_id: store.read().station_uuid,
-                    station_build_rev: build::GIT_REV.to_string(),
-                    station_build_date: build::DATETIME.to_string(),
-                    channels: channels.clone(),
-                }));
-                info!("server is up");
-                info!("requesting channel mappings");
-                let mappings = recv!(PacketKind::ChannelMappings);
-                info!("received channel mappings: {mappings:#?}");
-
-                loop {
-                    select_biased! {
-                        status = wifi_status_recv.recv().fuse() => {
-                            match status.unwrap_hwerr("wifi status queue broken") {
-                                wifictl::WifiStatusUpdate::Disconnected => {
-                                    error!("notified of WIFI disconnect, reconnecting...");
+                    // macro to handle network errors (needs to be a macro so it can use local loop labels)
+                    // on scucess, returns the resulting value.
+                    // on error, if handleable it deals with it, if not it bails
+                    macro_rules! handle_netres {
+                        ($res:expr) => {
+                            match $res {
+                                Ok(v) => v,
+                                Err(SendError::IOError(e)) if e.kind() == io::ErrorKind::HostUnreachable => {
+                                    error!("I/O Error: host unreachable (the network is down)");
+                                    error!("attempting to reconnect WIFI");
                                     continue 'retry_wifi;
                                 }
+                                Err(e @ SendError::IOError(..)) => {
+                                    _panic_hwerr(e, "I/O Error went unhandled (not known to be caused by a fixable problem)");
+                                },
+                                Err(SendError::TimedOut) => {
+                                    error!("initial communication with the server failed (connection timed out -- is it running?)");
+                                    error!("trying to connect with the server [again]");
+                                    continue 'retry_server;
+                                }
+                            }
+                        };
+                    }
+
+                    macro_rules! send {
+                        ($packet:expr) => {
+                            handle_netres!(
+                                mvp_send(
+                                    &sock,
+                                    &rmp_serde::to_vec_named(&$packet)
+                                        .unwrap_hwerr("failed to serialize data to send"),
+                                    &mut uid_gen,
+                                )
+                                .await
+                            )
+                        };
+                    }
+
+                    macro_rules! recv {
+                        ($kind:path) => {
+                            match rmp_serde::from_slice(&loop {
+                                match handle_netres!(mvp_recv(&sock, &mut uid_gen).await) {
+                                    Some(packet) => break packet,
+                                    None => {
+                                        warn!("receive timed out (got empty response, retrying in 5s)");
+                                        //TODO: have some sort of failure mode that does not loop forever
+                                        tokio::time::sleep(Duration::from_secs(5)).await;
+                                    }
+                                }
+                            }) {
+                                Ok($kind(map)) => map,
+                                Ok(other) => {
+                                    error!("The server is misbehaving! (expected {}, received {other:?})", stringify!($kind));
+                                    error!("this would be caused by broken server code, or a malicious actor.");
+                                    error!("we cant do much about this, exiting");
+                                    //FIXME: mabey try again in a while?
+                                    panic!()
+                                }
+                                Err(e) => {
+                                    error!("The server is misbehaving! (failed to deserialize a packet)");
+                                    error!("The error is: {e:?}");
+                                    error!("this would be caused by broken server code, or a malicious actor.");
+                                    error!("we cant do much about this, exiting");
+                                    // see above
+                                    panic!();
+                                }
                             }
                         }
-                        _ = lightning_flag.clone().fuse() => {
-                            lightning_flag.reset();
-                            Timer::interval(lightning::IRQ_TRIGGER_TO_READY_DELAY).await;
-                            let event = lightning_sensor.get_latest_event_and_reset().unwrap();
-                            println!("received a lightning event! {:#?}", event);
-                            send!(PacketKind::Data(SomeData {
-                                per_channel: {
-                                    HashMap::<ChannelID, ChannelData>::from([(
-                                        *mappings.map.get(&ChannelName::from("lightning")).unwrap(),
-                                        ChannelData::Event {
-                                            sub: match event {
-                                                lightning::Event::DistanceEstimationChanged => "distance_estimation_changed",
-                                                lightning::Event::DisturbanceDetected => "disturbance_detected",
-                                                lightning::Event::NoiseLevelTooHigh => "noise_level_too_high",
-                                                lightning::Event::InvalidInt(..) => "invalid_interrupt",
-                                                lightning::Event::Lightning { .. } => "lightning",
-                                            }.to_string(),
-                                            data: match event {
-                                                lightning::Event::Lightning { distance } => HashMap::from([(
-                                                    "distance".to_string(),
-                                                    match distance {
-                                                        lightning::repr::DistanceEstimate::OutOfRange => f32::INFINITY,
-                                                        lightning::repr::DistanceEstimate::InRange(d) => d as f32,
-                                                        lightning::repr::DistanceEstimate::Overhead => 0f32
-                                                    }
-                                                )]),
-                                                _ => HashMap::new()
-                                            }
-                                        }
-                                    )])
-                                }
-                            }))
-                        }
-                        _ = timers.read_timer.next().fuse() => {
-                            info!("reading sensors and sending");
-                            let map_fn = |id: &str| *mappings.map.get(&ChannelName::from(id)).expect("could not find mapping for id {id:?}");
-                            let bme_readings = match bme280.read(&map_fn) {
-                                Some(v) => v,
-                                None => {
-                                    warn!("BME280 sensor peripheral error: {:?}, fixing...", bme280.err());
-                                    bme280.fix();
-                                    Default::default()
-                                }
-                            };
+                    }
 
-                            let battery_voltage = std::iter::repeat_with(|| batt_mon.read().unwrap_hwerr("failed to read battery voltage"))
-                                .take(50)
-                                .sum::<f32>() / 50.0;
+                    // send init packet
+                    info!("sending init info");
+                    send!(&PacketKind::Connect(squirrel::api::OnConnect {
+                        station_id: store.read().station_uuid,
+                        station_build_rev: build::GIT_REV.to_string(),
+                        station_build_date: build::DATETIME.to_string(),
+                        channels: channels.clone(),
+                    }));
+                    info!("server is up");
+                    info!("requesting channel mappings");
+                    let mappings = recv!(PacketKind::ChannelMappings);
+                    info!("received channel mappings: {mappings:#?}");
 
-                            send!(PacketKind::Data(SomeData {
-                                per_channel: {
-                                    let mut map = HashMap::<ChannelID, ChannelData>::new();
-                                    let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
-                                    set("battery", ChannelData::Float(battery_voltage));
-                                    bme_readings.into_iter().for_each(|(k, v)| { map.insert(k, v); });
-                                    map
-                                }
-                            }));
+                    loop {
+                        select_biased! {
+                            res = wifi.wifi_wait(|| wifi.is_up().map(|x| !x), None).fuse() => {
+                                res.unwrap_hwerr("failed to check wifi status");
+                                info!("WIFI disconnected");
+                                continue 'retry_wifi
+                            }
+                            // _ = lightning_flag.clone().fuse() => {
+                            //     lightning_flag.reset();
+                            //     Timer::interval(lightning::IRQ_TRIGGER_TO_READY_DELAY).await;
+                            //     let event = lightning_sensor.get_latest_event_and_reset().unwrap();
+                            //     println!("received a lightning event! {:#?}", event);
+                            //     send!(PacketKind::Data(SomeData {
+                            //         per_channel: {
+                            //             HashMap::<ChannelID, ChannelData>::from([(
+                            //                 *mappings.map.get(&ChannelName::from("lightning")).unwrap(),
+                            //                 ChannelData::Event {
+                            //                     sub: match event {
+                            //                         lightning::Event::DistanceEstimationChanged => "distance_estimation_changed",
+                            //                         lightning::Event::DisturbanceDetected => "disturbance_detected",
+                            //                         lightning::Event::NoiseLevelTooHigh => "noise_level_too_high",
+                            //                         lightning::Event::InvalidInt(..) => "invalid_interrupt",
+                            //                         lightning::Event::Lightning { .. } => "lightning",
+                            //                     }.to_string(),
+                            //                     data: match event {
+                            //                         lightning::Event::Lightning { distance } => HashMap::from([(
+                            //                             "distance".to_string(),
+                            //                             match distance {
+                            //                                 lightning::repr::DistanceEstimate::OutOfRange => f32::INFINITY,
+                            //                                 lightning::repr::DistanceEstimate::InRange(d) => d as f32,
+                            //                                 lightning::repr::DistanceEstimate::Overhead => 0f32
+                            //                             }
+                            //                         )]),
+                            //                         _ => HashMap::new()
+                            //                     }
+                            //                 }
+                            //             )])
+                            //         }
+                            //     }))
+                            // }
+                            _ = timers.read_timer.tick().fuse() => {
+                                info!("reading sensors and sending");
+                                let map_fn = |id: &str| *mappings.map.get(&ChannelName::from(id)).expect("could not find mapping for id {id:?}");
+                                let bme_readings = match bme280.read(&map_fn) {
+                                    Some(v) => v,
+                                    None => {
+                                        warn!("BME280 sensor peripheral error: {:?}, fixing...", bme280.err());
+                                        bme280.fix();
+                                        Default::default()
+                                    }
+                                };
+
+                                let battery_voltage = std::iter::repeat_with(|| batt_mon.read().unwrap_hwerr("failed to read battery voltage"))
+                                    .take(50)
+                                    .sum::<f32>() / 50.0;
+
+                                send!(PacketKind::Data(SomeData {
+                                    per_channel: {
+                                        let mut map = HashMap::<ChannelID, ChannelData>::new();
+                                        let mut set = |id, val| mappings.map.get(&ChannelName::from(id)).map(|uuid| map.insert(*uuid, val));
+                                        set("battery", ChannelData::Float(battery_voltage));
+                                        bme_readings.into_iter().for_each(|(k, v)| { map.insert(k, v); });
+                                        map
+                                    }
+                                }));
+                            }
                         }
                     }
                 }
             }
-        }
-    });
+        });
 }
 
 // called once on reset to handle any special reset reasons (e.g. panic)
@@ -496,84 +513,43 @@ fn on_reset() {
     }
 }
 
-fn setup_wifi<'a, M: esp_idf_hal::modem::WifiModemPeripheral>(
-    sysloop: &'a EspSystemEventLoop,
-    modem: impl esp_idf_hal::peripheral::Peripheral<P = M> + 'a,
-    nvs_partition: EspDefaultNvsPartition,
-) -> (Wifi, smol::channel::Receiver<wifictl::WifiStatusUpdate>) {
-    let (wifi_status_send, wifi_status_recv) =
-        smol::channel::unbounded::<wifictl::WifiStatusUpdate>();
-    let _wifi_event_sub = sysloop
-        .subscribe(move |event: &WifiEvent| {
-            // println!("Wifi event: {event:?}");
-            match event {
-                WifiEvent::StaDisconnected => wifi_status_send
-                    .try_send(wifictl::WifiStatusUpdate::Disconnected)
-                    .expect("Impossible! (unbounded queue is full???? (or main thread dead))"),
-                _ => {}
-            }
-        })
-        .unwrap_hwerr("could not subscribe to system envent loop");
-    // keep this task alive forever
-    let _: &'static mut _ = Box::leak(Box::new(_wifi_event_sub));
-
-    let mut wifi = Wifi::new(
-        EspWifi::new(modem, sysloop.clone(), Some(nvs_partition))
-            .unwrap_hwerr("failed to create ESP WIFI instance"),
-        sysloop.clone(),
-    );
-    // this doesn't need to be retried, have never seen this fail
-    wifi.start().unwrap_hwerr("failed to start WIFI");
-    (wifi, wifi_status_recv)
-}
-
-fn connect_wifi(
-    wifi: &mut Wifi,
-    wifi_status_recv: &smol::channel::Receiver<wifictl::WifiStatusUpdate>,
+async fn connect_wifi(
+    wifi: &mut AsyncWifi<EspWifi<'_>>,
 ) {
     info!("Connecting to WIFI");
-    // clear the disconnect queue
-    while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv() {}
-    // -- connecting to wifi --
+    // // clear the disconnect queue
+    // while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv() {}
+    // // -- connecting to wifi --
     let before = Instant::now();
     // -- finding a known network --
     let chosen = loop {
-        if let Some(chosen) = wifi.scan().unwrap_hwerr("error scaning for WIFI networks") {
+        if let Some(chosen) = {
+            let aps = wifi.scan().await.unwrap_hwerr("error scaning for WIFI networks");
+            let mut useable = wifictl::filter_networks(aps, conf::INCLUDE_OPEN_NETWORKS);
+            useable.sort_by_key(|x| x.0.signal_strength);
+            (!useable.is_empty()).then(|| useable.remove(0))
+        } {
             break chosen;
         } else {
             error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
             sleep(NO_WIFI_RETRY_INTERVAL);
         }
     };
-    'retry: {
-        let max = 5;
-        for i in 0..max {
-            if let Err(e) = wifi.connect(chosen.clone()) {
-                match e {
-                    wifictl::WifiError::Esp(e) => Err(e).unwrap_hwerr("failed to connect to WIFI"),
-                    wifictl::WifiError::TimedOut => {
-                        warn!("Failed to connect to WIFI (attempt {i}/{max} timed out), retrying");
-                        sleep(Duration::from_millis(1000));
-                        if let Ok(wifictl::WifiStatusUpdate::Disconnected) =
-                            wifi_status_recv.try_recv()
-                        {
-                        } else {
-                            warn!("unexpectedly did not receive a disconnect message after a failed connect attempt");
-                        };
-                    }
-                }
-            } else {
-                break 'retry;
-            }
-        }
-        error::_panic_hwerr(error::EmptyError, "Failed to connect to WIFI: Timed out");
-    }
-    info!("Connected to WIFI in {:?}", before.elapsed());
-    let ip_info = wifi.inner()
+    wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
+        ssid: chosen.0.ssid,
+        password: chosen.1.unwrap_or_default().into(),
+        channel: Some(chosen.0.channel),
+        ..Default::default()
+    })).unwrap_hwerr("failed to set wifi config");
+    wifi.connect().await.unwrap_hwerr("failed to connect to wifi");
+    info!("waiting for association");
+    wifi.ip_wait_while(|| wifi.is_up().map(|x| !x), None).await.unwrap_hwerr("ip_wait_while failed");
+    info!("Connected to wifi in {:?}", before.elapsed());
+    let ip_info = wifi.wifi()
         .sta_netif()
         .get_ip_info()
-        .unwrap_hwerr("failed to get network information (may be caused by TOCTOU error if the wifi network disconnected at the wrong moment)");
-    info!("Wifi DHCP info {:?}", ip_info);
+        .unwrap_hwerr("failed to get DHCP info - may be caused by TOCTOU error if the wifi disconnected immedietally after connecting");
+    info!("WIFI DHCP info: {ip_info:?}");
 }
 
 #[derive(Debug, Clone)]
@@ -592,13 +568,13 @@ impl Default for MeasureConfig {
 
 #[derive(Debug)]
 pub struct MeasureTimers {
-    pub read_timer: Timer,
+    pub read_timer: Interval,
 }
 
 impl MeasureTimers {
     pub fn with_config(cfg: &MeasureConfig) -> Self {
         Self {
-            read_timer: Timer::interval(cfg.read_interval),
+            read_timer: interval(cfg.read_interval),
         }
     }
 

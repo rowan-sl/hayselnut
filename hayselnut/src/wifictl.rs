@@ -1,14 +1,15 @@
 //! TODO: move wifi code into this module
 
-use std::{net::Ipv4Addr, time::Duration};
+// use std::{net::Ipv4Addr, time::Duration};
 
-use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi as _};
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    netif::{EspNetif, EspNetifWait},
-    wifi::{EspWifi, WifiWait},
-};
-use esp_idf_sys::EspError;
+// use embedded_svc::wifi::{self, AccessPointInfo, AuthMethod, Wifi as _};
+use embedded_svc::wifi::{AccessPointInfo, AuthMethod};
+// use esp_idf_svc::{
+//     eventloop::EspSystemEventLoop,
+//     netif::{EspNetif, EspNetifWait},
+//     wifi::{EspWifi, WifiWait},
+// };
+// use esp_idf_sys::EspError;
 
 use crate::conf;
 
@@ -28,77 +29,77 @@ pub mod util {
     }
 }
 
-pub struct Wifi<'a> {
-    inner: EspWifi<'a>,
-    sysloop: EspSystemEventLoop,
-}
-
-impl<'a> Wifi<'a> {
-    pub fn new(wifi: EspWifi<'a>, sysloop: EspSystemEventLoop) -> Self {
-        Self {
-            inner: wifi,
-            sysloop,
-        }
-    }
-
-    pub fn start(&mut self) -> Result<(), WifiError> {
-        self.inner.set_configuration(&wifi::Configuration::Client(
-            wifi::ClientConfiguration::default(),
-        ))?;
-        self.inner.start()?;
-        if !WifiWait::new(&self.sysloop)?
-            .wait_with_timeout(Duration::from_secs(20), || self.inner.is_started().unwrap())
-        {
-            // writeln!(display, "Wifi failed to start")?;
-            Err(WifiError::TimedOut)?
-        }
-        Ok(())
-    }
-
-    pub fn scan(&mut self) -> Result<Option<(AccessPointInfo, Option<&'static str>)>, EspError> {
-        let access_points = self.inner.scan()?;
-        let mut useable = filter_networks(access_points, conf::INCLUDE_OPEN_NETWORKS);
-        Ok((!useable.is_empty()).then(|| useable.remove(0)))
-    }
-
-    pub fn connect(
-        &mut self,
-        to: (AccessPointInfo, Option<&'static str>),
-    ) -> Result<(), WifiError> {
-        self.inner
-            .set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
-                ssid: to.0.ssid.clone(),
-                password: to.1.unwrap_or_default().into(),
-                channel: Some(to.0.channel),
-                ..Default::default()
-            }))?;
-
-        self.inner.connect()?;
-        if !EspNetifWait::new::<EspNetif>(self.inner.sta_netif(), &self.sysloop)?.wait_with_timeout(
-            Duration::from_secs(20),
-            || {
-                self.inner.is_connected().unwrap()
-                    && self.inner.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
-            },
-        ) {
-            error!("Wifi did not connect or receive a DHCP lease");
-            Err(WifiError::TimedOut)?
-        }
-        Ok(())
-    }
-
-    pub fn inner(&mut self) -> &mut EspWifi<'a> {
-        &mut self.inner
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum WifiError {
-    #[error("ESP-IDF error: {0}")]
-    Esp(#[from] EspError),
-    #[error("Failed to start within the given time limit")]
-    TimedOut,
-}
+// pub struct Wifi<'a> {
+//     inner: EspWifi<'a>,
+//     sysloop: EspSystemEventLoop,
+// }
+//
+// impl<'a> Wifi<'a> {
+//     pub fn new(wifi: EspWifi<'a>, sysloop: EspSystemEventLoop) -> Self {
+//         Self {
+//             inner: wifi,
+//             sysloop,
+//         }
+//     }
+//
+//     pub fn start(&mut self) -> Result<(), WifiError> {
+//         self.inner.set_configuration(&wifi::Configuration::Client(
+//             wifi::ClientConfiguration::default(),
+//         ))?;
+//         self.inner.start()?;
+//         if !WifiWait::new(&self.sysloop)?
+//             .wait_with_timeout(Duration::from_secs(20), || self.inner.is_started().unwrap())
+//         {
+//             // writeln!(display, "Wifi failed to start")?;
+//             Err(WifiError::TimedOut)?
+//         }
+//         Ok(())
+//     }
+//
+//     pub fn scan(&mut self) -> Result<Option<(AccessPointInfo, Option<&'static str>)>, EspError> {
+//         let access_points = self.inner.scan()?;
+//         let mut useable = filter_networks(access_points, conf::INCLUDE_OPEN_NETWORKS);
+//         Ok((!useable.is_empty()).then(|| useable.remove(0)))
+//     }
+//
+//     pub fn connect(
+//         &mut self,
+//         to: (AccessPointInfo, Option<&'static str>),
+//     ) -> Result<(), WifiError> {
+//         self.inner
+//             .set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
+//                 ssid: to.0.ssid.clone(),
+//                 password: to.1.unwrap_or_default().into(),
+//                 channel: Some(to.0.channel),
+//                 ..Default::default()
+//             }))?;
+//
+//         self.inner.connect()?;
+//         if !EspNetifWait::new::<EspNetif>(self.inner.sta_netif(), &self.sysloop)?.wait_with_timeout(
+//             Duration::from_secs(20),
+//             || {
+//                 self.inner.is_connected().unwrap()
+//                     && self.inner.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
+//             },
+//         ) {
+//             error!("Wifi did not connect or receive a DHCP lease");
+//             Err(WifiError::TimedOut)?
+//         }
+//         Ok(())
+//     }
+//
+//     pub fn inner(&mut self) -> &mut EspWifi<'a> {
+//         &mut self.inner
+//     }
+// }
+//
+// #[derive(Debug, thiserror::Error)]
+// pub enum WifiError {
+//     #[error("ESP-IDF error: {0}")]
+//     Esp(#[from] EspError),
+//     #[error("Failed to start within the given time limit")]
+//     TimedOut,
+// }
 
 /// find and return all known wifi networks, or ones that have no password,
 /// in order of signal strength. known networks are prioritized

@@ -9,14 +9,12 @@ resolver = "2"
 partition_table = "partitions.csv"
 
 [patch.crates-io]
-smol = { git = "https://github.com/esp-rs-compat/smol" }
-polling = { git = "https://github.com/esp-rs-compat/polling/" }
-socket2 = { git = "https://github.com/esp-rs-compat/socket2" }
 getrandom = { version = "0.2", git = "https://github.com/esp-rs-compat/getrandom.git" }
-# getrandom1 = { version = "0.1", git = "https://github.com/esp-rs-compat/getrandom.git", package = "getrandom", branch = "0.1" }
-embedded-io = { git = "https://github.com/ivmarkov/embedded-io" }
-# remove once the next version is released
-esp-idf-svc = { version = "0.45.0", git = "https://github.com/esp-rs/esp-idf-svc.git" }
+# yeeeee haw
+tokio = { git = "https://github.com/tokio-rs/tokio", branch = "master" }
+mio = { git = "https://github.com/tokio-rs/mio", branch = "master" }
+socket2 = { git = "https://github.com/rust-lang/socket2", branch = "master" }
+
 
 [profile.release]
 codegen-units=1
@@ -35,33 +33,30 @@ experimental = ["esp-idf-svc/experimental", "embedded-svc/experimental"]
 [dependencies]
 anyhow = {version = "1", features = ["backtrace"]}
 log = "0.4"
-# url = "2"
-esp-idf-sys = { version = "0.32", features = ["binstart"] }
-esp-idf-svc = "0.45"
-esp-idf-hal = "0.40"
-embedded-hal = "=1.0.0-alpha.9"
-# embedded-hal-7= { package = "embedded-hal", version = "=1.0.0-alpha.7" }
-embedded-svc = { version = "0.24.0", default-features = false }
+esp-idf-sys = { version = "0.33", features = ["binstart"] }
+esp-idf-svc = "0.46"
+esp-idf-hal = "0.41"
+embedded-hal = "=1.0.0-alpha.10"
+embedded-svc = { version = "0.25", default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
 bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
-shared-bus = { version = "0.2.5", features = ["eh-alpha", "std"] }
-embedded-graphics = "0.7.1"
-ssd1306 = "0.7.1"
-smol = "1.2.5"
+#shared-bus = { version = "0.2.5", features = ["eh-alpha", "std"] }
+#embedded-graphics = "0.7.1"
+#ssd1306 = "0.7.1"
 futures = { version = "0.3.25", default-features = false, features = ["async-await"] }
 serde = { version = "1.0.152", features = ["derive"] }
-#bincode = "1.3.3"
 uuid = { version = "1.3.1", features = ["serde", "v4"] }
 static_assertions = "1.1.0"
 rmp-serde = "1.1.1"
-#async-io = "=1.12" # pin to fix compilation issue with rustix
+# WARNING: the `sync` feature cannot be used - will cause `pthread` related linker errors
+tokio = { version = "*", features = ["rt", "net", "io-util"] }
+mio = { version = "0.8.8", features = ["log"] }
 
 [dependencies.squirrel]
 path = "../haysel/squirrel/"
-features = ["smol"]
+features = ["tokio"]
 
 [build-dependencies]
-embuild = "0.31"
+embuild = "0.31.0"
 chrono = "0.4.26"
-##anyhow = "1"
