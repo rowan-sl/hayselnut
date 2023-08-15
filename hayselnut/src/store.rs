@@ -106,7 +106,9 @@ impl<T: NvsPartitionId> StationStoreAccess<T> {
 
     pub fn read(&mut self) -> Result<Option<StationStoreData>, EspError> {
         let mut id_buf = [0u8; size_of::<u64>()];
-        let Some(version) = self.nvs.get_raw(STATION_STORE_VERSION_ID, &mut id_buf)? else { return Ok(None); };
+        let Some(version) = self.nvs.get_raw(STATION_STORE_VERSION_ID, &mut id_buf)? else {
+            return Ok(None);
+        };
         assert_eq!(
             version.len(),
             size_of::<u64>(),
@@ -122,7 +124,9 @@ impl<T: NvsPartitionId> StationStoreAccess<T> {
         );
 
         let mut store_buf = [0u8; STORE_DATA_SIZE];
-        let Some(store) = self.nvs.get_raw(STATION_STORE_ID, &mut store_buf)? else { return Ok(None); };
+        let Some(store) = self.nvs.get_raw(STATION_STORE_ID, &mut store_buf)? else {
+            return Ok(None);
+        };
         let store = rmp_serde::from_slice(store).expect("Faild to deserialize NVS store");
         Ok(Some(store))
     }

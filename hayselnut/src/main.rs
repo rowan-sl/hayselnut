@@ -16,14 +16,15 @@ use std::{
     cell::SyncUnsafeCell,
     collections::HashMap,
     io,
-    thread::sleep,
     time::{Duration, Instant},
 };
 
 use embedded_svc::wifi;
 use esp_idf_hal::{
-//    gpio::PinDriver,
-//    i2c::{self, I2cDriver},
+    adc::{self, AdcChannelDriver, AdcDriver},
+    gpio::PinDriver,
+    //    gpio::PinDriver,
+    //    i2c::{self, I2cDriver},
     i2c,
     peripherals::Peripherals,
     reset::ResetReason,
@@ -33,12 +34,16 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     log::EspLogger,
     nvs::EspDefaultNvsPartition,
-    wifi::{EspWifi, AsyncWifi}, timer::EspTaskTimerService,
+    timer::EspTaskTimerService,
+    wifi::{AsyncWifi, EspWifi},
 };
-use esp_idf_sys::{self as _, esp_deep_sleep_start, esp_sleep_disable_wakeup_source, esp_app_desc}; // allways should be imported if `binstart` feature is enabled.
+use esp_idf_sys::{self as _, esp_app_desc, esp_deep_sleep_start, esp_sleep_disable_wakeup_source}; // allways should be imported if `binstart` feature is enabled.
 use futures::{select_biased, FutureExt};
 use serde::{Deserialize, Serialize};
-use tokio::{net::{lookup_host as resolve, UdpSocket}, time::{Interval, interval}};
+use tokio::{
+    net::{lookup_host as resolve, UdpSocket},
+    time::{interval, sleep, Interval},
+};
 
 use squirrel::{
     api::{
@@ -58,6 +63,7 @@ use store::{StationStore, StationStoreCached};
 
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
+    flag::Flag,
     // flag::Flag,
     // lightning::LightningSensor,
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
@@ -93,7 +99,9 @@ fn main() {
 
     println!("setting up logging");
     EspLogger::initialize_default();
-    EspLogger.set_target_level("*", log::LevelFilter::Trace).unwrap_hwerr("failed to set esp log level");
+    EspLogger
+        .set_target_level("*", log::LevelFilter::Trace)
+        .unwrap_hwerr("failed to set esp log level");
     // test log levels
     trace!("[logger] logging level trace");
     debug!("[logger] logging level debug");
@@ -112,15 +120,23 @@ fn main() {
     let timer = EspTaskTimerService::new().unwrap_hwerr("failed to create task timer service");
 
     // -- initializing core peripherals --
+    // ADC1
+    let mut adc1 = AdcDriver::new(
+        peripherals.adc1,
+        &adc::AdcConfig::new()
+            .resolution(adc::config::Resolution::Resolution12Bit)
+            .calibration(true),
+    )
+    .unwrap_hwerr("failed to initialize ADC");
     // battery monitor
-    let mut batt_mon = BatteryMonitor::new(peripherals.adc1, pins.gpio0)
-        .unwrap_hwerr("failed to initialize battery monitor");
+    let mut batt_mon =
+        BatteryMonitor::new(pins.gpio0).unwrap_hwerr("failed to initialize battery monitor");
     // i2c bus (shared with display, and sensors)
     // NOTE: slow baudrate (for lightning sensor compat) will make the display slow
     let i2c_driver = i2c::I2cDriver::new(
         peripherals.i2c0,
-        pins.gpio1,
-        pins.gpio3,
+        pins.gpio1, //sda
+        pins.gpio3, //scl
         &i2c::config::Config::new().baudrate(100.kHz().into()),
     )
     .unwrap_hwerr("failed to initialize battery monitor");
@@ -178,6 +194,67 @@ fn main() {
     //     (sensor, setup_interrupt)
     // };
 
+    // wind{speed,direction}, rainfall quantity
+    {
+        let speed = pins.gpio6;
+        let direction = pins.gpio4;
+        let rainfall = pins.gpio7;
+
+        let speed_flag = unsafe {
+            let flag = Flag::new();
+            let flag2 = flag.clone();
+            let driver = Box::leak(Box::new(PinDriver::input(speed).unwrap()));
+            driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
+            driver
+                .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
+                .unwrap();
+            driver
+                .subscribe(move || flag2.signal())
+                .unwrap_hwerr("failed to set interrupt");
+            driver.enable_interrupt().unwrap();
+            flag
+        };
+
+        let mut direction_reader = {
+            let mut driver = AdcChannelDriver::<'_, _, adc::Atten11dB<_>>::new(direction)
+                .unwrap_hwerr("failed to init adc channel");
+            move |adc1: &mut AdcDriver<'_, adc::ADC1>| {
+                adc1.read(&mut driver).unwrap_hwerr("failed to read adc")
+            }
+        };
+
+        let rainfall_flag = unsafe {
+            let flag = Flag::new();
+            let flag2 = flag.clone();
+            let driver = Box::leak(Box::new(PinDriver::input(rainfall).unwrap()));
+            driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
+            driver
+                .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
+                .unwrap();
+            driver
+                .subscribe(move || flag2.signal())
+                .unwrap_hwerr("failed to set interrupt");
+            driver.enable_interrupt().unwrap();
+            flag
+        };
+
+        wifictl::util::fix_networking().unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                println!("running");
+                loop {
+                    println!("{}", direction_reader(&mut adc1));
+                    sleep(Duration::from_millis(100)).await;
+                    // rainfall_flag.clone().await;
+                    // rainfall_flag.reset();
+                    // println!("tick");
+                }
+            });
+    }
+
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     warn!("connecting to BME sensor - if it is disconnected this will hang here");
@@ -185,19 +262,20 @@ fn main() {
 
     // see [fix_networking] docs -- if not present UdpSocket::bind fails
     // - also needed for tokio
-    wifictl::util::fix_networking()
-        .unwrap_hwerr("call to wifictl::util::fix_networking failed");
+    wifictl::util::fix_networking().unwrap_hwerr("call to wifictl::util::fix_networking failed");
 
     // -- wifi initialization --
     let mut wifi = AsyncWifi::wrap(
         EspWifi::new(
             peripherals.modem,
             sysloop.clone(),
-            Some(nvs_partition.clone())
-        ).unwrap_hwerr("failed to initialize wifi"),
+            Some(nvs_partition.clone()),
+        )
+        .unwrap_hwerr("failed to initialize wifi"),
         sysloop.clone(),
-        timer
-    ).unwrap_hwerr("failed to initialize async wifi");
+        timer,
+    )
+    .unwrap_hwerr("failed to initialize async wifi");
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -429,7 +507,7 @@ fn main() {
                                     }
                                 };
 
-                                let battery_voltage = std::iter::repeat_with(|| batt_mon.read().unwrap_hwerr("failed to read battery voltage"))
+                                let battery_voltage = std::iter::repeat_with(|| batt_mon.read(&mut adc1).unwrap_hwerr("failed to read battery voltage"))
                                     .take(50)
                                     .sum::<f32>() / 50.0;
 
@@ -513,9 +591,7 @@ fn on_reset() {
     }
 }
 
-async fn connect_wifi(
-    wifi: &mut AsyncWifi<EspWifi<'_>>,
-) {
+async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
     info!("Connecting to WIFI");
     // // clear the disconnect queue
     // while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv() {}
@@ -524,7 +600,10 @@ async fn connect_wifi(
     // -- finding a known network --
     let chosen = loop {
         if let Some(chosen) = {
-            let aps = wifi.scan().await.unwrap_hwerr("error scaning for WIFI networks");
+            let aps = wifi
+                .scan()
+                .await
+                .unwrap_hwerr("error scaning for WIFI networks");
             let mut useable = wifictl::filter_networks(aps, conf::INCLUDE_OPEN_NETWORKS);
             useable.sort_by_key(|x| x.0.signal_strength);
             (!useable.is_empty()).then(|| useable.remove(0))
@@ -540,10 +619,15 @@ async fn connect_wifi(
         password: chosen.1.unwrap_or_default().into(),
         channel: Some(chosen.0.channel),
         ..Default::default()
-    })).unwrap_hwerr("failed to set wifi config");
-    wifi.connect().await.unwrap_hwerr("failed to connect to wifi");
+    }))
+    .unwrap_hwerr("failed to set wifi config");
+    wifi.connect()
+        .await
+        .unwrap_hwerr("failed to connect to wifi");
     info!("waiting for association");
-    wifi.ip_wait_while(|| wifi.is_up().map(|x| !x), None).await.unwrap_hwerr("ip_wait_while failed");
+    wifi.ip_wait_while(|| wifi.is_up().map(|x| !x), None)
+        .await
+        .unwrap_hwerr("ip_wait_while failed");
     info!("Connected to wifi in {:?}", before.elapsed());
     let ip_info = wifi.wifi()
         .sta_netif()
