@@ -2,6 +2,8 @@
 
 Hayselnut is a esp32 based weather station, and associated datalogging server written in rust
 
+Please use the issue tracker on [github](https://github.com/rowan-sl/hayselnut)
+
 ## Project structure
 
 the station: [hayselnut](hayselnut/README.md)
