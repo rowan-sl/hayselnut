@@ -193,6 +193,7 @@ impl<Store: Storage> Database<Store> {
         let mut chunk = Object::new_read(&mut self.alloc, channel.data).await?;
         'find_chunk: loop {
             let r = ..chunk.used as usize;
+            #[allow(unused)] // remove me
             'find_entry: for (entry_idx, entry) in chunk.data[r].iter_mut().enumerate() {
                 // the first time this is true should be the most recent chunk that works with this data.
                 if entry.after < time {

@@ -1,4 +1,6 @@
 #![allow(incomplete_features)]
+// warning created by a macro in num_enum
+#![allow(non_upper_case_globals)]
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]
@@ -42,8 +44,10 @@ mod shutdown;
 pub mod tsdb;
 pub mod tsdb2;
 
+use consumer::db::RecordDB;
 use registry::JsonLoader;
 use shutdown::Shutdown;
+use tsdb2::{alloc::disk_store::DiskStore, Database};
 
 #[derive(Parser, Debug)]
 pub struct ArgsParser {
@@ -55,7 +59,10 @@ pub struct ArgsParser {
 pub enum Cmd {
     /// dump info about the database
     Infodump {
-        #[arg(long, help = "if provided, will dump information about the database contained in <file>")]
+        #[arg(
+            long,
+            help = "if provided, will dump information about the database contained in <file>"
+        )]
         file: Option<PathBuf>,
     },
     /// run
@@ -80,15 +87,25 @@ pub struct RunArgs {
     #[arg(
         short,
         long,
-        help = "directory for weather + station ID records to be placed"
+        help = "directory for station/channel ID records and the database to be placed"
     )]
-    records_path: PathBuf,
+    data_dir: PathBuf,
     #[arg(short, long, help = "path of the unix socket for the servers IPC API")]
     ipc_sock: PathBuf,
     #[arg(short, long, help = "url of the server that this is to be run on")]
     url: String,
     #[arg(short, long, help = "port to run the server on")]
     port: u16,
+    #[arg(
+        long,
+        help = "allow initiailizing a database using a file that contains data (this may cause silent deletion of corrupt databases, so it is recommended to only use this when running the server for the first time)"
+    )]
+    init_overwrite: bool,
+    #[arg(
+        long,
+        help = "allow using an aternate database file, instead of the default under `data_dir`. this allows for use of *special* files like block devices..."
+    )]
+    alt_db: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -132,7 +149,6 @@ async fn main() -> anyhow::Result<()> {
         } => {
             file = file.canonicalize()?;
             debug!("{{file}} resolves to {file:?}");
-            use tsdb2::{alloc::disk_store::DiskStore, Database};
             let store = DiskStore::new(&file, false).await?;
             let database = Database::new(store, init_overwrite).await?;
 
@@ -160,17 +176,17 @@ async fn main() -> anyhow::Result<()> {
     // a new scope is opened here so that any item using ShutdownHandles is dropped before
     // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
     {
-        if args.records_path.exists() {
-            if !args.records_path.canonicalize()?.is_dir() {
+        if args.data_dir.exists() {
+            if !args.data_dir.canonicalize()?.is_dir() {
                 error!("records directory path already exists, and is a file!");
                 bail!("records dir exists");
             }
         } else {
-            info!("Creating new records directory at {:#?}", args.records_path);
-            fs::create_dir(args.records_path.clone()).await?;
+            info!("Creating new records directory at {:#?}", args.data_dir);
+            fs::create_dir(args.data_dir.clone()).await?;
         }
 
-        let records_dir = paths::RecordsPath::new(args.records_path.canonicalize()?);
+        let records_dir = paths::RecordsPath::new(args.data_dir.canonicalize()?);
 
         info!("Loading info for known stations");
         let stations_path = records_dir.path("stations.json");
@@ -199,6 +215,22 @@ async fn main() -> anyhow::Result<()> {
                 s, info.supports_channels
             );
         }
+
+        debug!("Loading database");
+        warn!("TSDB2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
+        let db_router_client = {
+            let raw_path = if let Some(p) = args.alt_db {
+                p
+            } else {
+                records_dir.path("data.tsdb2")
+            };
+            let path = raw_path.canonicalize()?;
+            debug!("database path ({raw_path:?}) resolves to {path:?}");
+            let store = DiskStore::new(&path, false).await?;
+            let database = Database::new(store, args.init_overwrite).await?;
+            RecordDB::new(database).await?
+        };
+        info!("Database loaded");
 
         info!(
             "Performing DNS lookup of server's extranal IP (url={})",

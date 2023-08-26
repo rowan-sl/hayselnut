@@ -1,20 +1,21 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
+use mycelium::station::capabilities::{ChannelData, ChannelID};
 use squirrel::api::station::identity::StationID;
 
-// re-add when fixed
-//pub mod db;
+pub mod db;
 
 #[derive(Debug, Clone)]
 pub struct Record {
-    // TODO: re-add data fields, using new system
-    // pub data: Observations,
     pub recorded_at: DateTime<Utc>,
     pub recorded_by: StationID,
+    pub data: HashMap<ChannelID, ChannelData>,
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait RecordConsumer {
     /// handle an observation record.
     async fn handle(&mut self, record: &Record) -> Result<()>;

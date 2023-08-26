@@ -377,7 +377,11 @@ impl<S: Storage> Allocator<S> {
         use super::repr::info::sfmt;
         let header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         let size = self.store.size().await?;
-        info!("Allocator tracking {} / {} (includes space that has been freed)", sfmt(header.used as _), sfmt(size as _));
+        info!(
+            "Allocator tracking {} / {} (includes space that has been freed)",
+            sfmt(header.used as _),
+            sfmt(size as _)
+        );
         // read out the header, listing the available sizes for data
         {
             let sizes = header

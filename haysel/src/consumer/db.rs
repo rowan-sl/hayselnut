@@ -1,34 +1,51 @@
-use std::path::Path;
-
 use anyhow::Result;
+use mycelium::station::capabilities::ChannelData;
+
+use crate::tsdb2::{alloc::Storage, Database};
 
 use super::{Record, RecordConsumer};
-use crate::tsdb::DB;
 
-type Entry = Observations;
-
-pub struct RecordDB {
-    db: DB<Entry>,
+pub struct RecordDB<S: Storage> {
+    db: Database<S>,
 }
 
-impl RecordDB {
-    pub async fn new(path: &Path) -> Result<Self> {
-        let db = DB::open(path).await?;
+impl<S: Storage> RecordDB<S> {
+    pub async fn new(db: Database<S>) -> Result<Self> {
         Ok(Self { db })
     }
 }
 
-#[async_trait]
-impl RecordConsumer for RecordDB {
-    async fn handle(&mut self, Record { data: _, recorded_at: _, recorded_by: _ }: &Record) -> Result<()> {
-        todo!("need to make the DB store what station the data was recorded by")
-        // self.db.insert(*recorded_at, data.clone()).await?;
-        // Ok(())
+#[async_trait(?Send)]
+impl<S: Storage> RecordConsumer for RecordDB<S>
+where
+    <S as Storage>::Error: Sync + Send + 'static,
+{
+    async fn handle(
+        &mut self,
+        Record {
+            data,
+            recorded_at,
+            recorded_by,
+        }: &Record,
+    ) -> Result<()> {
+        for (recorded_from, record) in data {
+            let record = match record {
+                ChannelData::Float(x) => x,
+                ChannelData::Event { .. } => {
+                    warn!("Attempted to record event-type data using the database, but that is not supported");
+                    continue;
+                }
+            };
+            self.db
+                .add_data(*recorded_by, *recorded_from, *recorded_at, *record)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn close(self: Box<Self>) {
         if let Err(e) = self.db.close().await {
-            error!("Error shutting down database: {e:#?}");
+            error!("RecordDB: failed to shutdown database: {e:#?}")
         }
     }
 }
