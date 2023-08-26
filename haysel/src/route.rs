@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::future::join_all;
+use futures::{future::join_all, Future};
 
 use super::consumer::{Record, RecordConsumer};
 
@@ -19,25 +19,35 @@ impl Router {
         self
     }
 
-    pub async fn process(&mut self, record: Record) -> Result<()> {
-        if join_all(
-            self.consumers
-                .iter_mut()
-                .map(|consumer| async { consumer.handle(&record).await }),
-        )
-        .await
-        .into_iter()
-        .filter(Result::is_err)
-        .map(|res| {
-            if let Err(e) = res {
-                error!("Error occured in consumer processing function: {e}");
-            }
-        })
-        .count()
+    // fun times with l i f e t i m e s!
+    async fn consumer_map<'this: 'consumer, 'consumer: 'result, 'result, Fun, Fut>(
+        &'this mut self,
+        f: Fun,
+    ) -> Result<()>
+    where
+        Fun: FnMut(&'consumer mut Box<dyn RecordConsumer>) -> Fut,
+        Fut: Future<Output = Result<()>> + 'result,
+    {
+        if join_all(self.consumers.iter_mut().map(f))
+            .await
+            .into_iter()
+            .filter(Result::is_err)
+            .map(|res| {
+                if let Err(e) = res {
+                    error!("Error occured in consumer processing function: {e}");
+                }
+            })
+            .count()
             != 0
         {
             bail!("Error occured in consumer processing function")
         }
+        Ok(())
+    }
+
+    pub async fn process(&mut self, record: Record) -> Result<()> {
+        self.consumer_map(|consumer| async { consumer.handle(&record).await })
+            .await?;
         Ok(())
     }
 
