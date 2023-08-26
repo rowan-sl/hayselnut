@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::future::join_all;
 
 use super::consumer::{Record, RecordConsumer};
 
@@ -19,8 +20,23 @@ impl Router {
     }
 
     pub async fn process(&mut self, record: Record) -> Result<()> {
-        for c in &mut self.consumers {
-            c.handle(&record).await?;
+        if join_all(
+            self.consumers
+                .iter_mut()
+                .map(|consumer| async { consumer.handle(&record).await }),
+        )
+        .await
+        .into_iter()
+        .filter(Result::is_err)
+        .map(|res| {
+            if let Err(e) = res {
+                error!("Error occured in consumer processing function: {e}");
+            }
+        })
+        .count()
+            != 0
+        {
+            bail!("Error occured in consumer processing function")
         }
         Ok(())
     }
