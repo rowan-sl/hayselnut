@@ -1,7 +1,10 @@
 use anyhow::Result;
 use mycelium::station::capabilities::ChannelData;
 
-use crate::tsdb2::{alloc::Storage, Database};
+use crate::{
+    route::StationInfoUpdate,
+    tsdb2::{alloc::Storage, Database},
+};
 
 use super::{Record, RecordConsumer};
 
@@ -15,11 +18,8 @@ impl<S: Storage> RecordDB<S> {
     }
 }
 
-#[async_trait(?Send)]
-impl<S: Storage> RecordConsumer for RecordDB<S>
-where
-    <S as Storage>::Error: Sync + Send + 'static,
-{
+#[async_trait]
+impl RecordConsumer for RecordDB<crate::tsdb2::alloc::disk_store::DiskStore> {
     async fn handle(
         &mut self,
         Record {
@@ -41,6 +41,10 @@ where
                 .await?;
         }
         Ok(())
+    }
+
+    async fn update_station_info(&mut self, _updates: &[StationInfoUpdate]) -> Result<()> {
+        todo!()
     }
 
     async fn close(self: Box<Self>) {

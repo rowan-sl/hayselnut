@@ -59,7 +59,7 @@ pub struct Database<Store: Storage> {
     alloc: Allocator<Store>,
 }
 
-impl<Store: Storage> Database<Store> {
+impl<Store: Storage + Send> Database<Store> {
     #[instrument(skip(store))]
     pub async fn new(
         store: Store,

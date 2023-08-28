@@ -1,11 +1,15 @@
 use anyhow::Result;
 use futures::{future::join_all, Future};
+use mycelium::station::{
+    capabilities::{Channel, ChannelID, KnownChannels},
+    identity::{KnownStations, StationID},
+};
 
 use super::consumer::{Record, RecordConsumer};
 
 #[derive(Default)]
 pub struct Router {
-    consumers: Vec<Box<dyn RecordConsumer>>,
+    consumers: Vec<Box<(dyn RecordConsumer + Send + Sync + 'static)>>,
     properly_dropped: bool,
 }
 
@@ -14,7 +18,10 @@ impl Router {
         Self::default()
     }
 
-    pub fn with_consumer<C: RecordConsumer + 'static>(&mut self, consumer: C) -> &mut Self {
+    pub fn with_consumer<C: RecordConsumer + Send + Sync + 'static>(
+        &mut self,
+        consumer: C,
+    ) -> &mut Self {
         self.consumers.push(Box::new(consumer));
         self
     }
@@ -25,7 +32,7 @@ impl Router {
         f: Fun,
     ) -> Result<()>
     where
-        Fun: FnMut(&'consumer mut Box<dyn RecordConsumer>) -> Fut,
+        Fun: FnMut(&'consumer mut Box<(dyn RecordConsumer + Send + Sync + 'static)>) -> Fut,
         Fut: Future<Output = Result<()>> + 'result,
     {
         if join_all(self.consumers.iter_mut().map(f))
@@ -46,7 +53,16 @@ impl Router {
     }
 
     pub async fn process(&mut self, record: Record) -> Result<()> {
-        self.consumer_map(|consumer| async { consumer.handle(&record).await })
+        self.consumer_map(|consumer| consumer.handle(&record))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_station_info(&mut self, updates: &[StationInfoUpdate]) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        self.consumer_map(|consumer| async { consumer.update_station_info(updates).await })
             .await?;
         Ok(())
     }
@@ -68,4 +84,22 @@ impl Drop for Router {
             error!("Router may NOT be dropped except through `close_consumers`");
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum StationInfoUpdate {
+    /// event sent when a router is created, gives information on the current state of things
+    InitialState {
+        stations: KnownStations,
+        channels: KnownChannels,
+    },
+    /// new station registered
+    NewStation { id: StationID },
+    /// new channel registered
+    NewChannel { id: ChannelID, ch: Channel },
+    /// new association of channel with a station
+    StationNewChannel {
+        station: StationID,
+        channel: ChannelID,
+    },
 }

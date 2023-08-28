@@ -28,7 +28,7 @@ impl DiskStore {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl Storage for DiskStore {
     type Error = io::Error;
     #[instrument(skip(self, into))]

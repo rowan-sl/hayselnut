@@ -46,6 +46,7 @@ pub mod tsdb2;
 
 use consumer::db::RecordDB;
 use registry::JsonLoader;
+use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
 use tsdb2::{alloc::disk_store::DiskStore, Database};
 
@@ -251,6 +252,17 @@ async fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>();
 
         let mut handle = shutdown.handle();
+
+        let mut router = Router::new();
+        router.with_consumer(db_router_client);
+        // send the initial update with the current state
+        router
+            .update_station_info(&[StationInfoUpdate::InitialState {
+                stations: stations.clone(),
+                channels: channels.clone(),
+            }])
+            .await?;
+
         //TODO: integrate with the router system
         #[derive(Debug)]
         enum IPCCtrlMsg {
@@ -301,16 +313,34 @@ async fn main() -> anyhow::Result<()> {
                                             match packet {
                                                 PacketKind::Connect(pkt_data) => {
                                                     let name_to_id_mappings = pkt_data.channels.iter()
-                                                        .map(|ch| {
-                                                            (
-                                                                ch.name.clone(),
-                                                                channels.id_by_name(&ch.name)
-                                                                    .unwrap_or_else(|| {
-                                                                        info!("creating new channel: {ch:?}");
-                                                                        channels.insert_channel(ch.clone()).unwrap()
-                                                                    })
-                                                            )
-                                                        })
+                                                        .map(|ch| (
+                                                            ch.name.clone(),
+                                                            channels.id_by_name(&ch.name)
+                                                                .map(|id| (id, false))
+                                                                .unwrap_or_else(|| {
+                                                                    info!("creating new channel: {ch:?}");
+                                                                    (channels.insert_channel(ch.clone()).unwrap(), true)
+                                                                })
+                                                        ))
+                                                        .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
+                                                    router.update_station_info(
+                                                        name_to_id_mappings
+                                                            .values()
+                                                            .filter(|(_, is_new)| *is_new)
+                                                            .map(|(ch_id, _)| {
+                                                                let ch = channels.get_channel(&ch_id)
+                                                                    .expect("unreachable");
+                                                                StationInfoUpdate::NewChannel {
+                                                                    id: *ch_id,
+                                                                    ch: ch.clone(),
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()
+                                                            .as_slice()
+                                                    ).await?;
+                                                    let name_to_id_mappings = name_to_id_mappings
+                                                        .into_iter()
+                                                        .map(|(k, (v, _))| (k, v))
                                                         .collect::<HashMap<ChannelName, ChannelID>>();
                                                     if let Some(_) = stations.get_info(&pkt_data.station_id) {
                                                         info!(

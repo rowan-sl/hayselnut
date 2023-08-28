@@ -9,7 +9,7 @@ use zerocopy::{AsBytes, FromBytes};
 
 use super::{error::AllocError, ptr::Ptr, Allocator, Storage};
 
-pub struct Object<T: AsBytes + FromBytes> {
+pub struct Object<T> {
     val: T,
     modified: bool,
     pointer: Ptr<T>,
@@ -17,10 +17,10 @@ pub struct Object<T: AsBytes + FromBytes> {
     drop_flag: bool,
 }
 
-impl<T: AsBytes + FromBytes> Object<T> {
+impl<T: AsBytes + FromBytes + Sync + Send> Object<T> {
     /// create a new object by allocating space for an existing value.
     #[instrument(skip(alloc, val))]
-    pub async fn new_alloc<Store: Storage>(
+    pub async fn new_alloc<Store: Storage + Send>(
         alloc: &mut Allocator<Store>,
         val: T,
     ) -> Result<Self, AllocError<<Store as Storage>::Error>> {
@@ -37,7 +37,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
 
     /// create a new object by reading it from the allocator
     #[instrument(skip(alloc, ptr))]
-    pub async fn new_read<Store: Storage>(
+    pub async fn new_read<Store: Storage + Send>(
         alloc: &mut Allocator<Store>,
         ptr: Ptr<T>,
     ) -> Result<Self, AllocError<<Store as Storage>::Error>> {
@@ -55,7 +55,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
     }
 
     #[instrument(skip(self, alloc))]
-    pub async fn sync<Store: Storage>(
+    pub async fn sync<Store: Storage + Send>(
         &mut self,
         alloc: &mut Allocator<Store>,
     ) -> Result<(), AllocError<<Store as Storage>::Error>> {
@@ -84,7 +84,7 @@ impl<T: AsBytes + FromBytes> Object<T> {
 
     /// dispose of the object, writing it back to the allocator (sync)
     #[instrument(skip(self, alloc))]
-    pub async fn dispose_sync<Store: Storage>(
+    pub async fn dispose_sync<Store: Storage + Send>(
         mut self,
         alloc: &mut Allocator<Store>,
     ) -> Result<Ptr<T>, AllocError<<Store as Storage>::Error>> {
@@ -112,7 +112,7 @@ impl<T: AsBytes + FromBytes> DerefMut for Object<T> {
     }
 }
 
-impl<T: AsBytes + FromBytes> Drop for Object<T> {
+impl<T> Drop for Object<T> {
     fn drop(&mut self) {
         if !self.drop_flag {
             panic!("an object was not propperly handled before being dropped: this is a bug");

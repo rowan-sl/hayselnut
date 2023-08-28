@@ -11,7 +11,7 @@ pub struct TestStore {
     backing: Vec<u8>,
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl Storage for TestStore {
     type Error = VoidError;
     async fn read_buf(

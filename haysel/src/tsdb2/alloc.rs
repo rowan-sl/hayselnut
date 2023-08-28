@@ -23,7 +23,7 @@ mod tuning {
 }
 
 /// trait that all storage backings for any allocator must implement.
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 pub trait Storage {
     type Error: Error;
     async fn read_typed<T: FromBytes>(&mut self, at: Ptr<T>) -> Result<T, Self::Error> {
@@ -32,7 +32,11 @@ pub trait Storage {
             .await?;
         Ok(T::read_from(buf.as_slice()).unwrap())
     }
-    async fn write_typed<T: AsBytes>(&mut self, at: Ptr<T>, from: &T) -> Result<(), Self::Error> {
+    async fn write_typed<T: AsBytes + Sync + Send>(
+        &mut self,
+        at: Ptr<T>,
+        from: &T,
+    ) -> Result<(), Self::Error> {
         self.write_buf(
             at.cast::<Void>(),
             mem::size_of::<T>() as u64,
@@ -57,7 +61,7 @@ pub struct Allocator<S: Storage> {
     store: S,
 }
 
-impl<S: Storage> Allocator<S> {
+impl<S: Storage + Send> Allocator<S> {
     #[instrument(skip(store))]
     pub async fn new(
         mut store: S,
@@ -363,7 +367,7 @@ impl<S: Storage> Allocator<S> {
     }
 
     #[instrument(skip(self, val))]
-    pub async fn write<T: AsBytes + FromBytes>(
+    pub async fn write<T: AsBytes + FromBytes + Sync + Send>(
         &mut self,
         val: T,
         at: Ptr<T>,

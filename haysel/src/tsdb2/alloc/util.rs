@@ -58,7 +58,7 @@ pub const fn works<T>() -> bool {
     align_of::<T>() == 8 && size_of::<T>() % 8 == 0
 }
 
-impl<const N: usize, T: AsBytes + FromBytes> ChunkedLinkedList<N, T>
+impl<const N: usize, T: AsBytes + FromBytes + Sync + Send> ChunkedLinkedList<N, T>
 where
     Condition<{ works::<T>() }>: IsTrue,
 {
@@ -68,7 +68,7 @@ where
     }
 
     #[instrument(skip(list, alloc, cond))]
-    pub async fn find<Store: Storage>(
+    pub async fn find<Store: Storage + Send>(
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         cond: impl Fn(&&T) -> bool,
@@ -91,7 +91,7 @@ where
     }
 
     #[instrument(skip(list, alloc, cond))]
-    pub async fn find_best<Store: Storage, C: std::cmp::Ord>(
+    pub async fn find_best<Store: Storage + Send, C: std::cmp::Ord>(
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         cond: impl Fn(&T) -> Option<C>,
@@ -146,7 +146,7 @@ where
     }
 
     #[instrument(skip(list, alloc, item))]
-    pub async fn push<Store: Storage>(
+    pub async fn push<Store: Storage + Send>(
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         item: T,
