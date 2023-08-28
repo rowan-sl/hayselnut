@@ -9,6 +9,7 @@ use squirrel::api::station::identity::StationID;
 use crate::route::StationInfoUpdate;
 
 pub mod db;
+pub mod ipc;
 
 #[derive(Debug, Clone)]
 pub struct Record {

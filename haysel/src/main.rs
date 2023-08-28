@@ -25,18 +25,13 @@ use squirrel::{
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, path::PathBuf, time::Duration};
-use tokio::{
-    fs,
-    net::{UdpSocket, UnixListener},
-    select,
-    signal::ctrl_c,
-    spawn, sync,
-};
+use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
 use tracing::metadata::LevelFilter;
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
 mod consumer;
+mod ipc;
 mod paths;
 mod registry;
 pub mod route;
@@ -44,7 +39,7 @@ mod shutdown;
 pub mod tsdb;
 pub mod tsdb2;
 
-use consumer::db::RecordDB;
+use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
@@ -176,6 +171,24 @@ async fn main() -> anyhow::Result<()> {
     // a new scope is opened here so that any item using ShutdownHandles is dropped before
     // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
     {
+        info!(
+            "Performing DNS lookup of server's extranal IP (url={})",
+            args.url
+        );
+        let resolver = TokioAsyncResolver::tokio(
+            resolveconf::ResolverConfig::default(),
+            resolveconf::ResolverOpts::default(),
+        )?;
+        let addrs = resolver
+            .lookup_ip(args.url)
+            .await?
+            .into_iter()
+            .map(|addr| {
+                debug!("Resolved IP {addr}");
+                SocketAddr::new(addr, args.port)
+            })
+            .collect::<Vec<_>>();
+
         if args.data_dir.exists() {
             if !args.data_dir.canonicalize()?.is_dir() {
                 error!("records directory path already exists, and is a file!");
@@ -232,28 +245,15 @@ async fn main() -> anyhow::Result<()> {
         };
         info!("Database loaded");
 
-        info!(
-            "Performing DNS lookup of server's extranal IP (url={})",
-            args.url
-        );
-        let resolver = TokioAsyncResolver::tokio(
-            resolveconf::ResolverConfig::default(),
-            resolveconf::ResolverOpts::default(),
-        )?;
-        let addrs = resolver
-            .lookup_ip(args.url)
-            .await?
-            .into_iter()
-            .map(|addr| {
-                debug!("Resolved IP {addr}");
-                SocketAddr::new(addr, args.port)
-            })
-            .collect::<Vec<_>>();
+        debug!("Setting up IPC at {:?}", args.ipc_sock);
+        let ipc_router_client = IPCConsumer::new(args.ipc_sock).await?;
+        info!("IPC configured");
 
         let mut handle = shutdown.handle();
 
         let mut router = Router::new();
         router.with_consumer(db_router_client);
+        router.with_consumer(ipc_router_client);
         // send the initial update with the current state
         router
             .update_station_info(&[StationInfoUpdate::InitialState {
@@ -262,25 +262,8 @@ async fn main() -> anyhow::Result<()> {
             }])
             .await?;
 
-        //TODO: integrate with the router system
-        #[derive(Debug)]
-        enum IPCCtrlMsg {
-            Broadcast(IPCMsg),
-            UpdateInfo {
-                stations: KnownStations,
-                channels: KnownChannels,
-            },
-        }
-        let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCCtrlMsg>();
-        ipc_task_tx
-            .send_async(IPCCtrlMsg::UpdateInfo {
-                stations: stations.clone(),
-                channels: channels.clone(),
-            })
-            .await
-            .unwrap();
         let main_task = spawn(async move {
-            async move {
+            async {
                 // test code for the network protcol
                 let sock = UdpSocket::bind(addrs.as_slice()).await?;
                 let max_transaction_time = Duration::from_secs(30);
@@ -290,7 +273,10 @@ async fn main() -> anyhow::Result<()> {
                 loop {
                     select! {
                         // TODO: complete transactions and inform clients before exit
-                        _ = handle.wait_for_shutdown() => { break; }
+                        _ = handle.wait_for_shutdown() => {
+                            // shutdown of router clients is handled after the loop exists
+                            break;
+                        }
                         recv = dispatch_rx.recv_async() => {
                             let (ip, event) = recv.unwrap();
                             match event {
@@ -303,9 +289,6 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 DispatchEvent::Received(recv_data) => {
                                     debug!("received [packet] from {ip:?}");
-                                    // if let Ok(packet) = rmp_serde::from_slice::<rmpv::Value>(&data) {
-                                    //     trace!("packet content (msgpack value): {packet:#?}");
-                                    // }
                                     match rmp_serde::from_slice::<PacketKind>(&recv_data) {
                                         Ok(packet) => {
                                             trace!("packet content: {packet:?}");
@@ -423,80 +406,19 @@ async fn main() -> anyhow::Result<()> {
                         }
                     };
                 }
-
                 Ok::<(), anyhow::Error>(())
-            }.await.unwrap()
+            }.await.unwrap();
+            // takes place here so that shutdown occurs
+            // regardless of if an error happened or not
+            router.close().await;
         });
 
-        let mut handle = shutdown.handle();
-        let ipc_task = spawn(async move {
-            let mut shutdown_ipc = Shutdown::new();
-            let listener = UnixListener::bind(args.ipc_sock.clone()).unwrap();
-            let (ipc_broadcast_queue, _) = sync::broadcast::channel::<IPCMsg>(10);
-            let (mut cache_stations, mut cache_channels) =
-                (KnownStations::new(), KnownChannels::new());
-
-            let res = async {
-                loop {
-                    select! {
-                        _ = handle.wait_for_shutdown() => { break; }
-                        recv = ipc_task_rx.recv_async() => {
-                            match recv? {
-                                IPCCtrlMsg::Broadcast(msg) => {
-                                    let num = ipc_broadcast_queue.send(msg).unwrap_or(0);
-                                    trace!("Sent IPC message to {num} IPC clients");
-                                }
-                                IPCCtrlMsg::UpdateInfo { stations, channels } => {
-                                    cache_stations = stations.clone();
-                                    cache_channels = channels.clone();
-                                    let num = ipc_broadcast_queue.send(IPCMsg { kind: mycelium::IPCMsgKind::Info {
-                                        stations,
-                                        channels,
-                                    }}).unwrap_or(0);
-                                    trace!("Sent updated station/channel info to {num} IPC clients");
-                                }
-                            };
-                        }
-                        res = listener.accept() => {
-                            let (mut sock, addr) = res?;
-                            let mut recv = ipc_broadcast_queue.subscribe();
-                            let mut handle = shutdown_ipc.handle();
-                            debug!("Connecting to new IPC client at {addr:?}");
-                            let initial_packet = IPCMsg { kind: mycelium::IPCMsgKind::Info {
-                                stations: cache_stations.clone(),
-                                channels: cache_channels.clone(),
-                            }};
-                            spawn(async move {
-                                let res = async move {
-                                    mycelium::ipc_send(&mut sock, &initial_packet).await?;
-                                    loop {
-                                        select! {
-                                            // TODO: notify clients of server closure
-                                            _ = handle.wait_for_shutdown() => { break; }
-                                            res = recv.recv() => {
-                                                mycelium::ipc_send(&mut sock, &res?).await?
-                                            }
-                                        }
-                                    }
-                                    Ok::<(), anyhow::Error>(())
-                                }.await;
-                                debug!("IPC client {addr:?} disconnected");
-                                match res {
-                                    Ok(()) => {}
-                                    Err(e) => error!("IPC task (for: addr:?) exited with error: {e:?}"),
-                                }
-                            });
-                        }
-                    };
-                }
-                Ok::<(), anyhow::Error>(())
-            }.await;
-            drop(listener);
-            let _ = tokio::fs::remove_file(args.ipc_sock).await;
-            shutdown_ipc.trigger_shutdown();
-            shutdown_ipc.wait_for_completion().await;
-            res.unwrap();
-        });
+        // let mut handle = shutdown.handle();
+        // let ipc_task = spawn(ipc::ipc_task(
+        //     handle,
+        //     ipc_task_rx,
+        //     args.ipc_soc
+        // ));
 
         // let mut router = Router::new();
         // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
@@ -506,7 +428,12 @@ async fn main() -> anyhow::Result<()> {
         // router.close().await;
 
         info!("running -- press ctrl+c to exit");
-        select! { _ = ctrlc.recv() => {} _ = main_task => {} _ = ipc_task => {} }
+        select! {
+            _ = ctrlc.recv() => {}
+            _ = main_task => {
+                warn!("exiting due to main task failure");
+            }
+        }
         shutdown.trigger_shutdown();
     }
     shutdown.wait_for_completion().await;
