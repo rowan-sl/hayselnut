@@ -13,7 +13,7 @@ extern crate tracing;
 extern crate anyhow;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
 use squirrel::{
     api::{
         station::{
@@ -24,14 +24,16 @@ use squirrel::{
     },
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
-use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, time::Duration};
 use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
-use tracing::metadata::LevelFilter;
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
+mod args;
+mod commands;
 mod consumer;
 mod ipc;
+mod log;
 mod paths;
 mod registry;
 pub mod route;
@@ -39,119 +41,21 @@ mod shutdown;
 pub mod tsdb;
 pub mod tsdb2;
 
+use args::ArgsParser;
 use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
 use shutdown::{Shutdown, ShutdownHandle};
 use tsdb2::{alloc::disk_store::DiskStore, Database};
 
-#[derive(Parser, Debug)]
-pub struct ArgsParser {
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum Cmd {
-    /// dump info about the database
-    Infodump {
-        #[arg(
-            long,
-            help = "if provided, will dump information about the database contained in <file>"
-        )]
-        file: Option<PathBuf>,
-    },
-    /// run
-    Run {
-        #[command(flatten)]
-        args: RunArgs,
-    },
-    /// test program for TSDB v2
-    DB2 {
-        #[arg(
-            long,
-            help = "allow initializing a database using a file that contains data (may cause silent deletion of corrupted databases, so it is recommended to only use this when running the server for the first time)"
-        )]
-        init_overwrite: bool,
-        #[arg(long, short, help = "database file")]
-        file: PathBuf,
-    },
-}
-
-#[derive(Args, Debug)]
-pub struct RunArgs {
-    #[arg(
-        short,
-        long,
-        help = "directory for station/channel ID records and the database to be placed"
-    )]
-    data_dir: PathBuf,
-    #[arg(short, long, help = "path of the unix socket for the servers IPC API")]
-    ipc_sock: PathBuf,
-    #[arg(short, long, help = "url of the server that this is to be run on")]
-    url: String,
-    #[arg(short, long, help = "port to run the server on")]
-    port: u16,
-    #[arg(
-        long,
-        help = "allow initiailizing a database using a file that contains data (this may cause silent deletion of corrupt databases, so it is recommended to only use this when running the server for the first time)"
-    )]
-    init_overwrite: bool,
-    #[arg(
-        long,
-        help = "allow using an aternate database file, instead of the default under `data_dir`. this allows for use of *special* files like block devices..."
-    )]
-    alt_db: Option<PathBuf>,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args_parsed = ArgsParser::parse();
-    let args: RunArgs;
+    log::init_logging()?;
 
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::FmtSubscriber::builder()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::builder()
-                    .with_default_directive(LevelFilter::TRACE.into())
-                    .from_env()
-                    .expect("Invalid logging config"),
-            )
-            .pretty()
-            .finish(),
-    )
-    .expect("Failed to set tracing subscriber");
-
-    info!("Args: {args_parsed:#?}");
-
-    match args_parsed.cmd {
-        Cmd::Infodump { file } => {
-            error!(" -------- dumping database info --------");
-            tsdb2::Database::<tsdb2::alloc::disk_store::DiskStore>::infodump().await;
-            if let Some(file) = file {
-                error!(" -------- dumping database info for {file:?} --------");
-                let store = DiskStore::new(&file, true).await?;
-                let mut database = Database::new(store, false).await?;
-                database.infodump_from().await?;
-                database.close().await?;
-            }
-            error!(" -------- DB infodump complete  --------");
-            return Ok(());
-        }
-        Cmd::DB2 {
-            init_overwrite,
-            mut file,
-        } => {
-            file = file.canonicalize()?;
-            debug!("{{file}} resolves to {file:?}");
-            let store = DiskStore::new(&file, false).await?;
-            let database = Database::new(store, init_overwrite).await?;
-
-            database.close().await?;
-            return Ok(());
-        }
-        Cmd::Run { args: run_args } => args = run_args,
-    }
+    let args = match commands::delegate(ArgsParser::parse()).await {
+        commands::Delegation::SubcommandRan(result) => return result,
+        commands::Delegation::RunMain(args) => args,
+    };
 
     let mut shutdown = Shutdown::new();
     // trap the signal, will only start listening later in the main loop
