@@ -413,20 +413,6 @@ async fn main() -> anyhow::Result<()> {
             router.close().await;
         });
 
-        // let mut handle = shutdown.handle();
-        // let ipc_task = spawn(ipc::ipc_task(
-        //     handle,
-        //     ipc_task_rx,
-        //     args.ipc_soc
-        // ));
-
-        // let mut router = Router::new();
-        // router.with_consumer(RecordDB::new(&records_dir.path("data.tsdb")).await?);
-        //
-        // // ... code ...
-        //
-        // router.close().await;
-
         info!("running -- press ctrl+c to exit");
         select! {
             _ = ctrlc.recv() => {}
