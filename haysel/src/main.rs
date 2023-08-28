@@ -23,7 +23,7 @@ use squirrel::{
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, time::Duration};
-use tokio::{fs, net::UdpSocket, select};
+use tokio::{net::UdpSocket, select};
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
@@ -62,35 +62,10 @@ async fn main() -> anyhow::Result<()> {
     // a new scope is opened here so that any item using ShutdownHandles is dropped before
     // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
     {
-        info!(
-            "Performing DNS lookup of server's extranal IP (url={})",
-            args.url
-        );
-        let resolver = TokioAsyncResolver::tokio(
-            resolveconf::ResolverConfig::default(),
-            resolveconf::ResolverOpts::default(),
-        )?;
-        let addrs = resolver
-            .lookup_ip(args.url)
-            .await?
-            .into_iter()
-            .map(|addr| {
-                debug!("Resolved IP {addr}");
-                SocketAddr::new(addr, args.port)
-            })
-            .collect::<Vec<_>>();
-
-        if args.data_dir.exists() {
-            if !args.data_dir.canonicalize()?.is_dir() {
-                error!("records directory path already exists, and is a file!");
-                bail!("records dir exists");
-            }
-        } else {
-            info!("Creating new records directory at {:#?}", args.data_dir);
-            fs::create_dir(args.data_dir.clone()).await?;
-        }
+        let addrs = lookup_server_ip(args.url, args.port).await?;
 
         let records_dir = paths::RecordsPath::new(args.data_dir.canonicalize()?);
+        records_dir.ensure_exists().await?;
 
         info!("Loading info for known stations");
         let stations_path = records_dir.path("stations.json");
@@ -119,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         debug!("Loading database");
-        warn!("TSDB2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
+        warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
         let db_router_client = {
             let raw_path = if let Some(p) = args.alt_db {
                 p
@@ -155,6 +130,29 @@ async fn main() -> anyhow::Result<()> {
     shutdown.wait_for_completion().await;
 
     Ok(())
+}
+
+/// it is necessary to bind the server to the real external ip address,
+/// or risk confusing issues (forgot what, but it's bad)
+async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
+    info!(
+        "Performing DNS lookup of server's extranal IP (url={})",
+        url
+    );
+    let resolver = TokioAsyncResolver::tokio(
+        resolveconf::ResolverConfig::default(),
+        resolveconf::ResolverOpts::default(),
+    )?;
+    let addrs = resolver
+        .lookup_ip(url)
+        .await?
+        .into_iter()
+        .map(|addr| {
+            debug!("Resolved IP {addr}");
+            SocketAddr::new(addr, port)
+        })
+        .collect::<Vec<_>>();
+    Ok::<_, anyhow::Error>(addrs)
 }
 
 async fn main_task(

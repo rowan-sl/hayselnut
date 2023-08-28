@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+
 /// Utility struct for generating paths inside the records directory
 #[derive(Debug, Clone)]
 pub struct RecordsPath {
@@ -10,6 +12,20 @@ impl RecordsPath {
     pub fn new(path: PathBuf) -> Self {
         Self { records_dir: path }
     }
+
+    pub async fn ensure_exists(&self) -> Result<()> {
+        if self.records_dir.exists() {
+            if !self.records_dir.canonicalize()?.is_dir() {
+                error!("records directory path already exists, and is a file!");
+                bail!("records dir exists");
+            }
+        } else {
+            info!("Creating new records directory at {:#?}", self.records_dir);
+            tokio::fs::create_dir(self.records_dir.clone()).await?;
+        }
+        Ok(())
+    }
+
     /// Returns the path with the requested file extension.
     /// does not allow for nesting in subdirectories
     ///
