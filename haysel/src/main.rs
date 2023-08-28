@@ -25,7 +25,7 @@ use squirrel::{
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, time::Duration};
-use tokio::{fs, net::UdpSocket, select, signal::ctrl_c, spawn, sync};
+use tokio::{fs, net::UdpSocket, select};
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
@@ -57,20 +57,9 @@ async fn main() -> anyhow::Result<()> {
         commands::Delegation::RunMain(args) => args,
     };
 
-    let mut shutdown = Shutdown::new();
-    // trap the signal, will only start listening later in the main loop
-    let mut ctrlc = {
-        warn!("Trapping ctrl+c, it will be useless until initialization is finished");
-        let (shutdown_tx, shutdown_rx) = sync::broadcast::channel::<()>(1);
-        tokio::spawn(async move {
-            if let Err(_) = ctrl_c().await {
-                error!("Failed to listen for ctrl_c signal");
-            }
-            shutdown_tx.send(()).unwrap();
-        });
-
-        shutdown_rx
-    };
+    let shutdown = Shutdown::new();
+    // trap the ctrl+csignal, will only start listening later in the main loop
+    shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
     // a new scope is opened here so that any item using ShutdownHandles is dropped before
     // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
@@ -162,22 +151,8 @@ async fn main() -> anyhow::Result<()> {
             }])
             .await?;
 
-        let main_task = spawn(main_task(
-            router,
-            addrs,
-            shutdown.handle(),
-            stations,
-            channels,
-        ));
-
         info!("running -- press ctrl+c to exit");
-        select! {
-            _ = ctrlc.recv() => {}
-            _ = main_task => {
-                warn!("exiting due to main task failure");
-            }
-        }
-        shutdown.trigger_shutdown();
+        main_task(router, addrs, shutdown.handle(), stations, channels).await?;
     }
     shutdown.wait_for_completion().await;
 
@@ -250,6 +225,7 @@ async fn main_task(
     // takes place here so that shutdown occurs
     // regardless of if an error happened or not
     router.close().await;
+    handle.trigger_shutdown();
     res
 }
 

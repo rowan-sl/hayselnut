@@ -1,16 +1,22 @@
 use tokio::sync::{broadcast, mpsc};
 
+pub mod util;
+
 #[derive(Debug)]
 pub struct ShutdownHandle {
     #[allow(unused)]
     inner: mpsc::Sender<()>,
-    trigger: broadcast::Receiver<()>,
+    listener: broadcast::Receiver<()>,
+    trigger: broadcast::Sender<()>,
 }
 
 impl ShutdownHandle {
-    #[allow(unused)]
     pub async fn wait_for_shutdown(&mut self) {
-        let _ = self.trigger.recv().await;
+        let _ = self.listener.recv().await;
+    }
+
+    pub fn trigger_shutdown(&mut self) {
+        let _ = self.trigger.send(());
     }
 }
 
@@ -31,7 +37,8 @@ impl Shutdown {
     pub fn handle(&self) -> ShutdownHandle {
         ShutdownHandle {
             inner: self.tx.clone(),
-            trigger: self.trigger.subscribe(),
+            listener: self.trigger.subscribe(),
+            trigger: self.trigger.clone(),
         }
     }
 
