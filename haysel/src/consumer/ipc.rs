@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use flume::Sender;
+use mycelium::IPCMsg;
 use tokio::spawn;
 
 use crate::{
@@ -35,26 +36,32 @@ impl RecordConsumer for IPCConsumer {
     async fn handle(
         &mut self,
         Record {
-            data,
             recorded_at,
             recorded_by,
+            data,
         }: &Record,
     ) -> Result<()> {
+        self.ipc_task_tx
+            .send_async(IPCTaskMsg::Broadcast(IPCMsg {
+                kind: mycelium::IPCMsgKind::FreshHotData {
+                    from: *recorded_by,
+                    recorded_at: *recorded_at,
+                    by_channel: data.clone(),
+                },
+            }))
+            .await?;
         Ok(())
     }
 
     async fn update_station_info(&mut self, updates: &[StationInfoUpdate]) -> Result<()> {
-        for update in updates {
-            match update {
-                StationInfoUpdate::InitialState { stations, channels } => {}
-                &StationInfoUpdate::NewStation { id } => {}
-                // the database does not track channels independantly of stations
-                StationInfoUpdate::NewChannel { id, ch } => {}
-                &StationInfoUpdate::StationNewChannel { station, channel } => {}
-            }
-        }
+        self.ipc_task_tx
+            .send_async(IPCTaskMsg::StationInfoUpdates(updates.to_vec()))
+            .await?;
         Ok(())
     }
 
-    async fn close(self: Box<Self>) {}
+    async fn close(mut self: Box<Self>) {
+        self.shutdown.trigger_shutdown();
+        self.shutdown.wait_for_completion().await;
+    }
 }

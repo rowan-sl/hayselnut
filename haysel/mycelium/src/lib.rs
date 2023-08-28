@@ -7,11 +7,12 @@ extern crate thiserror;
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 pub use squirrel;
 pub use squirrel::api::station;
 use squirrel::api::station::{
-    capabilities::{ChannelData, ChannelID, KnownChannels},
+    capabilities::{Channel, ChannelData, ChannelID, KnownChannels},
     identity::{KnownStations, StationID},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
@@ -60,12 +61,25 @@ pub struct IPCMsg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IPCMsgKind {
-    Info {
+    /// Initialization packet, sent with current information about stuff
+    Haiii {
         stations: KnownStations,
         channels: KnownChannels,
     },
     FreshHotData {
         from: StationID,
+        recorded_at: DateTime<Utc>,
         by_channel: HashMap<ChannelID, ChannelData>,
+    },
+    NewStation {
+        id: StationID,
+    },
+    NewChannel {
+        id: ChannelID,
+        ch: Channel,
+    },
+    StationNewChannel {
+        station: StationID,
+        channel: ChannelID,
     },
 }

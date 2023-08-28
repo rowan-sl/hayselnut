@@ -13,7 +13,6 @@ extern crate tracing;
 extern crate anyhow;
 
 use clap::{Args, Parser, Subcommand};
-use mycelium::IPCMsg;
 use squirrel::{
     api::{
         station::{
@@ -350,6 +349,13 @@ async fn main() -> anyhow::Result<()> {
                                                         stations.insert_station(pkt_data.station_id, StationInfo {
                                                             supports_channels: name_to_id_mappings.values().copied().collect(),
                                                         }).unwrap();
+                                                        let mut updates = name_to_id_mappings
+                                                            .values()
+                                                            .copied()
+                                                            .map(|id| StationInfoUpdate::StationNewChannel { station: pkt_data.station_id, channel: id })
+                                                            .collect::<Vec<_>>();
+                                                        updates.push(StationInfoUpdate::NewStation { id: pkt_data.station_id });
+                                                        router.update_station_info(&updates).await?;
                                                     }
                                                     let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
                                                         map: name_to_id_mappings,
@@ -357,16 +363,9 @@ async fn main() -> anyhow::Result<()> {
                                                     let client = clients.get_mut(&ip).unwrap();
                                                     client.queue(resp);
                                                     client.access_metadata().uuid = Some(pkt_data.station_id);
-                                                    // update info with new station (may not allways be different)
-                                                    ipc_task_tx
-                                                        .send_async(IPCCtrlMsg::UpdateInfo {
-                                                            stations: stations.clone(),
-                                                            channels: channels.clone(),
-                                                        })
-                                                        .await
-                                                        .unwrap();
                                                 }
                                                 PacketKind::Data(pkt_data) => {
+                                                    let received_at = chrono::Utc::now();
                                                     let mut buf = String::new();
                                                     for (chid, dat) in pkt_data.per_channel.clone() {
                                                         if let Some(ch) = channels.get_channel(&chid) {
@@ -381,10 +380,11 @@ async fn main() -> anyhow::Result<()> {
                                                         }
                                                     }
                                                     info!("Received data:\n{buf}");
-                                                    ipc_task_tx.send_async(IPCCtrlMsg::Broadcast(IPCMsg { kind: mycelium::IPCMsgKind::FreshHotData {
-                                                        from: clients.get_mut(&ip).unwrap().access_metadata().uuid.unwrap(),
-                                                        by_channel: pkt_data.per_channel,
-                                                    }})).await?;
+                                                    router.process(consumer::Record {
+                                                        recorded_at: received_at,
+                                                        recorded_by: clients.get_mut(&ip).unwrap().access_metadata().uuid.unwrap(),
+                                                        data: pkt_data.per_channel
+                                                    }).await?;
                                                 }
                                                 _ => warn!("received unexpected packet, ignoring"),
                                             }
