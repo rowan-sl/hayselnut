@@ -135,7 +135,6 @@ async fn main() -> anyhow::Result<()> {
             tsdb2::Database::<tsdb2::alloc::disk_store::DiskStore>::infodump().await;
             if let Some(file) = file {
                 error!(" -------- dumping database info for {file:?} --------");
-                use tsdb2::{alloc::disk_store::DiskStore, Database};
                 let store = DiskStore::new(&file, true).await?;
                 let mut database = Database::new(store, false).await?;
                 database.infodump_from().await?;
