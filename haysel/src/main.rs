@@ -12,6 +12,7 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
+use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use squirrel::{
     api::{
@@ -41,7 +42,7 @@ pub mod tsdb2;
 use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
-use shutdown::Shutdown;
+use shutdown::{Shutdown, ShutdownHandle};
 use tsdb2::{alloc::disk_store::DiskStore, Database};
 
 #[derive(Parser, Debug)]
@@ -202,14 +203,12 @@ async fn main() -> anyhow::Result<()> {
 
         info!("Loading info for known stations");
         let stations_path = records_dir.path("stations.json");
-        let mut stations =
-            JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
+        let stations = JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
         debug!("Loaded known stations:");
 
         info!("Loading known channels");
         let channels_path = records_dir.path("channels.json");
-        let mut channels =
-            JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
+        let channels = JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
 
         debug!(
             "Loaded known channels: {:#?}",
@@ -248,8 +247,6 @@ async fn main() -> anyhow::Result<()> {
         let ipc_router_client = IPCConsumer::new(args.ipc_sock).await?;
         info!("IPC configured");
 
-        let mut handle = shutdown.handle();
-
         let mut router = Router::new();
         router.with_consumer(db_router_client);
         router.with_consumer(ipc_router_client);
@@ -261,157 +258,13 @@ async fn main() -> anyhow::Result<()> {
             }])
             .await?;
 
-        let main_task = spawn(async move {
-            async {
-                // test code for the network protcol
-                let sock = UdpSocket::bind(addrs.as_slice()).await?;
-                let max_transaction_time = Duration::from_secs(30);
-                let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
-                let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
-
-                loop {
-                    select! {
-                        // TODO: complete transactions and inform clients before exit
-                        _ = handle.wait_for_shutdown() => {
-                            // shutdown of router clients is handled after the loop exists
-                            break;
-                        }
-                        recv = dispatch_rx.recv_async() => {
-                            let (ip, event) = recv.unwrap();
-                            match event {
-                                DispatchEvent::Send(packet) => {
-                                    //debug!("Sending {packet:#?} to {ip:?}");
-                                    sock.send_to(packet.as_bytes(), ip).await.unwrap();
-                                }
-                                DispatchEvent::TimedOut => {
-                                    error!("Connection to {ip:?} timed out");
-                                }
-                                DispatchEvent::Received(recv_data) => {
-                                    debug!("received [packet] from {ip:?}");
-                                    match rmp_serde::from_slice::<PacketKind>(&recv_data) {
-                                        Ok(packet) => {
-                                            trace!("packet content: {packet:?}");
-                                            match packet {
-                                                PacketKind::Connect(pkt_data) => {
-                                                    let name_to_id_mappings = pkt_data.channels.iter()
-                                                        .map(|ch| (
-                                                            ch.name.clone(),
-                                                            channels.id_by_name(&ch.name)
-                                                                .map(|id| (id, false))
-                                                                .unwrap_or_else(|| {
-                                                                    info!("creating new channel: {ch:?}");
-                                                                    (channels.insert_channel(ch.clone()).unwrap(), true)
-                                                                })
-                                                        ))
-                                                        .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
-                                                    router.update_station_info(
-                                                        name_to_id_mappings
-                                                            .values()
-                                                            .filter(|(_, is_new)| *is_new)
-                                                            .map(|(ch_id, _)| {
-                                                                let ch = channels.get_channel(&ch_id)
-                                                                    .expect("unreachable");
-                                                                StationInfoUpdate::NewChannel {
-                                                                    id: *ch_id,
-                                                                    ch: ch.clone(),
-                                                                }
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                            .as_slice()
-                                                    ).await?;
-                                                    let name_to_id_mappings = name_to_id_mappings
-                                                        .into_iter()
-                                                        .map(|(k, (v, _))| (k, v))
-                                                        .collect::<HashMap<ChannelName, ChannelID>>();
-                                                    if let Some(_) = stations.get_info(&pkt_data.station_id) {
-                                                        info!(
-                                                            "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                                                            pkt_data.station_id,
-                                                            ip,
-                                                            pkt_data.station_build_rev,
-                                                            pkt_data.station_build_date
-                                                        );
-                                                        stations.map_info(
-                                                            &pkt_data.station_id,
-                                                            |_id, info| info.supports_channels = name_to_id_mappings
-                                                                .values()
-                                                                .copied()
-                                                                .collect()
-                                                        );
-                                                    } else {
-                                                        info!(
-                                                            "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                                                            pkt_data.station_id,
-                                                            ip,
-                                                            pkt_data.station_build_rev,
-                                                            pkt_data.station_build_date
-                                                        );
-                                                        stations.insert_station(pkt_data.station_id, StationInfo {
-                                                            supports_channels: name_to_id_mappings.values().copied().collect(),
-                                                        }).unwrap();
-                                                        let mut updates = name_to_id_mappings
-                                                            .values()
-                                                            .copied()
-                                                            .map(|id| StationInfoUpdate::StationNewChannel { station: pkt_data.station_id, channel: id })
-                                                            .collect::<Vec<_>>();
-                                                        updates.push(StationInfoUpdate::NewStation { id: pkt_data.station_id });
-                                                        router.update_station_info(&updates).await?;
-                                                    }
-                                                    let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
-                                                        map: name_to_id_mappings,
-                                                    })).unwrap();
-                                                    let client = clients.get_mut(&ip).unwrap();
-                                                    client.queue(resp);
-                                                    client.access_metadata().uuid = Some(pkt_data.station_id);
-                                                }
-                                                PacketKind::Data(pkt_data) => {
-                                                    let received_at = chrono::Utc::now();
-                                                    let mut buf = String::new();
-                                                    for (chid, dat) in pkt_data.per_channel.clone() {
-                                                        if let Some(ch) = channels.get_channel(&chid) {
-                                                            //TODO: verify that types match
-                                                            let _ = writeln!(
-                                                                buf, "Channel {chid} ({}) => {:?}",
-                                                                <ChannelName as Into<String>>::into(ch.name.clone()), dat
-                                                            );
-                                                        } else {
-                                                            warn!("Data contains channel id {chid} (={dat:?}) which is not known to this server");
-                                                            let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
-                                                        }
-                                                    }
-                                                    info!("Received data:\n{buf}");
-                                                    router.process(consumer::Record {
-                                                        recorded_at: received_at,
-                                                        recorded_by: clients.get_mut(&ip).unwrap().access_metadata().uuid.unwrap(),
-                                                        data: pkt_data.per_channel
-                                                    }).await?;
-                                                }
-                                                _ => warn!("received unexpected packet, ignoring"),
-                                            }
-                                        }
-                                        Err(e) => {
-                                            warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        packet = recv_next_packet(&sock) => {
-                            if let Some((from, packet)) = packet? {
-                                //debug!("Received {packet:#?} from {from:?}");
-                                let cl = clients.entry(from)
-                                    .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
-                                cl.handle(packet);
-                            }
-                        }
-                    };
-                }
-                Ok::<(), anyhow::Error>(())
-            }.await.unwrap();
-            // takes place here so that shutdown occurs
-            // regardless of if an error happened or not
-            router.close().await;
-        });
+        let main_task = spawn(main_task(
+            router,
+            addrs,
+            shutdown.handle(),
+            stations,
+            channels,
+        ));
 
         info!("running -- press ctrl+c to exit");
         select! {
@@ -424,5 +277,205 @@ async fn main() -> anyhow::Result<()> {
     }
     shutdown.wait_for_completion().await;
 
+    Ok(())
+}
+
+async fn main_task(
+    mut router: Router,
+    addrs: Vec<SocketAddr>,
+    mut handle: ShutdownHandle,
+    mut stations: JsonLoader<KnownStations>,
+    mut channels: JsonLoader<KnownChannels>,
+) -> Result<()> {
+    let res = async {
+        // test code for the network protcol
+        let sock = UdpSocket::bind(addrs.as_slice()).await?;
+        let max_transaction_time = Duration::from_secs(30);
+        let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
+        let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
+
+        loop {
+            select! {
+                // TODO: complete transactions and inform clients before exit
+                _ = handle.wait_for_shutdown() => {
+                    // shutdown of router clients is handled after the loop exists
+                    break;
+                }
+                recv = dispatch_rx.recv_async() => {
+                    let (ip, event) = recv.unwrap();
+                    match event {
+                        DispatchEvent::Send(packet) => {
+                            //debug!("Sending {packet:#?} to {ip:?}");
+                            sock.send_to(packet.as_bytes(), ip).await.unwrap();
+                        }
+                        DispatchEvent::TimedOut => {
+                            error!("Connection to {ip:?} timed out");
+                        }
+                        DispatchEvent::Received(recv_data) => {
+                            debug!("received [packet] from {ip:?}");
+                            match rmp_serde::from_slice::<PacketKind>(&recv_data) {
+                                Ok(packet) => {
+                                    handle_packet(
+                                        packet,
+                                        &mut stations,
+                                        &mut channels,
+                                        &mut router,
+                                        ip,
+                                        &mut clients
+                                    ).await?
+                                }
+                                Err(e) => {
+                                    warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
+                                }
+                            }
+                        }
+                    }
+                }
+                packet = recv_next_packet(&sock) => {
+                    if let Some((from, packet)) = packet? {
+                        //debug!("Received {packet:#?} from {from:?}");
+                        let cl = clients.entry(from)
+                            .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
+                        cl.handle(packet);
+                    }
+                }
+            };
+        }
+        Ok::<(), anyhow::Error>(())
+    }.await;
+    // takes place here so that shutdown occurs
+    // regardless of if an error happened or not
+    router.close().await;
+    res
+}
+
+async fn handle_packet(
+    packet: PacketKind,
+    stations: &mut JsonLoader<KnownStations>,
+    channels: &mut JsonLoader<KnownChannels>,
+    router: &mut Router,
+    ip: SocketAddr,
+    clients: &mut HashMap<SocketAddr, ClientInterface>,
+) -> Result<()> {
+    trace!("packet content: {packet:?}");
+    match packet {
+        PacketKind::Connect(pkt_data) => {
+            let name_to_id_mappings = pkt_data
+                .channels
+                .iter()
+                .map(|ch| {
+                    (
+                        ch.name.clone(),
+                        channels
+                            .id_by_name(&ch.name)
+                            .map(|id| (id, false))
+                            .unwrap_or_else(|| {
+                                info!("creating new channel: {ch:?}");
+                                (channels.insert_channel(ch.clone()).unwrap(), true)
+                            }),
+                    )
+                })
+                .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
+            router
+                .update_station_info(
+                    name_to_id_mappings
+                        .values()
+                        .filter(|(_, is_new)| *is_new)
+                        .map(|(ch_id, _)| {
+                            let ch = channels.get_channel(&ch_id).expect("unreachable");
+                            StationInfoUpdate::NewChannel {
+                                id: *ch_id,
+                                ch: ch.clone(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .await?;
+            let name_to_id_mappings = name_to_id_mappings
+                .into_iter()
+                .map(|(k, (v, _))| (k, v))
+                .collect::<HashMap<ChannelName, ChannelID>>();
+            if let Some(_) = stations.get_info(&pkt_data.station_id) {
+                info!(
+                    "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                    pkt_data.station_id,
+                    ip,
+                    pkt_data.station_build_rev,
+                    pkt_data.station_build_date
+                );
+                stations.map_info(&pkt_data.station_id, |_id, info| {
+                    info.supports_channels = name_to_id_mappings.values().copied().collect()
+                });
+            } else {
+                info!(
+                    "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                    pkt_data.station_id,
+                    ip,
+                    pkt_data.station_build_rev,
+                    pkt_data.station_build_date
+                );
+                stations
+                    .insert_station(
+                        pkt_data.station_id,
+                        StationInfo {
+                            supports_channels: name_to_id_mappings.values().copied().collect(),
+                        },
+                    )
+                    .unwrap();
+                let mut updates = name_to_id_mappings
+                    .values()
+                    .copied()
+                    .map(|id| StationInfoUpdate::StationNewChannel {
+                        station: pkt_data.station_id,
+                        channel: id,
+                    })
+                    .collect::<Vec<_>>();
+                updates.push(StationInfoUpdate::NewStation {
+                    id: pkt_data.station_id,
+                });
+                router.update_station_info(&updates).await?;
+            }
+            let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
+                map: name_to_id_mappings,
+            }))
+            .unwrap();
+            let client = clients.get_mut(&ip).unwrap();
+            client.queue(resp);
+            client.access_metadata().uuid = Some(pkt_data.station_id);
+        }
+        PacketKind::Data(pkt_data) => {
+            let received_at = chrono::Utc::now();
+            let mut buf = String::new();
+            for (chid, dat) in pkt_data.per_channel.clone() {
+                if let Some(ch) = channels.get_channel(&chid) {
+                    //TODO: verify that types match
+                    let _ = writeln!(
+                        buf,
+                        "Channel {chid} ({}) => {:?}",
+                        <ChannelName as Into<String>>::into(ch.name.clone()),
+                        dat
+                    );
+                } else {
+                    warn!("Data contains channel id {chid} (={dat:?}) which is not known to this server");
+                    let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
+                }
+            }
+            info!("Received data:\n{buf}");
+            router
+                .process(consumer::Record {
+                    recorded_at: received_at,
+                    recorded_by: clients
+                        .get_mut(&ip)
+                        .unwrap()
+                        .access_metadata()
+                        .uuid
+                        .unwrap(),
+                    data: pkt_data.per_channel,
+                })
+                .await?;
+        }
+        _ => warn!("received unexpected packet, ignoring"),
+    }
     Ok(())
 }
