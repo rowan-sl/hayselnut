@@ -114,6 +114,20 @@ impl KnownChannels {
         }
     }
 
+    /// returns Err(id_of_existing) if a channel with the name already exists
+    pub fn insert_channel_with_id(
+        &mut self,
+        channel: Channel,
+        id: ChannelID,
+    ) -> Result<(), ChannelID> {
+        if let Some(existing_id) = self.id_by_name(&channel.name) {
+            Err(existing_id)
+        } else {
+            self.channels.insert(id, channel);
+            Ok(())
+        }
+    }
+
     pub fn channels(&self) -> impl Iterator<Item = (&ChannelID, &ChannelName)> {
         self.channels.iter().map(|(k, v)| (k, &v.name))
     }

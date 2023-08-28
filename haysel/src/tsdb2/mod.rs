@@ -101,15 +101,27 @@ impl<Store: Storage + Send> Database<Store> {
     }
 
     #[instrument(skip(self))]
+    pub async fn station_exists(
+        &mut self,
+        id: StationID,
+    ) -> Result<bool, DBError<<Store as Storage>::Error>> {
+        let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
+        let entry = Object::new_read(&mut self.alloc, eptr).await?;
+        Ok(
+            ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == id)
+                .await?
+                .is_some(),
+        )
+    }
+
+    #[instrument(skip(self))]
     pub async fn add_station(
         &mut self,
         id: StationID,
     ) -> Result<(), DBError<<Store as Storage>::Error>> {
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
-        if let Some(..) =
-            ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == id).await?
-        {
+        if self.station_exists(id).await? {
             return Err(DBError::Duplicate);
         }
         let channels = Object::new_alloc(&mut self.alloc, ChunkedLinkedList::empty_head())
