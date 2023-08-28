@@ -1,6 +1,4 @@
 #![allow(incomplete_features)]
-// warning created by a macro in num_enum
-#![allow(non_upper_case_globals)]
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]
