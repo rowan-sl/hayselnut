@@ -59,74 +59,74 @@ async fn main() -> anyhow::Result<()> {
     // trap the ctrl+csignal, will only start listening later in the main loop
     shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
-    // a new scope is opened here so that any item using ShutdownHandles is dropped before
-    // the waiting-for-shutdown-handles-to-be-dropped happens, to avoid a deadlock
-    {
-        let addrs = lookup_server_ip(args.url, args.port).await?;
+    let addrs = lookup_server_ip(args.url, args.port).await?;
 
-        let records_dir = paths::RecordsPath::new(args.data_dir.canonicalize()?);
-        records_dir.ensure_exists().await?;
+    let records_dir = paths::RecordsPath::new(args.data_dir.canonicalize()?);
+    records_dir.ensure_exists().await?;
 
-        info!("Loading info for known stations");
-        let stations_path = records_dir.path("stations.json");
-        let stations = JsonLoader::<KnownStations>::open(stations_path, shutdown.handle()).await?;
-        debug!("Loaded known stations:");
+    info!("Loading info for known stations");
+    let stations =
+        JsonLoader::<KnownStations>::open(records_dir.path("stations.json"), shutdown.handle())
+            .await?;
+    debug!("Loaded known stations:");
 
-        info!("Loading known channels");
-        let channels_path = records_dir.path("channels.json");
-        let channels = JsonLoader::<KnownChannels>::open(channels_path, shutdown.handle()).await?;
-
-        debug!(
-            "Loaded known channels: {:#?}",
-            channels
-                .channels()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<Vec<_>>()
-        );
-
-        for s in stations.stations() {
-            // in the future, station info should be printed
-            let info = stations.get_info(s).unwrap();
-            debug!(
-                "Known station {}\nsupports channels {:#?}",
-                s, info.supports_channels
-            );
-        }
-
-        debug!("Loading database");
-        warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
-        let db_router_client = {
-            let raw_path = if let Some(p) = args.alt_db {
-                p
-            } else {
-                records_dir.path("data.tsdb2")
-            };
-            let path = raw_path.canonicalize()?;
-            debug!("database path ({raw_path:?}) resolves to {path:?}");
-            let store = DiskStore::new(&path, false).await?;
-            let database = Database::new(store, args.init_overwrite).await?;
-            RecordDB::new(database).await?
-        };
-        info!("Database loaded");
-
-        debug!("Setting up IPC at {:?}", args.ipc_sock);
-        let ipc_router_client = IPCConsumer::new(args.ipc_sock).await?;
-        info!("IPC configured");
-
-        let mut router = Router::new();
-        router.with_consumer(db_router_client);
-        router.with_consumer(ipc_router_client);
-        // send the initial update with the current state
-        router
-            .update_station_info(&[StationInfoUpdate::InitialState {
-                stations: stations.clone(),
-                channels: channels.clone(),
-            }])
+    info!("Loading known channels");
+    let channels =
+        JsonLoader::<KnownChannels>::open(records_dir.path("channels.json"), shutdown.handle())
             .await?;
 
-        info!("running -- press ctrl+c to exit");
-        main_task(router, addrs, shutdown.handle(), stations, channels).await?;
+    debug!(
+        "Loaded known channels: {:#?}",
+        channels
+            .channels()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>()
+    );
+
+    for s in stations.stations() {
+        // in the future, station info should be printed
+        let info = stations.get_info(s).unwrap();
+        debug!(
+            "Known station {}\nsupports channels {:#?}",
+            s, info.supports_channels
+        );
     }
+
+    debug!("Loading database");
+    warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
+    let db_router_client = {
+        let raw_path = if let Some(p) = args.alt_db {
+            p
+        } else {
+            records_dir.path("data.tsdb2")
+        };
+        let path = raw_path.canonicalize()?;
+        debug!("database path ({raw_path:?}) resolves to {path:?}");
+        let store = DiskStore::new(&path, false).await?;
+        let database = Database::new(store, args.init_overwrite).await?;
+        RecordDB::new(database).await?
+    };
+    info!("Database loaded");
+
+    debug!("Setting up IPC at {:?}", args.ipc_sock);
+    let ipc_router_client = IPCConsumer::new(args.ipc_sock).await?;
+    info!("IPC configured");
+
+    let mut router = Router::new();
+    router.with_consumer(db_router_client);
+    router.with_consumer(ipc_router_client);
+    // send the initial update with the current state
+    router
+        .update_station_info(&[StationInfoUpdate::InitialState {
+            stations: stations.clone(),
+            channels: channels.clone(),
+        }])
+        .await?;
+
+    info!("running -- press ctrl+c to exit");
+    main_task(router, addrs, shutdown.handle(), stations, channels).await?;
+
+    trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
     shutdown.wait_for_completion().await;
 
     Ok(())
