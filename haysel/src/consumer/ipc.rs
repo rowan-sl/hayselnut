@@ -8,24 +8,28 @@ use tokio::spawn;
 use crate::{
     ipc::{ipc_task, IPCTaskMsg},
     route::StationInfoUpdate,
-    shutdown::Shutdown,
+    shutdown::{async_drop::AsyncDrop, Shutdown, ShutdownHandle},
+    util::Take,
 };
 
 use super::{Record, RecordConsumer};
 
 pub struct IPCConsumer {
-    shutdown: Shutdown,
+    /// local shutdown
+    shutdown: Take<Shutdown>,
+    /// global shutdown
+    drop: AsyncDrop,
     ipc_task_tx: Sender<IPCTaskMsg>,
 }
 
 impl IPCConsumer {
-    pub async fn new(ipc_sock: PathBuf) -> Result<Self> {
+    pub async fn new(ipc_sock: PathBuf, handle: ShutdownHandle) -> Result<Self> {
         let shutdown = Shutdown::new();
-        let handle = shutdown.handle();
         let (ipc_task_tx, ipc_task_rx) = flume::unbounded::<IPCTaskMsg>();
-        spawn(ipc_task(handle, ipc_task_rx, ipc_sock));
+        spawn(ipc_task(shutdown.handle(), ipc_task_rx, ipc_sock));
         Ok(Self {
-            shutdown,
+            shutdown: Take::new(shutdown),
+            drop: AsyncDrop::new(handle).await,
             ipc_task_tx,
         })
     }
@@ -59,9 +63,14 @@ impl RecordConsumer for IPCConsumer {
             .await?;
         Ok(())
     }
+}
 
-    async fn close(mut self: Box<Self>) {
-        self.shutdown.trigger_shutdown();
-        self.shutdown.wait_for_completion().await;
+impl Drop for IPCConsumer {
+    fn drop(&mut self) {
+        let shutdown = self.shutdown.take();
+        self.drop.run(async {
+            shutdown.trigger_shutdown();
+            shutdown.wait_for_completion().await;
+        })
     }
 }

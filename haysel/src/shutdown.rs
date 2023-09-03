@@ -48,7 +48,7 @@ impl Shutdown {
         self.rx.recv().await;
     }
 
-    pub fn trigger_shutdown(&mut self) {
+    pub fn trigger_shutdown(&self) {
         let _ = self.trigger.send(());
     }
 }

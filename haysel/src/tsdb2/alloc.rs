@@ -24,8 +24,8 @@ mod tuning {
 
 /// trait that all storage backings for any allocator must implement.
 #[async_trait::async_trait]
-pub trait Storage {
-    type Error: Error;
+pub trait Storage: Send + 'static {
+    type Error: Error + Sync + Send + 'static;
     async fn read_typed<T: FromBytes>(&mut self, at: Ptr<T>) -> Result<T, Self::Error> {
         let mut buf = vec![0; mem::size_of::<T>()];
         self.read_buf(at.cast::<Void>(), buf.len() as u64, &mut buf)

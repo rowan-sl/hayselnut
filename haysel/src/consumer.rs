@@ -24,6 +24,4 @@ pub trait RecordConsumer {
     async fn handle(&mut self, record: &Record) -> Result<()>;
     /// handle updates to the station/channel lists
     async fn update_station_info(&mut self, updates: &[StationInfoUpdate]) -> Result<()>;
-    /// perform any necessary shutdown, to allow for async execution before drop();
-    async fn close(self: Box<Self>);
 }

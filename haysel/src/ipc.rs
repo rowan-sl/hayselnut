@@ -23,7 +23,7 @@ pub async fn ipc_task(
     ipc_task_rx: Receiver<IPCTaskMsg>,
     ipc_sock_path: PathBuf,
 ) -> Result<()> {
-    let mut shutdown_ipc = Shutdown::new();
+    let shutdown_ipc = Shutdown::new();
     let listener = UnixListener::bind(ipc_sock_path.clone()).unwrap();
     let (ipc_broadcast_queue, _) = sync::broadcast::channel::<IPCMsg>(10);
     let (mut cache_stations, mut cache_channels) = (KnownStations::new(), KnownChannels::new());

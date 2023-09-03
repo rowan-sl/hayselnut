@@ -38,6 +38,7 @@ pub mod route;
 pub mod shutdown;
 pub mod tsdb;
 pub mod tsdb2;
+pub mod util;
 
 use args::ArgsParser;
 use consumer::{db::RecordDB, ipc::IPCConsumer};
@@ -110,12 +111,12 @@ async fn async_main() -> anyhow::Result<()> {
         debug!("database path ({raw_path:?}) resolves to {path:?}");
         let store = DiskStore::new(&path, false).await?;
         let database = Database::new(store, args.init_overwrite).await?;
-        RecordDB::new(database).await?
+        RecordDB::new(database, shutdown.handle()).await?
     };
     info!("Database loaded");
 
     debug!("Setting up IPC at {:?}", args.ipc_sock);
-    let ipc_router_client = IPCConsumer::new(args.ipc_sock).await?;
+    let ipc_router_client = IPCConsumer::new(args.ipc_sock, shutdown.handle()).await?;
     info!("IPC configured");
 
     let mut router = Router::new();
@@ -131,6 +132,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     info!("running -- press ctrl+c to exit");
     main_task(router, addrs, shutdown.handle(), stations, channels).await?;
+    shutdown.trigger_shutdown();
 
     trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
     shutdown.wait_for_completion().await;
@@ -168,67 +170,59 @@ async fn main_task(
     mut stations: JsonLoader<KnownStations>,
     mut channels: JsonLoader<KnownChannels>,
 ) -> Result<()> {
-    let res = async {
-        // test code for the network protcol
-        let sock = UdpSocket::bind(addrs.as_slice()).await?;
-        let max_transaction_time = Duration::from_secs(30);
-        let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
-        let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
+    let sock = UdpSocket::bind(addrs.as_slice()).await?;
+    let max_transaction_time = Duration::from_secs(30);
+    let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
+    let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
 
-        loop {
-            select! {
-                // TODO: complete transactions and inform clients before exit
-                _ = handle.wait_for_shutdown() => {
-                    // shutdown of router clients is handled after the loop exists
-                    break;
-                }
-                recv = dispatch_rx.recv_async() => {
-                    let (ip, event) = recv.unwrap();
-                    match event {
-                        DispatchEvent::Send(packet) => {
-                            //debug!("Sending {packet:#?} to {ip:?}");
-                            sock.send_to(packet.as_bytes(), ip).await.unwrap();
-                        }
-                        DispatchEvent::TimedOut => {
-                            error!("Connection to {ip:?} timed out");
-                        }
-                        DispatchEvent::Received(recv_data) => {
-                            debug!("received [packet] from {ip:?}");
-                            match rmp_serde::from_slice::<PacketKind>(&recv_data) {
-                                Ok(packet) => {
-                                    handle_packet(
-                                        packet,
-                                        &mut stations,
-                                        &mut channels,
-                                        &mut router,
-                                        ip,
-                                        &mut clients
-                                    ).await?
-                                }
-                                Err(e) => {
-                                    warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
-                                }
+    loop {
+        select! {
+            // TODO: complete transactions and inform clients before exit
+            _ = handle.wait_for_shutdown() => {
+                // shutdown of router clients is handled after the loop exists
+                break;
+            }
+            recv = dispatch_rx.recv_async() => {
+                let (ip, event) = recv.unwrap();
+                match event {
+                    DispatchEvent::Send(packet) => {
+                        //debug!("Sending {packet:#?} to {ip:?}");
+                        sock.send_to(packet.as_bytes(), ip).await.unwrap();
+                    }
+                    DispatchEvent::TimedOut => {
+                        error!("Connection to {ip:?} timed out");
+                    }
+                    DispatchEvent::Received(recv_data) => {
+                        debug!("received [packet] from {ip:?}");
+                        match rmp_serde::from_slice::<PacketKind>(&recv_data) {
+                            Ok(packet) => {
+                                handle_packet(
+                                    packet,
+                                    &mut stations,
+                                    &mut channels,
+                                    &mut router,
+                                    ip,
+                                    &mut clients
+                                ).await?
+                            }
+                            Err(e) => {
+                                warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
                             }
                         }
                     }
                 }
-                packet = recv_next_packet(&sock) => {
-                    if let Some((from, packet)) = packet? {
-                        //debug!("Received {packet:#?} from {from:?}");
-                        let cl = clients.entry(from)
-                            .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
-                        cl.handle(packet);
-                    }
+            }
+            packet = recv_next_packet(&sock) => {
+                if let Some((from, packet)) = packet? {
+                    //debug!("Received {packet:#?} from {from:?}");
+                    let cl = clients.entry(from)
+                        .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
+                    cl.handle(packet);
                 }
-            };
-        }
-        Ok::<(), anyhow::Error>(())
-    }.await;
-    // takes place here so that shutdown occurs
-    // regardless of if an error happened or not
-    router.close().await;
-    handle.trigger_shutdown();
-    res
+            }
+        };
+    }
+    Ok(())
 }
 
 async fn handle_packet(

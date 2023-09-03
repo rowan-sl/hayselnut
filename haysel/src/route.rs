@@ -10,7 +10,6 @@ use super::consumer::{Record, RecordConsumer};
 #[derive(Default)]
 pub struct Router {
     consumers: Vec<Box<(dyn RecordConsumer + Send + Sync + 'static)>>,
-    properly_dropped: bool,
 }
 
 impl Router {
@@ -65,24 +64,6 @@ impl Router {
         self.consumer_map(|consumer| async { consumer.update_station_info(updates).await })
             .await?;
         Ok(())
-    }
-
-    /// call this to properly shutdown all consumers attached to this Router.
-    ///
-    /// this MUST be called, you may NOT just drop Router
-    pub async fn close(mut self) {
-        for c in self.consumers.drain(..) {
-            c.close().await;
-        }
-        self.properly_dropped = true;
-    }
-}
-
-impl Drop for Router {
-    fn drop(&mut self) {
-        if !self.properly_dropped {
-            error!("Router may NOT be dropped except through `close_consumers`");
-        }
     }
 }
 

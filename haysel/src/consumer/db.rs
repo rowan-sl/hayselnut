@@ -6,29 +6,33 @@ use mycelium::station::{
 
 use crate::{
     route::StationInfoUpdate,
+    shutdown::{async_drop::AsyncDrop, ShutdownHandle},
     tsdb2::{alloc::Storage, repr::DataGroupType, Database},
+    util::Take,
 };
 
 use super::{Record, RecordConsumer};
 
 pub struct RecordDB<S: Storage> {
-    db: Database<S>,
+    db: Take<Database<S>>,
     stations: KnownStations,
     channels: KnownChannels,
+    drop: AsyncDrop,
 }
 
 impl<S: Storage> RecordDB<S> {
-    pub async fn new(db: Database<S>) -> Result<Self> {
+    pub async fn new(db: Database<S>, shutdown: ShutdownHandle) -> Result<Self> {
         Ok(Self {
-            db,
+            db: Take::new(db),
             stations: KnownStations::default(),
             channels: KnownChannels::default(),
+            drop: AsyncDrop::new(shutdown).await,
         })
     }
 }
 
 #[async_trait]
-impl RecordConsumer for RecordDB<crate::tsdb2::alloc::disk_store::DiskStore> {
+impl<S: Storage> RecordConsumer for RecordDB<S> {
     async fn handle(
         &mut self,
         Record {
@@ -103,10 +107,15 @@ impl RecordConsumer for RecordDB<crate::tsdb2::alloc::disk_store::DiskStore> {
         }
         Ok(())
     }
+}
 
-    async fn close(self: Box<Self>) {
-        if let Err(e) = self.db.close().await {
-            error!("RecordDB: failed to shutdown database: {e:#?}")
-        }
+impl<S: Storage> Drop for RecordDB<S> {
+    fn drop(&mut self) {
+        let db = self.db.take();
+        self.drop.run(async {
+            if let Err(e) = db.close().await {
+                error!("Failed to close database: {e:#?}")
+            }
+        })
     }
 }
