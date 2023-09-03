@@ -10,16 +10,14 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    runtime as rt,
 };
 
-use crate::shutdown::ShutdownHandle;
+use crate::shutdown::{async_drop::AsyncDrop, ShutdownHandle};
 
-#[derive(Debug)]
 pub struct JsonLoader<R: Serialize + DeserializeOwned> {
     file: Option<File>,
     value: R,
-    sh_handle: Option<ShutdownHandle>,
+    drop: AsyncDrop,
 }
 
 impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
@@ -50,7 +48,7 @@ impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
         Ok(Self {
             file: Some(file),
             value,
-            sh_handle: Some(sh_handle),
+            drop: AsyncDrop::new(sh_handle).await,
         })
     }
 }
@@ -70,14 +68,12 @@ impl<R: Serialize + DeserializeOwned> DerefMut for JsonLoader<R> {
 
 impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
     fn drop(&mut self) {
-        let handle = rt::Handle::current();
         let Ok(serialized) = serde_json::to_string_pretty(&self.value) else {
             error!("JsonLoader sync failed - could not serialize");
             return;
         };
         let mut file: File = self.file.take().unwrap();
-        let sh_handle = self.sh_handle.take().unwrap();
-        handle.spawn(async move {
+        self.drop.run(async move {
             if let Err(e) = file.set_len(0).await {
                 error!("JsonLoader sync failed - could not truncate: {e:#?}");
                 return;
@@ -94,7 +90,6 @@ impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
                 error!("JsonLoader drop failed - could not shutdown file stream: {e:#?}");
                 return;
             }
-            drop(sh_handle); // make shure shutdown only occurs at the end
         });
     }
 }
