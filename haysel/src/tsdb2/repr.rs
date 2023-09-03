@@ -37,7 +37,7 @@ pub struct Channel {
     pub metadata: ChannelMetadata,
     pub _pad: [u8; 7],
     /// Entry Order: most recent first
-    pub data: Ptr<ChunkedLinkedList<{ tuning::DATA_INDEX_CHUNK_SIZE }, DataGroupIndex>>,
+    pub data: Ptr<DataGroupIndex>,
 }
 
 #[derive(Clone, Copy, AsBytes, FromBytes, Info)]
@@ -51,12 +51,14 @@ pub struct ChannelMetadata {
 #[repr(C)]
 pub struct DataGroupIndex {
     /// time that this chunk of data is near (unix time, seconds)
-    /// all data must be after this time
+    /// all data must be before this time
     ///
-    /// !IMPORTANTLY! all data in this chunk must be from BEFORE the `after` time of the next. no overlaps allowed
-    pub after: i64,
+    /// !IMPORTANTLY! all data in this chunk must be from AFTER the `before` time of the [adjacent entry, closer to the start]. no overlaps allowed
+    pub before: i64,
     /// number of entries in use
     pub used: u64, // (only needs to be u16 probably, but this works for alignment reasons)
+    /// pointer to the next index in the list
+    pub next: Ptr<DataGroupIndex>,
     /// pointer to the rest of the data, which is not needed for indexing.
     /// this alllows the rest of the data (large) to be allocated/loaded only when needed
     pub group: DataGroup,

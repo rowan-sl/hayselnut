@@ -43,7 +43,8 @@ mod tuning {
     // for real use, set higher
     pub const STATION_MAP_CHUNK_SIZE: usize = 1;
     pub const CHANNEL_MAP_CHUNK_SIZE: usize = 1;
-    pub const DATA_INDEX_CHUNK_SIZE: usize = 1;
+    // pub const DATA_INDEX_CHUNK_SIZE: usize = 1;
+
     // optimize for the largest size (ish) that does not exceed the limit of the delta-time system.
     // must multiply by 2 to get a multiple of 8 (be a multiple of 4) (note: real value is 1 smaller than specified here)
     //
