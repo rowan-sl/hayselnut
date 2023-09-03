@@ -23,7 +23,7 @@ use squirrel::{
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
 use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, time::Duration};
-use tokio::{net::UdpSocket, select};
+use tokio::{net::UdpSocket, runtime, select};
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
@@ -32,10 +32,10 @@ mod commands;
 mod consumer;
 mod ipc;
 mod log;
-mod paths;
-mod registry;
+pub mod paths;
+pub mod registry;
 pub mod route;
-mod shutdown;
+pub mod shutdown;
 pub mod tsdb;
 pub mod tsdb2;
 
@@ -46,8 +46,14 @@ use route::{Router, StationInfoUpdate};
 use shutdown::{Shutdown, ShutdownHandle};
 use tsdb2::{alloc::disk_store::DiskStore, Database};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
+    runtime.block_on(async_main())?;
+    runtime.shutdown_timeout(Duration::from_secs(60 * 5));
+    Ok(())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     log::init_logging()?;
 
     let args = match commands::delegate(ArgsParser::parse()).await {

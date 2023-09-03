@@ -1,5 +1,6 @@
 use tokio::sync::{broadcast, mpsc};
 
+pub mod async_drop;
 pub mod util;
 
 #[derive(Debug)]
