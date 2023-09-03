@@ -44,17 +44,19 @@ use args::ArgsParser;
 use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
-use shutdown::{Shutdown, ShutdownHandle};
+use shutdown::Shutdown;
 use tsdb2::{alloc::disk_store::DiskStore, Database};
 
 fn main() -> anyhow::Result<()> {
     let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(async_main())?;
+    let mut shutdown = Shutdown::new();
+    runtime.block_on(async_main(&mut shutdown))?;
+    shutdown.trigger_shutdown();
     runtime.shutdown_timeout(Duration::from_secs(60 * 5));
     Ok(())
 }
 
-async fn async_main() -> anyhow::Result<()> {
+async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
     log::init_logging()?;
 
     let args = match commands::delegate(ArgsParser::parse()).await {
@@ -62,7 +64,6 @@ async fn async_main() -> anyhow::Result<()> {
         commands::Delegation::RunMain(args) => args,
     };
 
-    let shutdown = Shutdown::new();
     // trap the ctrl+csignal, will only start listening later in the main loop
     shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
@@ -72,13 +73,13 @@ async fn async_main() -> anyhow::Result<()> {
     records_dir.ensure_exists().await?;
 
     info!("Loading info for known stations");
-    let stations =
+    let mut stations =
         JsonLoader::<KnownStations>::open(records_dir.path("stations.json"), shutdown.handle())
             .await?;
     debug!("Loaded known stations:");
 
     info!("Loading known channels");
-    let channels =
+    let mut channels =
         JsonLoader::<KnownChannels>::open(records_dir.path("channels.json"), shutdown.handle())
             .await?;
 
@@ -131,55 +132,18 @@ async fn async_main() -> anyhow::Result<()> {
         .await?;
 
     info!("running -- press ctrl+c to exit");
-    main_task(router, addrs, shutdown.handle(), stations, channels).await?;
-    shutdown.trigger_shutdown();
-
-    trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
-    shutdown.wait_for_completion().await;
-
-    Ok(())
-}
-
-/// it is necessary to bind the server to the real external ip address,
-/// or risk confusing issues (forgot what, but it's bad)
-async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
-    info!(
-        "Performing DNS lookup of server's extranal IP (url={})",
-        url
-    );
-    let resolver = TokioAsyncResolver::tokio(
-        resolveconf::ResolverConfig::default(),
-        resolveconf::ResolverOpts::default(),
-    )?;
-    let addrs = resolver
-        .lookup_ip(url)
-        .await?
-        .into_iter()
-        .map(|addr| {
-            debug!("Resolved IP {addr}");
-            SocketAddr::new(addr, port)
-        })
-        .collect::<Vec<_>>();
-    Ok::<_, anyhow::Error>(addrs)
-}
-
-async fn main_task(
-    mut router: Router,
-    addrs: Vec<SocketAddr>,
-    mut handle: ShutdownHandle,
-    mut stations: JsonLoader<KnownStations>,
-    mut channels: JsonLoader<KnownChannels>,
-) -> Result<()> {
     let sock = UdpSocket::bind(addrs.as_slice()).await?;
     let max_transaction_time = Duration::from_secs(30);
     let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
     let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
+    let mut handle = shutdown.handle();
 
     loop {
         select! {
             // TODO: complete transactions and inform clients before exit
             _ = handle.wait_for_shutdown() => {
                 // shutdown of router clients is handled after the loop exists
+                drop(handle);
                 break;
             }
             recv = dispatch_rx.recv_async() => {
@@ -187,7 +151,7 @@ async fn main_task(
                 match event {
                     DispatchEvent::Send(packet) => {
                         //debug!("Sending {packet:#?} to {ip:?}");
-                        sock.send_to(packet.as_bytes(), ip).await.unwrap();
+                        sock.send_to(packet.as_bytes(), ip).await?;
                     }
                     DispatchEvent::TimedOut => {
                         error!("Connection to {ip:?} timed out");
@@ -222,7 +186,34 @@ async fn main_task(
             }
         };
     }
+
+    trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
+    shutdown.wait_for_completion().await;
+
     Ok(())
+}
+
+/// it is necessary to bind the server to the real external ip address,
+/// or risk confusing issues (forgot what, but it's bad)
+async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
+    info!(
+        "Performing DNS lookup of server's extranal IP (url={})",
+        url
+    );
+    let resolver = TokioAsyncResolver::tokio(
+        resolveconf::ResolverConfig::default(),
+        resolveconf::ResolverOpts::default(),
+    )?;
+    let addrs = resolver
+        .lookup_ip(url)
+        .await?
+        .into_iter()
+        .map(|addr| {
+            debug!("Resolved IP {addr}");
+            SocketAddr::new(addr, port)
+        })
+        .collect::<Vec<_>>();
+    Ok::<_, anyhow::Error>(addrs)
 }
 
 async fn handle_packet(

@@ -1,5 +1,7 @@
 use tokio::sync::{broadcast, mpsc};
 
+use crate::util::Take;
+
 pub mod async_drop;
 pub mod util;
 
@@ -21,9 +23,8 @@ impl ShutdownHandle {
     }
 }
 
-#[derive(Debug)]
 pub struct Shutdown {
-    tx: mpsc::Sender<()>,
+    tx: Take<mpsc::Sender<()>>,
     rx: mpsc::Receiver<()>,
     trigger: broadcast::Sender<()>,
 }
@@ -32,7 +33,11 @@ impl Shutdown {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(1);
         let (trigger, _) = broadcast::channel(1);
-        Self { tx, rx, trigger }
+        Self {
+            tx: Take::new(tx),
+            rx,
+            trigger,
+        }
     }
 
     pub fn handle(&self) -> ShutdownHandle {
@@ -43,8 +48,8 @@ impl Shutdown {
         }
     }
 
-    pub async fn wait_for_completion(mut self) {
-        drop(self.tx);
+    pub async fn wait_for_completion(&mut self) {
+        drop(self.tx.take());
         self.rx.recv().await;
     }
 
