@@ -67,8 +67,8 @@ impl RecordConsumer for IPCConsumer {
 
 impl Drop for IPCConsumer {
     fn drop(&mut self) {
-        let shutdown = self.shutdown.take();
-        self.drop.run(async {
+        let mut shutdown = self.shutdown.take();
+        self.drop.run(async move {
             shutdown.trigger_shutdown();
             shutdown.wait_for_completion().await;
         })
