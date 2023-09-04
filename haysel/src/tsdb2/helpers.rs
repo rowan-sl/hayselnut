@@ -1,8 +1,6 @@
 use std::{iter, num::TryFromIntError};
 
-use super::tuning;
-
-pub fn rel_dt_to_abs(dt: [i16; tuning::DATA_GROUP_PERIODIC_SIZE - 1], avg: u32) -> Vec<u64> {
+pub fn rel_dt_to_abs(dt: &[i16], avg: u32) -> Vec<u64> {
     dt.iter()
         .enumerate()
         .map(|(i, dt)| {
@@ -14,6 +12,9 @@ pub fn rel_dt_to_abs(dt: [i16; tuning::DATA_GROUP_PERIODIC_SIZE - 1], avg: u32) 
 }
 
 pub fn calc_avg_dt(abs: &[u64]) -> Option<u32> {
+    if abs.len() == 0 {
+        return Some(0);
+    }
     u32::try_from(
         iter::once(0u64)
             .chain(abs.iter().copied())

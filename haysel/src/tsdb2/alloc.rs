@@ -274,11 +274,19 @@ impl<S: Storage + Send> Allocator<S> {
     ) -> Result<(), AllocError<<S as Storage>::Error>> {
         let alloc_header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         // get the location of the chunk this pointer points to
+        if ptr
+            .addr
+            .saturating_sub(mem::size_of::<ChunkHeader>() as u64)
+            < mem::size_of::<AllocHeader>() as u64
+        {
+            error!("Attempted to use a pointer before the bounds of valid data pointers [inside the alloc header]");
+            return Err(AllocError::PointerInvalid);
+        }
         let chunk_loc = ptr
             .offset(-(mem::size_of::<ChunkHeader>() as i64))
             .cast::<ChunkHeader>();
         // verify that that actually *is* a valid chunk
-        debug!("-- very inneficient code alert --");
+        //debug!("-- very inneficient code alert --");
         'validate: {
             let mut c_ptr = Ptr::<ChunkHeader>::with(mem::size_of::<AllocHeader>() as _);
             while c_ptr.addr + (mem::size_of::<ChunkHeader>() as u64) < alloc_header.used {

@@ -27,7 +27,10 @@ impl<T> Ptr<T> {
         self.addr == 0
     }
     pub fn offset(self, by: i64) -> Self {
-        Self::with(self.addr.checked_add_signed(by).unwrap())
+        Self::with(self.addr.checked_add_signed(by).expect(&format!(
+            "offsetting pointer {}u64 by {by}i64 overflowed!",
+            self.addr
+        )))
     }
     pub fn null() -> Self {
         Self::with(0)

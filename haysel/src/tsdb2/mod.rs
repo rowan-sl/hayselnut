@@ -177,7 +177,7 @@ impl<Store: Storage + Send> Database<Store> {
         &mut self,
         time: i64,
         gtype: repr::DataGroupType,
-        index: &mut Object<repr::DataGroupIndex>,
+        index: &Object<repr::DataGroupIndex>,
     ) -> Result<bool, DBError<<Store as Storage>::Error>> {
         match gtype {
             repr::DataGroupType::Periodic => {
@@ -187,17 +187,25 @@ impl<Store: Storage + Send> Database<Store> {
                     u64::try_from(time - index.after).expect("unreachable: delta-time negative");
                 // here we reverse the relative delta calculation, arriving at a
                 // individual offset from `entry.after` for each entry in `data`
-                let mut abs_dt = helpers::rel_dt_to_abs(data.dt, data.avg_dt);
+                let mut abs_dt = helpers::rel_dt_to_abs(&data.dt[0..index.used as _], data.avg_dt);
 
                 // make sure that the delta times are in order
                 debug_assert!(abs_dt.is_sorted());
 
                 // insert the new entry
                 let ins_idx = abs_dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-                let src = ins_idx..index.used as usize;
-                let dest = ins_idx + 1;
-                abs_dt.copy_within(src.clone() /* why does Range not impl Copy */, dest);
-                abs_dt[ins_idx] = entry_dt;
+                if ins_idx as u64 == index.used {
+                    abs_dt.push(entry_dt);
+                } else {
+                    let src = ins_idx..index.used as usize;
+                    let dest = ins_idx + 1;
+                    abs_dt.push(0); // more space for the slice operation to move into
+                    abs_dt.copy_within(src.clone() /* why does Range not impl Copy */, dest);
+                    abs_dt[ins_idx] = entry_dt;
+                }
+
+                // make sure that the delta times are still in order
+                debug_assert!(abs_dt.is_sorted());
 
                 // then calculate the average dt
                 let Some(avg_dt) = helpers::calc_avg_dt(&abs_dt) else {
@@ -240,13 +248,61 @@ impl<Store: Storage + Send> Database<Store> {
         let gtype = repr::DataGroupType::try_from_primitive(channel.metadata.group_type)
             .expect("invalid group type");
         let gtype_size = match gtype {
-            repr::DataGroupType::Periodic => tuning::DATA_GROUP_PERIODIC_SIZE,
+            repr::DataGroupType::Periodic => tuning::DATA_GROUP_PERIODIC_SIZE - 1,
             repr::DataGroupType::Sporadic => tuning::DATA_GROUP_SPORADIC_SIZE,
         } as u64;
 
+        if channel.data.is_null() {
+            let group = match gtype {
+                repr::DataGroupType::Periodic => {
+                    let mut data = repr::DataGroupPeriodic {
+                        // only one entry
+                        avg_dt: 0,
+                        _pad: 0,
+                        dt: [0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                        data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                    };
+                    data.data[0] = reading;
+                    let pointer = Object::new_alloc(&mut self.alloc, data)
+                        .await?
+                        .dispose_sync(&mut self.alloc)
+                        .await?;
+                    repr::DataGroup { periodic: pointer }
+                }
+                repr::DataGroupType::Sporadic => {
+                    let mut data = repr::DataGroupSporadic {
+                        dt: [0; tuning::DATA_GROUP_SPORADIC_SIZE],
+                        data: [0.0; tuning::DATA_GROUP_SPORADIC_SIZE],
+                    };
+                    data.data[0] = reading;
+                    let pointer = Object::new_alloc(&mut self.alloc, data)
+                        .await?
+                        .dispose_sync(&mut self.alloc)
+                        .await?;
+                    repr::DataGroup { sporadic: pointer }
+                }
+            };
+            let data = Object::new_alloc(
+                &mut self.alloc,
+                repr::DataGroupIndex {
+                    after: time,
+                    used: 1,
+                    next: Ptr::null(),
+                    group,
+                },
+            )
+            .await?;
+            let data_pointer = data.pointer();
+            data.dispose_immutated();
+            channel.data = data_pointer;
+            channel_idx
+                .write::<{ tuning::CHANNEL_MAP_CHUNK_SIZE }, _, _>(&mut self.alloc, channel)
+                .await?;
+            return Ok(());
+        }
+
         let mut prev: Option<Object<repr::DataGroupIndex>> = None;
         let mut index = Object::new_read(&mut self.alloc, channel.data).await?;
-        todo!();
 
         loop {
             match (
@@ -258,7 +314,12 @@ impl<Store: Storage + Send> Database<Store> {
                 // next index exists?
                 !index.next.is_null(),
                 // will adding the entry to the current data [regardless if it fits] work (not overflow dt values)
-                self.verify_dt(time, gtype, &mut index).await?,
+                // ( assuming that time >= index.after )
+                if time >= index.after {
+                    self.verify_dt(time, gtype, &index).await?
+                } else {
+                    false
+                },
             ) {
                 // data goes in this entry
                 // likely
@@ -286,7 +347,8 @@ impl<Store: Storage + Send> Database<Store> {
                             //
                             // here we reverse the relative delta calculation, arriving at a
                             // individual offset from `entry.after` for each entry in `data`
-                            let mut abs_dt = helpers::rel_dt_to_abs(data.dt, data.avg_dt);
+                            let mut abs_dt =
+                                helpers::rel_dt_to_abs(&data.dt[0..index.used as _], data.avg_dt);
 
                             // make sure that the delta times are in order (to make sure the
                             // rel -> abs isnt completely wrong, and to make sure the
@@ -295,26 +357,31 @@ impl<Store: Storage + Send> Database<Store> {
 
                             // insert the new entry
                             let ins_idx = abs_dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-                            let src = ins_idx..index.used as usize;
-                            let dest = ins_idx + 1;
-                            abs_dt.copy_within(
-                                src.clone(), /* why does Range not impl Copy */
-                                dest,
-                            );
-                            data.data.copy_within(src, dest);
-                            abs_dt[ins_idx] = entry_dt;
+                            if ins_idx as u64 == index.used {
+                                abs_dt.push(entry_dt);
+                            } else {
+                                let src = ins_idx..index.used as usize;
+                                let dest = ins_idx + 1;
+                                abs_dt.push(0);
+                                abs_dt.copy_within(
+                                    src.clone(), /* why does Range not impl Copy */
+                                    dest,
+                                );
+                                abs_dt[ins_idx] = entry_dt;
+                                data.data.copy_within(src, dest);
+                            }
                             data.data[ins_idx] = reading;
                             // increment `used`
                             index.used += 1;
                             // make sure that we didnt screw up the ordering
-                            debug_assert!(data.dt.is_sorted());
+                            debug_assert!(abs_dt.is_sorted());
                             // then calculate the average dt
                             let avg_dt = helpers::calc_avg_dt(&abs_dt).unwrap();
                             // then calculate individual offsets (delta from average)
                             let rel_dt = helpers::calc_rel_dt(avg_dt, &abs_dt).unwrap();
                             // store the data
                             data.avg_dt = avg_dt;
-                            data.dt = rel_dt.try_into().unwrap();
+                            data.dt[0..index.used as _].copy_from_slice(&rel_dt);
                             data.dispose_sync(&mut self.alloc).await?;
                         }
                         repr::DataGroupType::Sporadic => {
@@ -324,22 +391,25 @@ impl<Store: Storage + Send> Database<Store> {
                             let entry_dt =
                                 u32::try_from(time - index.after).expect("delta-time out of range");
                             // just make sure that binary_search wont produce garbage
-                            debug_assert!(data.dt.is_sorted());
-                            let ins_idx =
-                                data.dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-                            let src = ins_idx..index.used as usize;
-                            let dest = ins_idx + 1;
-                            data.dt.copy_within(
-                                src.clone(), /* why does Range not impl Copy */
-                                dest,
-                            );
-                            data.data.copy_within(src, dest);
+                            debug_assert!(data.dt[0..index.used as _].is_sorted());
+                            let ins_idx = data.dt[0..index.used as _]
+                                .binary_search(&entry_dt)
+                                .map_or_else(|x| x, |x| x);
+                            if ins_idx as u64 != index.used {
+                                let src = ins_idx..index.used as usize;
+                                let dest = ins_idx + 1;
+                                data.dt.copy_within(
+                                    src.clone(), /* why does Range not impl Copy */
+                                    dest,
+                                );
+                                data.data.copy_within(src, dest);
+                            }
                             data.dt[ins_idx] = entry_dt;
                             data.data[ins_idx] = reading;
                             // increment `used`
                             index.used += 1;
                             // make sure that we didnt screw up the ordering
-                            debug_assert!(data.dt.is_sorted());
+                            debug_assert!(data.dt[0..index.used as _].is_sorted());
                             data.dispose_sync(&mut self.alloc).await?;
                         }
                     }
@@ -360,6 +430,10 @@ impl<Store: Storage + Send> Database<Store> {
                 ) => {
                     match gtype {
                         repr::DataGroupType::Periodic => {
+                            // this is validated by the match statement, but just in case.
+                            // - means that ALL entries in `data.dt` and `data.data` are currently in use.
+                            // - this means we DO NOT have to do `data.field[0..index.used]` like in other cases
+                            debug_assert_eq!(index.used, gtype_size);
                             let mut data =
                                 Object::new_read(&mut self.alloc, unsafe { index.group.periodic })
                                     .await?;
@@ -372,7 +446,7 @@ impl<Store: Storage + Send> Database<Store> {
                             //
                             // here we reverse the relative delta calculation, arriving at a
                             // individual offset from `entry.after` for each entry in `data`
-                            let mut abs_dt = helpers::rel_dt_to_abs(data.dt, data.avg_dt);
+                            let mut abs_dt = helpers::rel_dt_to_abs(&data.dt, data.avg_dt);
 
                             // make sure that the delta times are in order (to make sure the
                             // rel -> abs isnt completely wrong, and to make sure the
@@ -381,14 +455,26 @@ impl<Store: Storage + Send> Database<Store> {
 
                             // insert the new entry
                             let ins_idx = abs_dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-                            let abs_dt_keep = abs_dt.split_off(ins_idx); // idx -> len
+                            // this should be fine, since split_off(len) should [keep in abs_dt, leave abs_dt_keep empty] all elements and return Vec[]
+                            // split_off(0) means that all data is kept (ends up in abs_dt_move)
+                            let mut abs_dt_keep = abs_dt.split_off(ins_idx); // idx -> len
                             let mut abs_dt_move = abs_dt; // 0 -> idx
                             let mut data_move = data.data.to_vec();
-                            let data_keep = data_move.split_off(ins_idx);
+                            let mut data_keep = data_move.split_off(ins_idx);
                             // push to the 0 -> idx end, so it ends up at <idx>
-                            // the new data will end up at the end of the array in the new chunk
-                            abs_dt_move.push(entry_dt);
-                            data_move.push(reading);
+                            // if that is full (ins_idx=gtype_size), set it as the first value in the other.
+                            // the new data will end up at the end of the array in the new chunk (or the start in the old one)
+                            // if ins_idx=0, then the split_off call will do the right thing
+                            if ins_idx as u64 == gtype_size {
+                                debug_assert_eq!(abs_dt_move.len() as u64, gtype_size);
+                                debug_assert_eq!(abs_dt_keep.len(), 0);
+                                abs_dt_keep.push(entry_dt);
+                                data_keep.push(reading);
+                            } else {
+                                abs_dt_move.push(entry_dt);
+                                data_move.push(reading);
+                            }
+                            // don't need to index this since it is a vector *that contains only avlid values*
                             let avg_dt_keep = helpers::calc_avg_dt(&abs_dt_keep).unwrap();
                             let avg_dt_move = helpers::calc_avg_dt(&abs_dt_move).unwrap();
                             let rel_dt_keep =
@@ -410,34 +496,20 @@ impl<Store: Storage + Send> Database<Store> {
                                 after: index.after + abs_dt_move[0] as i64,
                                 used: abs_dt_move.len() as u64,
                                 next: index.pointer(),
-                                group: match gtype {
-                                    repr::DataGroupType::Periodic => {
-                                        let mut data = repr::DataGroupPeriodic {
-                                            // only one entry
-                                            avg_dt: 0,
-                                            _pad: 0,
-                                            dt: [0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
-                                            data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
-                                        };
-                                        data.data[0] = reading;
-                                        let pointer = Object::new_alloc(&mut self.alloc, data)
-                                            .await?
-                                            .dispose_sync(&mut self.alloc)
-                                            .await?;
-                                        repr::DataGroup { periodic: pointer }
-                                    }
-                                    repr::DataGroupType::Sporadic => {
-                                        let mut data = repr::DataGroupSporadic {
-                                            dt: [0; tuning::DATA_GROUP_SPORADIC_SIZE],
-                                            data: [0.0; tuning::DATA_GROUP_SPORADIC_SIZE],
-                                        };
-                                        data.data[0] = reading;
-                                        let pointer = Object::new_alloc(&mut self.alloc, data)
-                                            .await?
-                                            .dispose_sync(&mut self.alloc)
-                                            .await?;
-                                        repr::DataGroup { sporadic: pointer }
-                                    }
+                                group: {
+                                    let mut data = repr::DataGroupPeriodic {
+                                        // only one entry
+                                        avg_dt: avg_dt_move,
+                                        _pad: 0,
+                                        dt: rel_dt_move,
+                                        data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                                    };
+                                    data.data[0..data_move.len()].copy_from_slice(&data_move);
+                                    let pointer = Object::new_alloc(&mut self.alloc, data)
+                                        .await?
+                                        .dispose_sync(&mut self.alloc)
+                                        .await?;
+                                    repr::DataGroup { periodic: pointer }
                                 },
                             };
                             let new_entry = Object::new_alloc(&mut self.alloc, new_entry).await?;
@@ -459,6 +531,11 @@ impl<Store: Storage + Send> Database<Store> {
                             }
                         }
                         repr::DataGroupType::Sporadic => {
+                            // this is validated by the match statement, but just in case.
+                            // - means that ALL entries in `data.dt` and `data.data` are currently in use.
+                            // - this means we DO NOT have to do `data.field[0..index.used]` like in other cases
+                            todo!();
+                            debug_assert_eq!(index.used, gtype_size);
                             let mut data =
                                 Object::new_read(&mut self.alloc, unsafe { index.group.sporadic })
                                     .await?;

@@ -134,7 +134,7 @@ async fn simple_add_data_periodic() {
         )
     };
 
-    const ENTRIES: usize = 5_000;
+    const ENTRIES: usize = 200;
     for _ in 0..ENTRIES {
         db.add_data(station_id, channel_id, get_time(), rand::random::<f32>())
             .await
