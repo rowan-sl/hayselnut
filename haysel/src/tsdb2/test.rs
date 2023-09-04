@@ -6,7 +6,9 @@ use super::{alloc::util::test::TestStore, Database};
 
 #[instrument]
 async fn get_db() -> Database<TestStore> {
+    trace!("creating TestStore");
     let store = TestStore::default();
+    trace!("creating DB");
     let db = Database::new(store, false)
         .await
         .expect("error initializing database");

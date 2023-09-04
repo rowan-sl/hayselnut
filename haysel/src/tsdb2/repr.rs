@@ -51,10 +51,10 @@ pub struct ChannelMetadata {
 #[repr(C)]
 pub struct DataGroupIndex {
     /// time that this chunk of data is near (unix time, seconds)
-    /// all data must be before this time
+    /// all data must be after OR EQUAL TO this time
     ///
-    /// !IMPORTANTLY! all data in this chunk must be from AFTER the `before` time of the [adjacent entry, closer to the start]. no overlaps allowed
-    pub before: i64,
+    /// !IMPORTANTLY! all data in this chunk must be from BEFORE the `after` time of the [adjacent entry, closer to the start]. no overlaps allowed
+    pub after: i64,
     /// number of entries in use
     pub used: u64, // (only needs to be u16 probably, but this works for alignment reasons)
     /// pointer to the next index in the list

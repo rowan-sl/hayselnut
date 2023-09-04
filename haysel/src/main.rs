@@ -1,4 +1,6 @@
 #![allow(incomplete_features)]
+// num_enum!!!! (again)
+#![allow(non_upper_case_globals)]
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]

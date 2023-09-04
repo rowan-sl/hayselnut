@@ -5,6 +5,7 @@ use std::mem::{align_of, size_of};
 
 use self::comptime_hacks::{Condition, IsTrue};
 use super::{
+    error::AllocError,
     object::Object,
     ptr::{Ptr, Void},
     Allocator, Storage,
@@ -22,6 +23,29 @@ pub struct CLLIdx {
     pub chunk_num: u64,
     pub chunk_ptr: Ptr<Void>,
     pub data_idx: u64,
+}
+
+impl CLLIdx {
+    pub async fn write<
+        const N: usize,
+        Store: Storage + Send,
+        T: AsBytes + FromBytes + Sync + Send + 'static,
+    >(
+        &self,
+        alloc: &mut Allocator<Store>,
+        value: T,
+    ) -> Result<(), AllocError<<Store as Storage>::Error>>
+    where
+        Condition<{ works::<T>() }>: IsTrue,
+    {
+        let mut chunk = alloc
+            .read(self.chunk_ptr.cast::<ChunkedLinkedList<N, T>>())
+            .await?;
+        debug_assert!(self.data_idx < chunk.used);
+        chunk.data[self.data_idx as usize] = value;
+        alloc.write(chunk, self.chunk_ptr.cast()).await?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -72,17 +96,31 @@ where
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         cond: impl Fn(&&T) -> bool,
-    ) -> Result<Option<T>, super::error::AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as Storage>::Error>> {
         let mut list = Object::new_read(alloc, list).await?;
+        let mut chunk_num = 0;
         loop {
-            if let Some(entry) = list.data[..list.used as usize].iter().find(&cond) {
+            if let Some((idx, entry)) = list.data[..list.used as usize]
+                .iter()
+                .enumerate()
+                .find(|(_, a)| cond(a))
+            {
                 let entry = T::read_from(entry.as_bytes()).unwrap();
+                let chunk_ptr = list.pointer().cast::<_>();
                 list.dispose_immutated();
-                break Ok(Some(entry));
+                break Ok(Some((
+                    entry,
+                    CLLIdx {
+                        chunk_num,
+                        chunk_ptr,
+                        data_idx: idx as u64,
+                    },
+                )));
             } else if !list.next.is_null() {
                 let next = list.next;
                 list.dispose_immutated();
                 list = Object::new_read(alloc, next).await?;
+                chunk_num += 1;
             } else {
                 list.dispose_immutated();
                 break Ok(None);

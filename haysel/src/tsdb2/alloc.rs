@@ -19,7 +19,7 @@ use self::{
 
 mod tuning {
     /// this determines the maximum number of sizes of allocations that can be kept track of.
-    pub const FREE_LIST_SIZE: usize = 1024;
+    pub const FREE_LIST_SIZE: usize = 128;
 }
 
 /// trait that all storage backings for any allocator must implement.

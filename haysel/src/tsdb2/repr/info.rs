@@ -29,7 +29,12 @@ pub fn print_inf<T: Info>() {
 
     let mut out = String::new();
     writeln!(out, "{TAB}{name} = {fsize}").unwrap();
-    fn inner(nidt: usize, out: &mut String, fields: &[Field]) {
+    fn inner(
+        nidt: usize,
+        prev_typ: fn() -> Option<Vec<Field>>,
+        out: &mut String,
+        fields: &[Field],
+    ) {
         let idt = TAB.repeat(nidt);
         let len = fields.len();
         for (i, field) in fields.into_iter().enumerate() {
@@ -96,16 +101,18 @@ pub fn print_inf<T: Info>() {
                         warn!("pointer union with non-pointer field??");
                     }
                     writeln!(out, "{idt}{bar} {{ pointer union [{}] }}", fields.len()).unwrap();
-                    inner(nidt + 1, out, fields);
+                    inner(nidt + 1, field.info_impl, out, fields);
                     continue; // do not call the info_impl of self (infinite recursion), go on to the next field
                 }
             }
-            if let Some(fields) = (field.info_impl)() {
-                inner(nidt + 1, out, &fields)
+            if prev_typ != field.info_impl {
+                if let Some(fields) = (field.info_impl)() {
+                    inner(nidt + 1, field.info_impl, out, &fields)
+                }
             }
         }
     }
-    inner(1, &mut out, &fields);
+    inner(1, <T as Info>::info2, &mut out, &fields);
 
     info!("\n{}", out.trim());
 }
