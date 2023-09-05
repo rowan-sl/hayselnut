@@ -149,7 +149,7 @@ async fn do_simple_add_data_periodic(
         )
     };
 
-    const ENTRIES: usize = 5;
+    const ENTRIES: usize = 10;
     let mut data = Vec::with_capacity(ENTRIES);
     for _ in 0..ENTRIES {
         let time = get_time();
