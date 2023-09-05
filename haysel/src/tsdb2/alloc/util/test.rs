@@ -1,6 +1,6 @@
 use crate::tsdb2::alloc::{
     ptr::{Ptr, Void},
-    Storage,
+    Allocator, Storage,
 };
 
 #[derive(thiserror::Error, Clone, Debug, PartialEq)]
@@ -42,5 +42,15 @@ impl Storage for TestStore {
         self.backing
             .extend_from_slice(vec![0; amnt as _].as_slice());
         Ok(())
+    }
+}
+
+impl Clone for Allocator<TestStore> {
+    fn clone(&self) -> Self {
+        Self {
+            store: TestStore {
+                backing: self.store.backing.clone(),
+            },
+        }
     }
 }
