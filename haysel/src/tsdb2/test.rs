@@ -222,6 +222,7 @@ async fn verify_database_content(
                 let data = Object::new_read(&mut db.alloc, unsafe { index.group.periodic })
                     .await
                     .unwrap();
+                info!("{:?}\n{:?}", index.after, &*data);
                 for i in 0..index.used {
                     let reading = data.data[i as usize];
                     let time =
@@ -233,6 +234,7 @@ async fn verify_database_content(
                 let data = Object::new_read(&mut db.alloc, unsafe { index.group.sporadic })
                     .await
                     .unwrap();
+                info!("{:?}\n{:?}", index.after, &*data);
                 for i in 0..index.used {
                     let reading = data.data[i as usize];
                     let time = index.after + data.dt[i as usize] as i64;
@@ -339,7 +341,7 @@ async fn verified_every_step_add_data_periodic() {
         )
     };
 
-    const ENTRIES: usize = 5;
+    const ENTRIES: usize = 50;
     let mut data = Vec::with_capacity(ENTRIES);
     let mut err = false;
     for i in 0..ENTRIES {
@@ -366,6 +368,7 @@ async fn verified_every_step_add_data_periodic() {
         {
             error!("Discrepancy found adding entry {}/{ENTRIES} : see logs for details (if this was not the first one found, this may be innacurate)", i+1);
             err = true;
+            break;
         }
     }
     if err {

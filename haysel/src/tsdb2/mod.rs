@@ -40,8 +40,8 @@ pub mod test;
 mod tuning {
     // low values to force using the list functionality.
     // for real use, set higher
-    pub const STATION_MAP_CHUNK_SIZE: usize = 1;
-    pub const CHANNEL_MAP_CHUNK_SIZE: usize = 1;
+    pub const STATION_MAP_CHUNK_SIZE: usize = 16;
+    pub const CHANNEL_MAP_CHUNK_SIZE: usize = 16;
     // pub const DATA_INDEX_CHUNK_SIZE: usize = 1;
 
     // optimize for the largest size (ish) that does not exceed the limit of the delta-time system.
@@ -49,9 +49,9 @@ mod tuning {
     //
     // if periodic data chunks are consistantly left empty decrease this, or if they are consistantly full increase it.
     // TODO: specify size in a more customizeable way?
-    pub const DATA_GROUP_PERIODIC_SIZE: usize = 8;
+    pub const DATA_GROUP_PERIODIC_SIZE: usize = 4;
     /// honestly probably does not matter, as long as having one of them in the database is not too much of a big deal.
-    pub const DATA_GROUP_SPORADIC_SIZE: usize = 8;
+    pub const DATA_GROUP_SPORADIC_SIZE: usize = 4;
 }
 
 /// the database
@@ -339,6 +339,7 @@ impl<Store: Storage + Send> Database<Store> {
                                 Object::new_read(&mut self.alloc, unsafe { index.group.periodic })
                                     .await?;
                             let entry_dt = (time - index.after) as u64;
+                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
                             // FIXME: slo cod
 
                             // instead of calculating the change to avg_dt and then the entry's
@@ -382,6 +383,7 @@ impl<Store: Storage + Send> Database<Store> {
                             // store the data
                             data.avg_dt = avg_dt;
                             data.dt[0..index.used as _].copy_from_slice(&rel_dt);
+                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} final={:?}", line!(), index.after, &*data);
                             data.dispose_sync(&mut self.alloc).await?;
                         }
                         repr::DataGroupType::Sporadic => {
@@ -438,6 +440,7 @@ impl<Store: Storage + Send> Database<Store> {
                                 Object::new_read(&mut self.alloc, unsafe { index.group.periodic })
                                     .await?;
                             let entry_dt = (time - index.after) as u64;
+                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
                             // FIXME: slo cod
 
                             // instead of calculating the change to avg_dt and then the entry's
@@ -486,32 +489,34 @@ impl<Store: Storage + Send> Database<Store> {
                             // store the new data [keep]
                             index.used = data_keep.len() as u64;
                             // set the after time equal to the absolute time of the first entry
-                            index.after += abs_dt_keep[0] as i64;
+                            // =comentary= this caused a seriously annoying bug, no clue why i thought this was necessary
+                            // index.after += abs_dt_keep[0] as i64;
                             data.avg_dt = avg_dt_keep;
                             data.data[0..data_keep.len()].copy_from_slice(&data_keep);
                             data.dt[0..rel_dt_keep.len()].copy_from_slice(&rel_dt_keep);
-                            data.dispose_sync(&mut self.alloc).await?;
                             // store the new data [move]
                             let new_entry = repr::DataGroupIndex {
                                 after: index.after + abs_dt_move[0] as i64,
                                 used: abs_dt_move.len() as u64,
                                 next: index.pointer(),
                                 group: {
-                                    let mut data = repr::DataGroupPeriodic {
+                                    let mut new_data = repr::DataGroupPeriodic {
                                         // only one entry
                                         avg_dt: avg_dt_move,
                                         _pad: 0,
                                         dt: rel_dt_move,
                                         data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
                                     };
-                                    data.data[0..data_move.len()].copy_from_slice(&data_move);
-                                    let pointer = Object::new_alloc(&mut self.alloc, data)
+                                    new_data.data[0..data_move.len()].copy_from_slice(&data_move);
+                                    debug!("(Periodic, branch {}) - t={time} after(keep)={}, after(move)={} entry_dt={entry_dt} reading={reading} final (keep)={:?} final (move)={:?}", line!(), index.after, index.after + abs_dt_move[0] as i64, &*data, new_data);
+                                    let pointer = Object::new_alloc(&mut self.alloc, new_data)
                                         .await?
                                         .dispose_sync(&mut self.alloc)
                                         .await?;
                                     repr::DataGroup { periodic: pointer }
                                 },
                             };
+                            data.dispose_sync(&mut self.alloc).await?;
                             let new_entry = Object::new_alloc(&mut self.alloc, new_entry).await?;
                             let new_entry_ptr = new_entry.dispose_sync(&mut self.alloc).await?;
                             match &mut prev {

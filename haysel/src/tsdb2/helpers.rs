@@ -27,9 +27,12 @@ pub fn calc_avg_dt(abs: &[u64]) -> Option<u32> {
 }
 
 pub fn calc_rel_dt(avg: u32, abs: &[u64]) -> Option<Vec<i16>> {
-    abs.iter()
+    let rel = abs
+        .iter()
         .enumerate()
         .map(|(i, abs_dt)| i16::try_from(*abs_dt as i64 - (avg as u64 * i as u64) as i64))
         .collect::<Result<Vec<i16>, TryFromIntError>>()
-        .ok()
+        .ok()?;
+    debug_assert_eq!(abs, rel_dt_to_abs(&rel, avg));
+    Some(rel)
 }

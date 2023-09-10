@@ -79,7 +79,7 @@ pub enum DataGroupType {
     Periodic,
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info, Debug)]
 #[repr(C)]
 pub struct DataGroupPeriodic {
     /// average time between events (seconds)
@@ -92,7 +92,7 @@ pub struct DataGroupPeriodic {
     pub data: [f32; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
 }
 
-#[derive(Clone, Copy, AsBytes, FromBytes, Info)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Info, Debug)]
 #[repr(C)]
 pub struct DataGroupSporadic {
     /// offset (in seconds) from the start time (can be up to ~136 years, so i think its fine)
