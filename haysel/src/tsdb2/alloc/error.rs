@@ -18,4 +18,8 @@ pub enum AllocError<E: Error> {
     PointerMismatch,
     #[error("the expected status (free or in use) of the given pointer is incorrect for the operation used with it")]
     PointerStatus,
+    #[error(
+        "the parameters of the allocator in <store> are different than thoes currently configured"
+    )]
+    MismatchedParameters,
 }

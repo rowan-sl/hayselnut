@@ -38,6 +38,9 @@ pub struct AllocHeader {
     pub entrypoint: Ptr<Void>,
     /// space used in the store. this allows for backing to be fixed-size and pre-allocated
     pub used: u64,
+    /// the size of the free list (entries, not bytes)
+    /// used to make sure that it is read correctly
+    pub free_list_size: u64,
     /// NOTE TO THE VIEWER: this has a hard cap to avoid cursed recursion, where the free
     /// list would contain former entries of itself. it generally makes things much nicer.
     /// also, you are unlikely in this scenario to have more than this many types, and if
@@ -54,6 +57,7 @@ impl AllocHeader {
             _padding: [0u8; 4],
             entrypoint,
             used: std::mem::size_of::<Self>() as _,
+            free_list_size: tuning::FREE_LIST_SIZE as _,
             free_list: <_ as FromBytes>::new_zeroed(),
         }
     }

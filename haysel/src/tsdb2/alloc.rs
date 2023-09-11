@@ -99,6 +99,12 @@ impl<S: Storage + Send> Allocator<S> {
             }
         }
 
+        // verify that the tuning parameters are the same
+        if header.free_list_size != tuning::FREE_LIST_SIZE as u64 {
+            error!("The free list size of the loaded store is not the same as the currently configured size ({} vs {})", header.free_list_size, tuning::FREE_LIST_SIZE);
+            return Err(AllocError::MismatchedParameters);
+        }
+
         Ok(Self { store })
     }
 
