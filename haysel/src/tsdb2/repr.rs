@@ -15,6 +15,27 @@ pub mod time;
 #[repr(C)]
 pub struct DBEntrypoint {
     pub stations: MapStations,
+    pub tuning_params: TuningParams,
+}
+
+#[derive(Clone, Copy, AsBytes, FromBytes, Info, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct TuningParams {
+    pub station_map_chunk_size: u64,
+    pub channel_map_chunk_size: u64,
+    pub data_group_periodic_size: u64,
+    pub data_group_sporadic_size: u64,
+}
+
+impl TuningParams {
+    pub const fn current() -> Self {
+        Self {
+            station_map_chunk_size: tuning::STATION_MAP_CHUNK_SIZE as _,
+            channel_map_chunk_size: tuning::CHANNEL_MAP_CHUNK_SIZE as _,
+            data_group_periodic_size: tuning::DATA_GROUP_PERIODIC_SIZE as _,
+            data_group_sporadic_size: tuning::DATA_GROUP_SPORADIC_SIZE as _,
+        }
+    }
 }
 
 #[derive(Clone, Copy, AsBytes, FromBytes, Info)]

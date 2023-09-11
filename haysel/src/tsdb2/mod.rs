@@ -89,6 +89,7 @@ impl<Store: Storage + Send> Database<Store> {
                 &mut alloc,
                 DBEntrypoint {
                     stations: repr::MapStations { map },
+                    tuning_params: repr::TuningParams::current(),
                 },
             )
             .await?;
@@ -96,6 +97,15 @@ impl<Store: Storage + Send> Database<Store> {
             entrypoint.dispose_sync(&mut alloc).await?;
         } else {
             info!("found and opened existing database");
+            let eptr = alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
+            let entry = Object::new_read(&mut alloc, eptr).await?;
+            if entry.tuning_params != repr::TuningParams::current() {
+                error!("Mismatched tuning parameters in loaded database");
+                return Err(DBError::MismatchedParameters {
+                    found: entry.tuning_params,
+                    expected: repr::TuningParams::current(),
+                });
+            }
         }
         Ok(Self { alloc })
     }

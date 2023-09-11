@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use super::alloc::error::AllocError;
+use super::{alloc::error::AllocError, repr::TuningParams};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DBError<StoreError: Error> {
@@ -8,4 +8,9 @@ pub enum DBError<StoreError: Error> {
     AllocError(#[from] AllocError<StoreError>),
     #[error("attempted to create a duplicate station or channel (ID already exists)")]
     Duplicate,
+    #[error("mismatched tuning parameters (database was saved using different parameters than currently in use)\nexpected:{expected:?}\nfound:{found:?}")]
+    MismatchedParameters {
+        expected: TuningParams,
+        found: TuningParams,
+    },
 }
