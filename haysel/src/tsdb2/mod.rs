@@ -33,6 +33,7 @@ use self::{
 pub mod alloc;
 pub mod error;
 pub mod helpers;
+pub mod query;
 pub mod repr;
 #[cfg(test)]
 pub mod test;
