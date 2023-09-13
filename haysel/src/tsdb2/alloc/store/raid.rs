@@ -1,5 +1,10 @@
 //! --redundant-- array of independant disks (store impls)
-use std::{any::type_name, error::Error, fmt::Write, mem::swap};
+use std::{
+    any::type_name,
+    error::Error,
+    fmt::Write,
+    mem::{size_of, swap},
+};
 
 use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
@@ -166,7 +171,7 @@ impl ArrayR0 {
         .await?;
         self.elements.push(Element {
             store: elem,
-            size: elem_size,
+            size: elem_size - size_of::<RaidHeader>() as u64,
         });
         let num = self.elements.len().try_into().unwrap();
         for elem in &mut self.elements {
@@ -212,7 +217,7 @@ impl ArrayR0 {
         let mut disk_num = 0;
         for elem in &self.elements {
             if address < elem.size {
-                return Ok((disk_num, address));
+                return Ok((disk_num, address + size_of::<RaidHeader>() as u64));
             } else {
                 disk_num += 1;
                 address -= elem.size;
