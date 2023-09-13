@@ -25,8 +25,11 @@ use num_enum::TryFromPrimitive;
 use zerocopy::FromBytes;
 
 use self::{
-    alloc::{object::Object, ptr::Ptr, util::ChunkedLinkedList, Allocator, Storage},
+    alloc::{
+        object::Object, ptr::Ptr, util::ChunkedLinkedList, Allocator, Storage, UntypedStorage,
+    },
     error::DBError,
+    query::QueryBuilder,
     repr::DBEntrypoint,
 };
 
@@ -65,7 +68,7 @@ impl<Store: Storage + Send> Database<Store> {
     pub async fn new(
         store: Store,
         init_overwrite: bool,
-    ) -> Result<Self, DBError<<Store as Storage>::Error>> {
+    ) -> Result<Self, DBError<<Store as UntypedStorage>::Error>> {
         let mut alloc = Allocator::new(store, init_overwrite).await?;
         if alloc.get_entrypoint().await?.is_null() {
             warn!("initializing a new database");
@@ -115,7 +118,7 @@ impl<Store: Storage + Send> Database<Store> {
     pub async fn station_exists(
         &mut self,
         id: StationID,
-    ) -> Result<bool, DBError<<Store as Storage>::Error>> {
+    ) -> Result<bool, DBError<<Store as UntypedStorage>::Error>> {
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
         Ok(
@@ -129,7 +132,7 @@ impl<Store: Storage + Send> Database<Store> {
     pub async fn add_station(
         &mut self,
         id: StationID,
-    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+    ) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
         if self.station_exists(id).await? {
@@ -154,7 +157,7 @@ impl<Store: Storage + Send> Database<Store> {
         to: StationID,
         id: ChannelID,
         kind: repr::DataGroupType,
-    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+    ) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
         let eptr = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entry = Object::new_read(&mut self.alloc, eptr).await?;
         let station = ChunkedLinkedList::find(entry.stations.map, &mut self.alloc, |s| s.id == to)
@@ -189,7 +192,7 @@ impl<Store: Storage + Send> Database<Store> {
         time: i64,
         gtype: repr::DataGroupType,
         index: &Object<repr::DataGroupIndex>,
-    ) -> Result<bool, DBError<<Store as Storage>::Error>> {
+    ) -> Result<bool, DBError<<Store as UntypedStorage>::Error>> {
         match gtype {
             repr::DataGroupType::Periodic => {
                 let data =
@@ -242,7 +245,7 @@ impl<Store: Storage + Send> Database<Store> {
         channel_id: ChannelID,
         time: DateTime<Utc>,
         reading: f32,
-    ) -> Result<(), DBError<<Store as Storage>::Error>> {
+    ) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
         let time = time.timestamp();
         let entrypoint = self.alloc.get_entrypoint().await?.cast::<DBEntrypoint>();
         let entrypoint = Object::new_read(&mut self.alloc, entrypoint).await?;
@@ -863,6 +866,11 @@ impl<Store: Storage + Send> Database<Store> {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    pub async fn query<'a>(&'a mut self) -> QueryBuilder<'a, Store> {
+        QueryBuilder::new(self)
+    }
+
     #[instrument]
     pub async fn infodump() {
         use repr::info::print_inf;
@@ -871,13 +879,13 @@ impl<Store: Storage + Send> Database<Store> {
     }
 
     #[instrument(skip(self))]
-    pub async fn infodump_from(&mut self) -> Result<(), DBError<<Store as Storage>::Error>> {
+    pub async fn infodump_from(&mut self) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
         self.alloc.infodump_from().await?;
         Ok(())
     }
 
     #[instrument(skip(self))]
-    pub async fn close(self) -> Result<(), DBError<<Store as Storage>::Error>> {
+    pub async fn close(self) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
         self.alloc.close().await?;
         Ok(())
     }

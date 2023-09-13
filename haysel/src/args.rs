@@ -17,6 +17,11 @@ pub enum Cmd {
             help = "if provided, will dump information about the database contained in <file>"
         )]
         file: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Use the disk storage's block device mode. required (and exclusively used for) using block devices as databases"
+        )]
+        is_blockdevice: bool,
     },
     /// run
     Run {
@@ -32,6 +37,11 @@ pub enum Cmd {
         init_overwrite: bool,
         #[arg(long, short, help = "database file")]
         file: PathBuf,
+        #[arg(
+            long,
+            help = "Use the disk storage's block device mode. required (and exclusively used for) using block devices as databases"
+        )]
+        is_blockdevice: bool,
     },
 }
 
@@ -59,4 +69,9 @@ pub struct RunArgs {
         help = "allow using an aternate database file, instead of the default under `data_dir`. this allows for use of *special* files like block devices..."
     )]
     pub alt_db: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Use the disk storage's block device mode. required (and exclusively used for) using block devices as databases"
+    )]
+    pub is_blockdevice: bool,
 }

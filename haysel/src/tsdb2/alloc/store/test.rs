@@ -1,6 +1,6 @@
 use crate::tsdb2::alloc::{
     ptr::{Ptr, Void},
-    Allocator, Storage,
+    Allocator, UntypedStorage,
 };
 
 #[derive(thiserror::Error, Clone, Debug, PartialEq)]
@@ -12,7 +12,7 @@ pub struct TestStore {
 }
 
 #[async_trait::async_trait]
-impl Storage for TestStore {
+impl UntypedStorage for TestStore {
     type Error = VoidError;
     async fn read_buf(
         &mut self,
@@ -42,6 +42,9 @@ impl Storage for TestStore {
         self.backing
             .extend_from_slice(vec![0; amnt as _].as_slice());
         Ok(())
+    }
+    async fn resizeable(&mut self) -> Result<bool, Self::Error> {
+        Ok(true)
     }
 }
 

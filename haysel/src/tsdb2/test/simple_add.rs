@@ -3,7 +3,7 @@ use tracing_test::traced_test;
 use uuid::Uuid;
 
 use super::{
-    super::{alloc::util::test::TestStore, Database},
+    super::{alloc::store::test::TestStore, Database},
     get_db,
 };
 

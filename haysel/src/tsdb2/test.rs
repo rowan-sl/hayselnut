@@ -1,7 +1,7 @@
 use tracing_test::traced_test;
 use uuid::Uuid;
 
-use super::{alloc::util::test::TestStore, Database};
+use super::{alloc::store::test::TestStore, Database};
 
 mod duplicate;
 mod simple_add;

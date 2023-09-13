@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 
 use zerocopy::{AsBytes, FromBytes};
 
-use super::{error::AllocError, ptr::Ptr, Allocator, Storage};
+use super::{error::AllocError, ptr::Ptr, Allocator, Storage, UntypedStorage};
 
 pub struct Object<T> {
     val: T,
@@ -23,7 +23,7 @@ impl<T: AsBytes + FromBytes + Sync + Send> Object<T> {
     pub async fn new_alloc<Store: Storage + Send>(
         alloc: &mut Allocator<Store>,
         val: T,
-    ) -> Result<Self, AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Self, AllocError<<Store as UntypedStorage>::Error>> {
         let pointer: Ptr<T> = alloc.allocate().await?;
         let val_copy = T::read_from(val.as_bytes()).unwrap();
         alloc.write(val_copy, pointer).await?;
@@ -40,7 +40,7 @@ impl<T: AsBytes + FromBytes + Sync + Send> Object<T> {
     pub async fn new_read<Store: Storage + Send>(
         alloc: &mut Allocator<Store>,
         ptr: Ptr<T>,
-    ) -> Result<Self, AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Self, AllocError<<Store as UntypedStorage>::Error>> {
         let read = alloc.read(ptr).await?;
         Ok(Self {
             val: read,
@@ -58,7 +58,7 @@ impl<T: AsBytes + FromBytes + Sync + Send> Object<T> {
     pub async fn sync<Store: Storage + Send>(
         &mut self,
         alloc: &mut Allocator<Store>,
-    ) -> Result<(), AllocError<<Store as Storage>::Error>> {
+    ) -> Result<(), AllocError<<Store as UntypedStorage>::Error>> {
         alloc
             .write(T::read_from(self.val.as_bytes()).unwrap(), self.pointer)
             .await?;
@@ -87,7 +87,7 @@ impl<T: AsBytes + FromBytes + Sync + Send> Object<T> {
     pub async fn dispose_sync<Store: Storage + Send>(
         mut self,
         alloc: &mut Allocator<Store>,
-    ) -> Result<Ptr<T>, AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Ptr<T>, AllocError<<Store as UntypedStorage>::Error>> {
         let copy = T::read_from(self.val.as_bytes()).unwrap();
         alloc.write(copy, self.pointer).await?;
         self.modified = false;

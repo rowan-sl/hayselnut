@@ -2,10 +2,7 @@ use num_enum::TryFromPrimitive;
 use uuid::Uuid;
 
 use super::super::{
-    alloc::{
-        object::Object,
-        util::{test::TestStore, ChunkedLinkedList},
-    },
+    alloc::{object::Object, store::test::TestStore, util::ChunkedLinkedList},
     repr,
     repr::DBEntrypoint,
     Database,

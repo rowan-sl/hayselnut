@@ -1,6 +1,3 @@
-#[cfg(test)]
-pub mod test;
-
 use std::mem::{align_of, size_of};
 
 use self::comptime_hacks::{Condition, IsTrue};
@@ -8,7 +5,7 @@ use super::{
     error::AllocError,
     object::Object,
     ptr::{Ptr, Void},
-    Allocator, Storage,
+    Allocator, Storage, UntypedStorage,
 };
 use zerocopy::{AsBytes, FromBytes};
 
@@ -34,7 +31,7 @@ impl CLLIdx {
         &self,
         alloc: &mut Allocator<Store>,
         value: T,
-    ) -> Result<(), AllocError<<Store as Storage>::Error>>
+    ) -> Result<(), AllocError<<Store as UntypedStorage>::Error>>
     where
         Condition<{ works::<T>() }>: IsTrue,
     {
@@ -96,7 +93,8 @@ where
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         cond: impl Fn(&&T) -> bool,
-    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as UntypedStorage>::Error>>
+    {
         let mut list = Object::new_read(alloc, list).await?;
         let mut chunk_num = 0;
         loop {
@@ -133,7 +131,8 @@ where
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         cond: impl Fn(&T) -> Option<C>,
-    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as Storage>::Error>> {
+    ) -> Result<Option<(T, CLLIdx)>, super::error::AllocError<<Store as UntypedStorage>::Error>>
+    {
         let mut list = Object::new_read(alloc, list).await?;
         let mut chunk_num = 0u64;
         let mut chunk_ptr = list.pointer().cast::<Void>();
@@ -188,7 +187,7 @@ where
         list: Ptr<Self>,
         alloc: &mut Allocator<Store>,
         item: T,
-    ) -> Result<(), super::error::AllocError<<Store as Storage>::Error>> {
+    ) -> Result<(), super::error::AllocError<<Store as UntypedStorage>::Error>> {
         let mut list = Object::new_read(alloc, list).await?;
         loop {
             let used = list.used as usize;

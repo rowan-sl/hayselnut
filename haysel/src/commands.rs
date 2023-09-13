@@ -1,17 +1,38 @@
 use anyhow::Result;
 
-use crate::args::{ArgsParser, Cmd, RunArgs};
+use crate::{
+    args::{ArgsParser, Cmd, RunArgs},
+    tsdb2::alloc::store::disk::DiskMode,
+};
 
 pub mod db2;
 pub mod infodump;
 
 pub async fn delegate(args: ArgsParser) -> Delegation {
     match args.cmd {
-        Cmd::Infodump { file } => Delegation::SubcommandRan(infodump::main(file).await),
+        Cmd::Infodump {
+            file,
+            is_blockdevice,
+        } => {
+            let mode = if is_blockdevice {
+                DiskMode::BlockDevice
+            } else {
+                DiskMode::Dynamic
+            };
+            Delegation::SubcommandRan(infodump::main(file, mode).await)
+        }
         Cmd::DB2 {
             init_overwrite,
             file,
-        } => Delegation::SubcommandRan(db2::main(init_overwrite, file).await),
+            is_blockdevice,
+        } => {
+            let mode = if is_blockdevice {
+                DiskMode::BlockDevice
+            } else {
+                DiskMode::Dynamic
+            };
+            Delegation::SubcommandRan(db2::main(init_overwrite, file, mode).await)
+        }
         Cmd::Run { args: run_args } => Delegation::RunMain(run_args),
     }
 }

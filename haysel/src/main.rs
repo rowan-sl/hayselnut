@@ -47,7 +47,9 @@ use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
-use tsdb2::{alloc::disk_store::DiskStore, Database};
+use tsdb2::{alloc::store::disk::DiskStore, Database};
+
+use crate::tsdb2::alloc::store::disk::DiskMode;
 
 fn main() -> anyhow::Result<()> {
     let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -112,7 +114,12 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
         };
         let path = raw_path.canonicalize()?;
         debug!("database path ({raw_path:?}) resolves to {path:?}");
-        let store = DiskStore::new(&path, false).await?;
+        let mode = if args.is_blockdevice {
+            DiskMode::BlockDevice
+        } else {
+            DiskMode::Dynamic
+        };
+        let store = DiskStore::new(&path, false, mode).await?;
         let database = Database::new(store, args.init_overwrite).await?;
         RecordDB::new(database, shutdown.handle()).await?
     };

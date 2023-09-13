@@ -5,18 +5,45 @@ use tokio::{
     io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use super::{
+use crate::tsdb2::alloc::{
     ptr::{Ptr, Void},
-    Storage,
+    UntypedStorage,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskMode {
+    /// normal mode.
+    /// use with normal files, to allocate space as needed.
+    Dynamic,
+    /// pre-allocated fixed size mode.
+    /// use with *only* block devices (e.g. `/dev/sda`) - linux only
+    /// this changes how file size is determined - may (probably not) cause issues if used with normal files.
+    BlockDevice,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DiskError {
+    #[error("I/O Error: {0}")]
+    IOError(#[from] io::Error),
+    #[error("attempted to write to a read-only store")]
+    Readonly,
+    #[error("DiskStore in BlockDevice mode does not support resizing")]
+    FixedSize,
+}
 
 pub struct DiskStore {
     file: File,
+    mode: DiskMode,
+    readonly: bool,
 }
 
 impl DiskStore {
     #[instrument]
-    pub async fn new(path: &Path, readonly: bool) -> Result<Self, <Self as Storage>::Error> {
+    pub async fn new(
+        path: &Path,
+        readonly: bool,
+        mode: DiskMode,
+    ) -> Result<Self, <Self as UntypedStorage>::Error> {
         Ok(Self {
             file: OpenOptions::new()
                 .read(true)
@@ -24,13 +51,15 @@ impl DiskStore {
                 .create(!readonly)
                 .open(path)
                 .await?,
+            mode,
+            readonly,
         })
     }
 }
 
 #[async_trait::async_trait]
-impl Storage for DiskStore {
-    type Error = io::Error;
+impl UntypedStorage for DiskStore {
+    type Error = DiskError;
     #[instrument(skip(self, into))]
     async fn read_buf(
         &mut self,
@@ -59,6 +88,9 @@ impl Storage for DiskStore {
         amnt: u64,
         from: &[u8],
     ) -> Result<(), Self::Error> {
+        if self.readonly {
+            return Err(DiskError::Readonly);
+        }
         assert!(from.len() >= amnt as _);
         self.file.seek(io::SeekFrom::Start(at.addr)).await?;
         self.file.write_all(&from[..amnt as _]).await?;
@@ -76,8 +108,10 @@ impl Storage for DiskStore {
     async fn size(&mut self) -> Result<u64, Self::Error> {
         let guess = self.file.metadata().await?.len();
         if guess != 0 {
+            debug_assert_eq!(self.mode, DiskMode::Dynamic);
             Ok(guess)
         } else {
+            debug_assert_eq!(self.mode, DiskMode::BlockDevice);
             // deals with block devices on linux yeilding zero as the size
             Ok(self.file.seek(io::SeekFrom::End(0)).await?)
         }
@@ -85,7 +119,24 @@ impl Storage for DiskStore {
 
     #[instrument(skip(self))]
     async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error> {
+        if self.readonly {
+            return Err(DiskError::Readonly);
+        } else if self.mode == DiskMode::BlockDevice {
+            return Err(DiskError::FixedSize);
+        }
         let size = self.size().await?;
-        self.file.set_len(size + amnt).await
+        self.file.set_len(size + amnt).await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn resizeable(&mut self) -> Result<bool, Self::Error> {
+        if self.readonly {
+            return Ok(false);
+        }
+        match self.mode {
+            DiskMode::Dynamic => Ok(true),
+            DiskMode::BlockDevice => Ok(false),
+        }
     }
 }

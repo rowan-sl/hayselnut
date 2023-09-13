@@ -1,6 +1,6 @@
 use tracing_test::traced_test;
 
-use super::{error::AllocError, ptr::Ptr, util::test::TestStore, Allocator};
+use super::{error::AllocError, ptr::Ptr, store::test::TestStore, Allocator};
 
 #[tokio::test]
 #[traced_test]

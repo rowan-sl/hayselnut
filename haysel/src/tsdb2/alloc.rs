@@ -1,8 +1,8 @@
-pub mod disk_store;
 pub mod error;
 pub mod object;
 pub mod ptr;
 mod repr;
+pub mod store;
 #[cfg(test)]
 mod test;
 pub mod util;
@@ -24,8 +24,29 @@ mod tuning {
 
 /// trait that all storage backings for any allocator must implement.
 #[async_trait::async_trait]
-pub trait Storage: Send + 'static {
+pub trait UntypedStorage: Send + 'static {
     type Error: Error + Sync + Send + 'static;
+    async fn read_buf(
+        &mut self,
+        at: Ptr<Void>,
+        amnt: u64,
+        into: &mut [u8],
+    ) -> Result<(), Self::Error>;
+    async fn write_buf(&mut self, at: Ptr<Void>, amnt: u64, from: &[u8])
+        -> Result<(), Self::Error>;
+    async fn close(self) -> Result<(), Self::Error>;
+    async fn size(&mut self) -> Result<u64, Self::Error>;
+    async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error>;
+    /// is resizing this store permitted.
+    /// if not, expand_by is *expected* to error, but may succeed (if it turns out this function is lying)
+    /// either way, expand_by is not premitted to panic if this function returns false
+    ///
+    /// this is not used by the normal database, but is by the raid storage backing
+    async fn resizeable(&mut self) -> Result<bool, Self::Error>;
+}
+
+#[async_trait::async_trait]
+pub trait Storage: UntypedStorage + Send + 'static {
     async fn read_typed<T: FromBytes>(&mut self, at: Ptr<T>) -> Result<T, Self::Error> {
         let mut buf = vec![0; mem::size_of::<T>()];
         self.read_buf(at.cast::<Void>(), buf.len() as u64, &mut buf)
@@ -44,18 +65,10 @@ pub trait Storage: Send + 'static {
         )
         .await
     }
-    async fn read_buf(
-        &mut self,
-        at: Ptr<Void>,
-        amnt: u64,
-        into: &mut [u8],
-    ) -> Result<(), Self::Error>;
-    async fn write_buf(&mut self, at: Ptr<Void>, amnt: u64, from: &[u8])
-        -> Result<(), Self::Error>;
-    async fn close(self) -> Result<(), Self::Error>;
-    async fn size(&mut self) -> Result<u64, Self::Error>;
-    async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error>;
 }
+
+#[async_trait::async_trait]
+impl<T: ?Sized + UntypedStorage + Send + 'static> Storage for T {}
 
 pub struct Allocator<S: Storage> {
     store: S,
@@ -66,7 +79,7 @@ impl<S: Storage + Send> Allocator<S> {
     pub async fn new(
         mut store: S,
         init_overwrite: bool,
-    ) -> Result<Self, AllocError<<S as Storage>::Error>> {
+    ) -> Result<Self, AllocError<<S as UntypedStorage>::Error>> {
         let size = store.size().await?;
 
         // if the store is empty, it is probably new and needs to be initialized. do that here
@@ -113,7 +126,7 @@ impl<S: Storage + Send> Allocator<S> {
     async fn free_list_for_size(
         &mut self,
         size: u64,
-    ) -> Result<Option<AllocCategoryHeader>, AllocError<<S as Storage>::Error>> {
+    ) -> Result<Option<AllocCategoryHeader>, AllocError<<S as UntypedStorage>::Error>> {
         // perform simple iteration through the list, finding the right entry and returning it
         let header = self.store.read_typed(Ptr::<AllocHeader>::with(0)).await?;
         Ok(header.free_list.iter().find(|x| x.size == size).copied())
@@ -126,7 +139,7 @@ impl<S: Storage + Send> Allocator<S> {
         &mut self,
         size: u64,
         to: Ptr<ChunkHeader>,
-    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+    ) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         // perform simple iteration through the list, finding the right entry and modifying it
         let mut header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         // new entry to replace the prev one with.
@@ -164,7 +177,7 @@ impl<S: Storage + Send> Allocator<S> {
     pub async fn set_entrypoint(
         &mut self,
         to: Ptr<Void>,
-    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+    ) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         let mut header: AllocHeader = self.store.read_typed(Ptr::null()).await?;
         header.entrypoint = to;
         self.store.write_typed(Ptr::null(), &header).await?;
@@ -172,7 +185,9 @@ impl<S: Storage + Send> Allocator<S> {
     }
 
     #[instrument(skip(self))]
-    pub async fn get_entrypoint(&mut self) -> Result<Ptr<Void>, AllocError<<S as Storage>::Error>> {
+    pub async fn get_entrypoint(
+        &mut self,
+    ) -> Result<Ptr<Void>, AllocError<<S as UntypedStorage>::Error>> {
         Ok(self
             .store
             .read_typed::<AllocHeader>(Ptr::null())
@@ -183,7 +198,7 @@ impl<S: Storage + Send> Allocator<S> {
     #[instrument(skip(self))]
     pub async fn allocate<T: AsBytes + FromBytes>(
         &mut self,
-    ) -> Result<Ptr<T>, AllocError<<S as Storage>::Error>> {
+    ) -> Result<Ptr<T>, AllocError<<S as UntypedStorage>::Error>> {
         let allocation_size = mem::size_of::<T>() as u64;
         debug!(
             "alloc {} - {}",
@@ -277,7 +292,7 @@ impl<S: Storage + Send> Allocator<S> {
         &mut self,
         ptr: Ptr<T>,
         free: bool,
-    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+    ) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         let alloc_header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         // get the location of the chunk this pointer points to
         if ptr
@@ -336,7 +351,7 @@ impl<S: Storage + Send> Allocator<S> {
     pub async fn free<T: AsBytes + FromBytes>(
         &mut self,
         ptr: Ptr<T>,
-    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+    ) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         debug!(
             "free {} - {} @ {:#X}",
             std::any::type_name::<T>(),
@@ -375,7 +390,7 @@ impl<S: Storage + Send> Allocator<S> {
     pub async fn read<T: AsBytes + FromBytes>(
         &mut self,
         at: Ptr<T>,
-    ) -> Result<T, AllocError<<S as Storage>::Error>> {
+    ) -> Result<T, AllocError<<S as UntypedStorage>::Error>> {
         self.validate_pointer(at, false).await?;
         Ok(self.store.read_typed(at).await?)
     }
@@ -385,13 +400,13 @@ impl<S: Storage + Send> Allocator<S> {
         &mut self,
         val: T,
         at: Ptr<T>,
-    ) -> Result<(), AllocError<<S as Storage>::Error>> {
+    ) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         self.validate_pointer(at, false).await?;
         Ok(self.store.write_typed(at, &val).await?)
     }
 
     #[instrument(skip(self))]
-    pub async fn infodump_from(&mut self) -> Result<(), AllocError<<S as Storage>::Error>> {
+    pub async fn infodump_from(&mut self) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         use super::repr::info::sfmt;
         let header = self.store.read_typed(Ptr::<AllocHeader>::null()).await?;
         let size = self.store.size().await?;
@@ -413,7 +428,7 @@ impl<S: Storage + Send> Allocator<S> {
     }
 
     #[instrument(skip(self))]
-    pub async fn close(self) -> Result<(), AllocError<<S as Storage>::Error>> {
+    pub async fn close(self) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
         self.store.close().await?;
         Ok(())
     }
