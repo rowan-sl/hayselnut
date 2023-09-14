@@ -35,8 +35,8 @@ pub enum Cmd {
             help = "allow initializing a database using a file that contains data (may cause silent deletion of corrupted databases, so it is recommended to only use this when running the server for the first time)"
         )]
         init_overwrite: bool,
-        #[arg(long, short, help = "database file")]
-        file: PathBuf,
+        #[arg(long, short, help = "database file(s)")]
+        files: Vec<PathBuf>,
         #[arg(
             long,
             help = "Use the disk storage's block device mode. required (and exclusively used for) using block devices as databases"

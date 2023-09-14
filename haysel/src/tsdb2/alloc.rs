@@ -92,7 +92,7 @@ impl<S: Storage + Send> Allocator<S> {
                 .await?;
         }
 
-        let header = store.read_typed(Ptr::<AllocHeader>::with(0u64)).await?;
+        let mut header = store.read_typed(Ptr::<AllocHeader>::with(0u64)).await?;
 
         // verify that the magic bytes are here (if they arent, then it is possible that the
         // wrong backing [file] was opened instead of a database, and we do not want to
@@ -102,6 +102,7 @@ impl<S: Storage + Send> Allocator<S> {
                 warn!("overwriting the current contents to initialize the database");
                 // there should be enough space
                 let new_header = AllocHeader::new(Ptr::null());
+                header = new_header;
                 store
                     .write_typed(Ptr::<AllocHeader>::with(0u64), &new_header)
                     .await?;

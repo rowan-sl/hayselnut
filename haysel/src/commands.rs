@@ -23,7 +23,7 @@ pub async fn delegate(args: ArgsParser) -> Delegation {
         }
         Cmd::DB2 {
             init_overwrite,
-            file,
+            files,
             is_blockdevice,
         } => {
             let mode = if is_blockdevice {
@@ -31,7 +31,7 @@ pub async fn delegate(args: ArgsParser) -> Delegation {
             } else {
                 DiskMode::Dynamic
             };
-            Delegation::SubcommandRan(db2::main(init_overwrite, file, mode).await)
+            Delegation::SubcommandRan(db2::main(init_overwrite, files, mode).await)
         }
         Cmd::Run { args: run_args } => Delegation::RunMain(run_args),
     }

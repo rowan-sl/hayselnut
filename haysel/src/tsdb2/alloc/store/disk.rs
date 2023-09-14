@@ -108,11 +108,10 @@ impl UntypedStorage for DiskStore {
     async fn size(&mut self) -> Result<u64, Self::Error> {
         let guess = self.file.metadata().await?.len();
         if guess != 0 {
-            debug_assert_eq!(self.mode, DiskMode::Dynamic);
             Ok(guess)
         } else {
-            debug_assert_eq!(self.mode, DiskMode::BlockDevice);
             // deals with block devices on linux yeilding zero as the size
+            // (will also be called if the file size == 0)
             Ok(self.file.seek(io::SeekFrom::End(0)).await?)
         }
     }

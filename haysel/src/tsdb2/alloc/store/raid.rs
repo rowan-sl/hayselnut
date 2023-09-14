@@ -1,9 +1,11 @@
 //! --redundant-- array of independant disks (store impls)
 use std::{
     any::type_name,
+    cmp::{max, min},
+    convert::identity,
     error::Error,
     fmt::Write,
-    mem::{size_of, swap},
+    mem::{replace, size_of, swap},
 };
 
 use uuid::Uuid;
@@ -53,6 +55,7 @@ struct DynStorage<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static
 #[async_trait::async_trait]
 trait IsDynStorage: UntypedStorage + Send {
     async fn close_boxed(self: Box<Self>) -> Result<(), <Self as UntypedStorage>::Error>;
+    fn type_name(&self) -> &'static str;
 }
 
 #[async_trait::async_trait]
@@ -61,6 +64,10 @@ impl<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static> IsDynStorag
 {
     async fn close_boxed(self: Box<Self>) -> Result<(), <Self as UntypedStorage>::Error> {
         self.close().await
+    }
+
+    fn type_name(&self) -> &'static str {
+        type_name::<T>()
     }
 }
 
@@ -129,6 +136,16 @@ pub enum RaidError {
     MultiError(Vec<DynStorageError>),
     #[error("attempted to resize a raid array, which is forbidden")]
     Resize,
+    #[error("attempted to perform operations using an uninitialized array")]
+    UseUninitialized,
+    #[error("attempted to add a disk to an already configured array")]
+    ModifyInitialized,
+    #[error("attempted to initialize an array for a second time")]
+    DoubleInitialized,
+    #[error("one or more elements in the array contains invalid data [in an unexpected manner]")]
+    Corrupt,
+    #[error("one or more elements in the array are missing")]
+    MissingElements,
 }
 
 struct Element {
@@ -138,10 +155,14 @@ struct Element {
 
 /// Raid zero array
 pub struct ArrayR0 {
-    // num_disks = elements.len()
-    // must be in order of disk number
+    /// num_disks = elements.len()
+    /// must be in order of disk number
     elements: Vec<Element>,
     array_identifier: Uuid,
+    /// has this array been 'built' (validated / initialized)
+    /// starts off as false, `add_element` can be called, and then `build` is called.
+    /// after this it is set to true, `add_element` may not be called, and the array may be used.
+    ready: bool,
 }
 
 impl ArrayR0 {
@@ -149,43 +170,170 @@ impl ArrayR0 {
     pub fn new() -> Self {
         Self {
             elements: vec![],
-            array_identifier: Uuid::new_v4(),
+            array_identifier: Uuid::nil(),
+            ready: false,
         }
     }
 
     pub async fn add_element<S: Storage + Send>(&mut self, elem: S) -> Result<(), RaidError> {
+        if self.ready {
+            return Err(RaidError::ModifyInitialized);
+        }
         let mut elem = Box::new(DynStorage(elem));
         let elem_size = elem.size().await?;
-        elem.write_typed(
-            Ptr::with(0),
-            &RaidHeader {
-                magic_bytes: MAGIC_BYTES,
-                disk_num: self.elements.len() as _,
-                num_disks: (self.elements.len() + 1)
-                    .try_into()
-                    .expect("Cannot have more than 256 elements in a raid array"),
-                raid_id: raid_ids::RAID0,
-                array_identifier: self.array_identifier,
-            },
-        )
-        .await?;
         self.elements.push(Element {
             store: elem,
             size: elem_size - size_of::<RaidHeader>() as u64,
         });
-        let num = self.elements.len().try_into().unwrap();
+        Ok(())
+    }
+
+    /// # THIS WILL DELETE YOUR DATA!!!
+    ///
+    /// Called before [or as an alternative to, before closing] `RaidArray::build` (if called after,
+    /// it will unset the `ready` flag and you will need to call `RaidArray::build` again)
+    /// Deletes *enough* data in store to trigger a rebuild of the array, allocator, and thus database.
+    pub async fn wipe_all_your_data_away(&mut self) -> Result<(), RaidError> {
+        self.ready = false;
+        let mut buf = vec![];
         for elem in &mut self.elements {
-            let mut header = elem.store.read_typed(Ptr::<RaidHeader>::with(0)).await?;
-            // TODO: verify the elements state?
-            header.num_disks = num;
-            elem.store
-                .write_typed(Ptr::<RaidHeader>::with(0), &header)
-                .await?;
+            // write enough data to overwrite the raid information, as well as the allocator header.
+            // (the alloc header is allways at the start of the store)
+            // since the database uses the allocator's entrypoint (stored in it's header) this will reset
+            // that as well.
+            let amnt = min(
+                elem.size,
+                (size_of::<RaidHeader>() + size_of::<crate::tsdb2::alloc::repr::AllocHeader>())
+                    as u64,
+            );
+            buf.resize(max(buf.len(), amnt as usize), 0u8);
+            elem.store.write_buf(Ptr::null(), amnt, &buf).await?;
         }
         Ok(())
     }
 
+    /// build the raid array. called after all stores
+    /// are added, but before this is used [at all] as a storage device
+    pub async fn build(&mut self) -> Result<(), RaidError> {
+        if self.ready {
+            return Err(RaidError::DoubleInitialized);
+        }
+        let mut headers = vec![];
+        let mut valid = vec![];
+        for elem in &mut self.elements {
+            let header = elem.store.read_typed(Ptr::<RaidHeader>::with(0)).await?;
+            if header.magic_bytes == MAGIC_BYTES && header.raid_id == raid_ids::RAID0 {
+                valid.push(headers.len())
+            }
+            headers.push(header);
+        }
+        if valid.is_empty() {
+            self.array_identifier = Uuid::new_v4();
+            warn!(
+                "array contains no valid elements, creating new array {}",
+                self.array_identifier
+            );
+            let num_disks = self.elements.len();
+            for (i, elem) in self.elements.iter_mut().enumerate() {
+                elem.store
+                    .write_typed(
+                        Ptr::with(0),
+                        &RaidHeader {
+                            magic_bytes: MAGIC_BYTES,
+                            disk_num: i as _,
+                            num_disks: num_disks
+                                .try_into()
+                                .expect("Cannot have more than 256 elements in a raid array"),
+                            raid_id: raid_ids::RAID0,
+                            array_identifier: self.array_identifier,
+                        },
+                    )
+                    .await?;
+            }
+        } else {
+            let conditions = valid
+                .iter()
+                .copied()
+                .map(|idx| {
+                    (
+                        headers[idx].num_disks == headers[0].num_disks,
+                        headers[idx].array_identifier == headers[0].array_identifier,
+                    )
+                })
+                .fold((true, true), |(a, b), (a1, b1)| (a && a1, b && b1));
+            if !conditions.1 {
+                error!("the stores provided to the raid array contain the headers of multiple different arrays");
+                return Err(RaidError::Corrupt);
+            }
+            if !conditions.0 {
+                error!("the store contains headers from the same array that dissagree on the arrays properties");
+                return Err(RaidError::Corrupt);
+            }
+            // each element corresponds to an array element, with the value indicating if it is present or not.
+            let mut element_status = vec![false; headers[0].num_disks as usize];
+            for &elem in &valid {
+                if headers[elem].disk_num >= headers[elem].num_disks {
+                    error!("a raid header exists with a element number greater than the total number of elements");
+                    return Err(RaidError::Corrupt);
+                }
+                if replace(&mut element_status[headers[elem].disk_num as usize], true) {
+                    error!(
+                        "multiple raid elements exist with the same element number in this array!"
+                    );
+                    return Err(RaidError::Corrupt);
+                }
+            }
+            if !element_status.iter().copied().all(identity) {
+                error!(
+                    "the raid array is missing disks {:?}",
+                    element_status
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| !**x)
+                        .map(|(i, _)| i)
+                        .collect::<Vec<_>>()
+                );
+                return Err(RaidError::MissingElements);
+            }
+            // find the elements that are not part of the array, and build them into it.
+            let invalid = (0..headers.len())
+                .filter(|idx| !valid.contains(idx))
+                .collect::<Vec<_>>();
+            if !invalid.is_empty() {
+                warn!("Rebuilding array to include {} new elements", invalid.len());
+                let num_disks = self.elements.len();
+                for idx in invalid {
+                    let header = &mut headers[idx];
+                    *header = RaidHeader {
+                        magic_bytes: MAGIC_BYTES,
+                        disk_num: idx as _,
+                        num_disks: num_disks
+                            .try_into()
+                            .expect("Cannot have more than 256 elements in a raid array"),
+                        raid_id: raid_ids::RAID0,
+                        array_identifier: self.array_identifier,
+                    };
+                    let element = &mut self.elements[idx];
+                    element.store.write_typed(Ptr::null(), &*header).await?;
+                }
+            }
+        }
+
+        self.ready = true;
+
+        Ok(())
+    }
+
+    fn ready(&self) -> Result<(), RaidError> {
+        if self.ready {
+            Ok(())
+        } else {
+            Err(RaidError::UseUninitialized)
+        }
+    }
+
     pub async fn print_info(&mut self) -> Result<(), RaidError> {
+        self.ready()?;
         let mut first_line = format!(
             "RAID array info (Raid zero, {} elements, ID: {}, size: ",
             self.elements.len(),
@@ -198,10 +346,11 @@ impl ArrayR0 {
             total_size += elem.size;
             writeln!(
                 &mut out,
-                "\t- element {}/{}, {}",
-                header.disk_num,
+                "\t- element {}/{}, {}\t(is: {})",
+                header.disk_num + 1,
                 header.num_disks,
-                sfmt(elem.size as _)
+                sfmt(elem.size as _),
+                elem.store.type_name(),
             )
             .unwrap();
         }
@@ -214,6 +363,7 @@ impl ArrayR0 {
 
     /// perform address translation (address in array -> element number, address in element)
     async fn translate(&mut self, mut address: u64) -> Result<(usize, u64), RaidError> {
+        self.ready()?;
         let mut disk_num = 0;
         for elem in &self.elements {
             if address < elem.size {
@@ -236,6 +386,8 @@ impl UntypedStorage for ArrayR0 {
         amnt: u64,
         into: &mut [u8],
     ) -> Result<(), Self::Error> {
+        error!("This operation will fail if it crosses array bounderies (FIXME)");
+        self.ready()?;
         let (elem, addr) = self.translate(at.addr).await?;
         at = Ptr::with(addr);
         self.elements[elem].store.read_buf(at, amnt, into).await?;
@@ -248,6 +400,8 @@ impl UntypedStorage for ArrayR0 {
         amnt: u64,
         from: &[u8],
     ) -> Result<(), Self::Error> {
+        error!("This operation will fail if it crosses array bounderies (FIXME)");
+        self.ready()?;
         let (elem, addr) = self.translate(at.addr).await?;
         at = Ptr::with(addr);
         self.elements[elem].store.write_buf(at, amnt, from).await?;
@@ -268,6 +422,7 @@ impl UntypedStorage for ArrayR0 {
         }
     }
     async fn size(&mut self) -> Result<u64, Self::Error> {
+        self.ready()?;
         Ok(self.elements.iter().map(|e| e.size).sum())
     }
     async fn expand_by(&mut self, _amnt: u64) -> Result<(), Self::Error> {
