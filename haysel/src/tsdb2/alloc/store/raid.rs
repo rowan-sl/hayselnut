@@ -8,6 +8,7 @@ use std::{
     mem::{replace, size_of, swap},
 };
 
+use tokio::join;
 use uuid::Uuid;
 use zerocopy::{AsBytes, FromBytes};
 
@@ -361,13 +362,46 @@ impl ArrayR0 {
         Ok(())
     }
 
-    /// perform address translation (address in array -> element number, address in element)
-    async fn translate(&mut self, mut address: u64) -> Result<(usize, u64), RaidError> {
+    /// perform address translation (address in array -> element number,
+    /// (address in element, len), (optional address in next element, optional len))
+    ///
+    /// if the optional second return thing is included, it means the write
+    /// was split accross multiple elements (the number provided, and the one after it)
+    async fn translate(
+        &mut self,
+        mut address: u64,
+        len: u64,
+    ) -> Result<(usize, (u64, u64), Option<(u64, u64)>), RaidError> {
         self.ready()?;
         let mut disk_num = 0;
-        for elem in &self.elements {
+        for (elem_idx, elem) in self.elements.iter().enumerate() {
             if address < elem.size {
-                return Ok((disk_num, address + size_of::<RaidHeader>() as u64));
+                if len <= (elem.size - address) {
+                    return Ok((
+                        disk_num,
+                        (address + size_of::<RaidHeader>() as u64, len),
+                        None,
+                    ));
+                } else {
+                    if self.elements.len() == elem_idx + 1 {
+                        return Err(RaidError::OutOfBounds);
+                    }
+                    if (len - (elem.size - address)) > self.elements[elem_idx + 1].size {
+                        unimplemented!("This write would have been split accross more than 2 array elements, which is not implemented at this time")
+                    } else {
+                        return Ok((
+                            disk_num,
+                            (
+                                address + size_of::<RaidHeader>() as u64,
+                                (elem.size - address),
+                            ),
+                            Some((
+                                size_of::<RaidHeader>() as u64,
+                                (len - (elem.size - address)),
+                            )),
+                        ));
+                    }
+                }
             } else {
                 disk_num += 1;
                 address -= elem.size;
@@ -377,34 +411,107 @@ impl ArrayR0 {
     }
 }
 
+#[cfg(test)]
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn translation_test() {
+    use super::test::TestStore;
+    let e0 = TestStore::with_size(100 + size_of::<RaidHeader>());
+    let e1 = TestStore::with_size(50 + size_of::<RaidHeader>());
+    let mut array = ArrayR0::new();
+    array.add_element(e0).await.unwrap();
+    array.add_element(e1).await.unwrap();
+    array.build().await.unwrap();
+
+    assert_eq!(
+        array.translate(0, 10).await.unwrap(),
+        (0, (size_of::<RaidHeader>() as u64, 10), None,)
+    );
+
+    assert_eq!(
+        array.translate(90, 10).await.unwrap(), // (write to 90..=99 (10 values) elem 0 range (0..=99) (100 values))
+        (0, (size_of::<RaidHeader>() as u64 + 90, 10), None,)
+    );
+
+    assert_eq!(
+        array.translate(100, 10).await.unwrap(), // (write to 100..=109 (10 values) elem 0 (0..=99) (100 values) elem 1 (100..149) (50 values))
+        (
+            1,
+            (size_of::<RaidHeader>() as u64, 10), // not +100, bc it is in the second disk
+            None,
+        )
+    );
+
+    assert_eq!(
+        array.translate(90, 20).await.unwrap(), // (write to 100..=109 (10 values) elem 0 (0..=99) (100 values) elem 1 (100..149) (50 values))
+        (
+            0,
+            (size_of::<RaidHeader>() as u64 + 90, 10),
+            Some((size_of::<RaidHeader>() as u64, 10)),
+        )
+    );
+}
+
 #[async_trait::async_trait]
 impl UntypedStorage for ArrayR0 {
     type Error = RaidError;
     async fn read_buf(
         &mut self,
-        mut at: Ptr<Void>,
+        at: Ptr<Void>,
         amnt: u64,
         into: &mut [u8],
     ) -> Result<(), Self::Error> {
-        error!("This operation will fail if it crosses array bounderies (FIXME)");
+        debug_assert!(into.len() as u64 <= amnt);
         self.ready()?;
-        let (elem, addr) = self.translate(at.addr).await?;
-        at = Ptr::with(addr);
-        self.elements[elem].store.read_buf(at, amnt, into).await?;
+        let (elem, (addr0, len0), opt) = self.translate(at.addr, amnt).await?;
+        if let Some((addr1, len1)) = opt {
+            debug_assert_eq!(len0 + len1, amnt);
+            // perform the reads/writes concurrently
+            let (buf0, buf1) = into.split_at_mut(len0 as _);
+            let (elem0, elem1) = self.elements.split_at_mut(elem + 1);
+            let (res0, res1) = join!(
+                elem0[elem].store.read_buf(Ptr::with(addr0), len0, buf0),
+                elem1[0].store.read_buf(Ptr::with(addr1), len1, buf1),
+            );
+            res0?;
+            res1?;
+        } else {
+            debug_assert_eq!(len0, amnt);
+            self.elements[elem]
+                .store
+                .read_buf(Ptr::with(addr0), len0, into)
+                .await?;
+        }
         Ok(())
     }
 
     async fn write_buf(
         &mut self,
-        mut at: Ptr<Void>,
+        at: Ptr<Void>,
         amnt: u64,
         from: &[u8],
     ) -> Result<(), Self::Error> {
-        error!("This operation will fail if it crosses array bounderies (FIXME)");
+        debug_assert!(from.len() as u64 <= amnt);
         self.ready()?;
-        let (elem, addr) = self.translate(at.addr).await?;
-        at = Ptr::with(addr);
-        self.elements[elem].store.write_buf(at, amnt, from).await?;
+        let (elem, (addr0, len0), opt) = self.translate(at.addr, amnt).await?;
+        if let Some((addr1, len1)) = opt {
+            debug_assert_eq!(len0 + len1, amnt);
+            // perform the reads/writes concurrently
+            let (buf0, buf1) = from.split_at(len0 as _);
+            let (elem0, elem1) = self.elements.split_at_mut(elem + 1);
+            let (res0, res1) = join!(
+                elem0[elem].store.write_buf(Ptr::with(addr0), len0, buf0),
+                elem1[0].store.write_buf(Ptr::with(addr1), len1, buf1),
+            );
+            res0?;
+            res1?;
+        } else {
+            debug_assert_eq!(len0, amnt);
+            self.elements[elem]
+                .store
+                .write_buf(Ptr::with(addr0), len0, from)
+                .await?;
+        }
         Ok(())
     }
 

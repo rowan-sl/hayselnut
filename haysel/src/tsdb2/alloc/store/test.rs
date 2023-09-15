@@ -11,6 +11,14 @@ pub struct TestStore {
     backing: Vec<u8>,
 }
 
+impl TestStore {
+    pub fn with_size(size: usize) -> Self {
+        Self {
+            backing: vec![0; size],
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl UntypedStorage for TestStore {
     type Error = VoidError;
