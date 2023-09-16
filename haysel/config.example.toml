@@ -1,0 +1,20 @@
+[directory]
+data = "data/"
+run = "run/"
+
+[server]
+url = "https://example.com"
+port = 8998
+
+[database]
+storage = "raid"
+
+[[database.files]]
+path = "/dev/sdoesntexist"
+blockdevice = true
+
+[[database.files]]
+path = "overflow.tsdb2"
+
+[misc]
+init_script = "./setup.sh"
