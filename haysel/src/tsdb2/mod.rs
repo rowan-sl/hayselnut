@@ -29,7 +29,7 @@ use self::{
         object::Object, ptr::Ptr, util::ChunkedLinkedList, Allocator, Storage, UntypedStorage,
     },
     error::DBError,
-    query::QueryBuilder,
+    query::builder::QueryBuilder,
     repr::DBEntrypoint,
 };
 

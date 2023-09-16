@@ -13,4 +13,8 @@ pub enum DBError<StoreError: Error> {
         expected: TuningParams,
         found: TuningParams,
     },
+    #[error("query: station does not exist")]
+    NoSuchStation,
+    #[error("query: channel does not exist")]
+    NoSuchChannel,
 }
