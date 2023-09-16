@@ -44,7 +44,9 @@ pub async fn ipc_task(
         }
         loop {
             select! {
-                _ = handle.wait_for_shutdown() => { break; }
+                _ = handle.wait_for_shutdown() => {
+                    break;
+                }
                 recv = ipc_task_rx.recv_async() => {
                     handle_recv(
                         recv?,
@@ -68,7 +70,10 @@ pub async fn ipc_task(
                             loop {
                                 select! {
                                     // TODO: notify clients of server closure
-                                    _ = handle.wait_for_shutdown() => { break; }
+                                    _ = handle.wait_for_shutdown() => {
+                                        mycelium::ipc_send(&mut sock, &IPCMsg { kind: mycelium::IPCMsgKind::Bye }).await?;
+                                        break;
+                                    }
                                     res = recv.recv() => {
                                         mycelium::ipc_send(&mut sock, &res?).await?
                                     }

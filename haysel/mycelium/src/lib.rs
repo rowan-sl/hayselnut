@@ -61,11 +61,14 @@ pub struct IPCMsg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IPCMsgKind {
+    // -- server to client --
     /// Initialization packet, sent with current information about stuff
     Haiii {
         stations: KnownStations,
         channels: KnownChannels,
     },
+    /// server disconnect ʘ︵ʘ
+    Bye,
     FreshHotData {
         from: StationID,
         recorded_at: DateTime<Utc>,
