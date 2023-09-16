@@ -55,12 +55,9 @@ use tsdb2::{
     Database,
 };
 
-use crate::tsdb2::alloc::{
-    store::{
-        disk::DiskMode,
-        raid::{self, DynStorage, IsDynStorage},
-    },
-    Storage, UntypedStorage,
+use crate::tsdb2::alloc::store::{
+    disk::DiskMode,
+    raid::{self, DynStorage, IsDynStorage},
 };
 
 fn main() -> anyhow::Result<()> {
