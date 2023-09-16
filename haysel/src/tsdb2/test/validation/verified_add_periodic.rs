@@ -50,7 +50,7 @@ async fn every_step() {
             30.0 + (rand::random::<f32>() - 0.5) * 4.0
         };
         __time += x as i64;
-        DateTime::from_utc(
+        DateTime::from_naive_utc_and_offset(
             NaiveDateTime::from_timestamp_opt(__time, 0).unwrap(),
             chrono::Utc,
         )

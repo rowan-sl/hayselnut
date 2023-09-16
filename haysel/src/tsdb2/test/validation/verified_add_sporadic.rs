@@ -44,7 +44,7 @@ async fn every_step() {
     let mut get_time = || {
         let x = 120.0 + rand::random::<f32>() * 1200.0;
         __time += x as i64;
-        DateTime::from_utc(
+        DateTime::from_naive_utc_and_offset(
             NaiveDateTime::from_timestamp_opt(__time, 0).unwrap(),
             chrono::Utc,
         )

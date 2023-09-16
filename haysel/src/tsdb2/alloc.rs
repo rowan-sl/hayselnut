@@ -17,10 +17,14 @@ use self::{
     repr::{AllocCategoryHeader, AllocHeader, ChunkFlags, ChunkHeader},
 };
 
-mod tuning {
-    /// this determines the maximum number of sizes of allocations that can be kept track of.
-    pub const FREE_LIST_SIZE: usize = 128;
+macro_rules! tuning {
+    // this determines the maximum number of sizes of allocations that can be kept track of.
+    (FREE_LIST_SIZE) => {
+        128usize
+    };
 }
+
+pub(self) use tuning;
 
 /// trait that all storage backings for any allocator must implement.
 #[async_trait::async_trait]
@@ -114,8 +118,8 @@ impl<S: Storage + Send> Allocator<S> {
         }
 
         // verify that the tuning parameters are the same
-        if header.free_list_size != tuning::FREE_LIST_SIZE as u64 {
-            error!("The free list size of the loaded store is not the same as the currently configured size ({} vs {})", header.free_list_size, tuning::FREE_LIST_SIZE);
+        if header.free_list_size != tuning!(FREE_LIST_SIZE) as u64 {
+            error!("The free list size of the loaded store is not the same as the currently configured size ({} vs {})", header.free_list_size, tuning!(FREE_LIST_SIZE));
             return Err(AllocError::MismatchedParameters);
         }
 
@@ -166,7 +170,7 @@ impl<S: Storage + Send> Allocator<S> {
             {
                 header.free_list[new_entry_idx] = new_entry;
             } else {
-                error!("free list is full! since it is hopefully unlikely to have more than {} unique type sizes, this is probably a bug", tuning::FREE_LIST_SIZE);
+                error!("free list is full! since it is hopefully unlikely to have more than {} unique type sizes, this is probably a bug", tuning!(FREE_LIST_SIZE));
                 return Err(AllocError::FreeListFull);
             }
         }

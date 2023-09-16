@@ -1,6 +1,6 @@
 use std::{fmt::Debug, marker::PhantomData};
 
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 pub enum Void {}
 
@@ -54,6 +54,13 @@ impl<T> PartialEq for Ptr<T> {
     }
 }
 impl<T> Eq for Ptr<T> {}
+unsafe impl<T> FromZeroes for Ptr<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
 unsafe impl<T> FromBytes for Ptr<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where

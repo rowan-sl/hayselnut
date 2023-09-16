@@ -7,7 +7,7 @@ use super::{
     ptr::{Ptr, Void},
     Allocator, Storage, UntypedStorage,
 };
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 pub mod comptime_hacks {
     pub struct Condition<const B: bool>;
@@ -26,7 +26,7 @@ impl CLLIdx {
     pub async fn write<
         const N: usize,
         Store: Storage + Send,
-        T: AsBytes + FromBytes + Sync + Send + 'static,
+        T: AsBytes + FromZeroes + FromBytes + Sync + Send + 'static,
     >(
         &self,
         alloc: &mut Allocator<Store>,
@@ -47,7 +47,7 @@ impl CLLIdx {
 
 #[derive(Clone, Copy)]
 #[repr(C, align(8))]
-pub struct ChunkedLinkedList<const N: usize, T: AsBytes + FromBytes> {
+pub struct ChunkedLinkedList<const N: usize, T: AsBytes + FromZeroes + FromBytes> {
     pub next: Ptr<Self>,
     pub used: u64,
     pub data: [T; N],
@@ -79,7 +79,7 @@ pub const fn works<T>() -> bool {
     align_of::<T>() == 8 && size_of::<T>() % 8 == 0
 }
 
-impl<const N: usize, T: AsBytes + FromBytes + Sync + Send> ChunkedLinkedList<N, T>
+impl<const N: usize, T: AsBytes + FromZeroes + FromBytes + Sync + Send> ChunkedLinkedList<N, T>
 where
     Condition<{ works::<T>() }>: IsTrue,
 {
@@ -226,25 +226,44 @@ where
     }
 }
 
-// dont tell me what to do
-unsafe impl<const N: usize, T: AsBytes + FromBytes> AsBytes for ChunkedLinkedList<N, T>
-where
-    Condition<{ works::<T>() }>: IsTrue,
-{
-    fn only_derive_is_allowed_to_implement_this_trait()
-    where
-        Self: Sized,
-    {
-    }
+macro_rules! manual_zerocopy_impl {
+    ($type:ident; $cond:block; $($params:ident),*; $( $params_qual:tt )*) => {
+        // dont tell me what to do
+        #[allow(trivial_bounds)]
+        unsafe impl $($params_qual)* AsBytes for $type<$($params ,)*>
+            where $crate::tsdb2::alloc::util::comptime_hacks::Condition<$cond>: $crate::tsdb2::alloc::util::comptime_hacks::IsTrue,
+        {
+            fn only_derive_is_allowed_to_implement_this_trait()
+            where
+                Self: Sized,
+            {
+            }
+        }
+
+        #[allow(trivial_bounds)]
+        unsafe impl $($params_qual)* FromZeroes for $type<$($params ,)*>
+            where $crate::tsdb2::alloc::util::comptime_hacks::Condition<$cond>: $crate::tsdb2::alloc::util::comptime_hacks::IsTrue,
+        {
+            fn only_derive_is_allowed_to_implement_this_trait()
+            where
+                Self: Sized,
+            {
+            }
+        }
+
+        #[allow(trivial_bounds)]
+        unsafe impl $($params_qual)* FromBytes for $type<$($params ,)*>
+            where $crate::tsdb2::alloc::util::comptime_hacks::Condition<$cond>: $crate::tsdb2::alloc::util::comptime_hacks::IsTrue,
+        {
+            fn only_derive_is_allowed_to_implement_this_trait()
+            where
+                Self: Sized,
+            {
+            }
+        }
+    };
 }
 
-unsafe impl<const N: usize, T: AsBytes + FromBytes> FromBytes for ChunkedLinkedList<N, T>
-where
-    Condition<{ works::<T>() }>: IsTrue,
-{
-    fn only_derive_is_allowed_to_implement_this_trait()
-    where
-        Self: Sized,
-    {
-    }
-}
+pub(crate) use manual_zerocopy_impl;
+
+manual_zerocopy_impl!(ChunkedLinkedList; { works::<T>() }; N, T; <const N: usize, T: AsBytes + FromZeroes + FromBytes>);

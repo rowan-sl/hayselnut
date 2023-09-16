@@ -2,7 +2,7 @@ use super::alloc::Ptr;
 use chrono::{DateTime, Datelike, NaiveTime, Timelike, Utc};
 use static_assertions::const_assert_eq;
 use std::{fmt::Debug, mem};
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 pub trait Data: FromBytes + AsBytes + Clone {}
 impl<T: FromBytes + AsBytes + Clone> Data for T {}
@@ -58,7 +58,13 @@ impl<T: Data> Clone for Year<T> {
         }
     }
 }
-unsafe impl<T: Data> FromBytes for Year<T> {
+unsafe impl<T: Data> FromZeroes for Year<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}unsafe impl<T: Data> FromBytes for Year<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -172,6 +178,13 @@ impl<T: Data> Clone for TimeSegment<T> {
         }
     }
 }
+unsafe impl<T: Data> FromZeroes for TimeSegment<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
 unsafe impl<T: Data> FromBytes for TimeSegment<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
@@ -220,7 +233,13 @@ impl DayTime {
         NaiveTime::from_num_seconds_from_midnight_opt(self.secs, 0)
     }
 }
-
+unsafe impl FromZeroes for DayTime {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
 unsafe impl FromBytes for DayTime {
     fn only_derive_is_allowed_to_implement_this_trait()
     where

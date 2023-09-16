@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 use super::{
     ptr::{Ptr, Void},
@@ -15,7 +15,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, FromBytes, AsBytes)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct ChunkHeader {
     /// (ChunkFlags)
@@ -28,7 +28,7 @@ pub struct ChunkHeader {
     pub next: Ptr<ChunkHeader>,
 }
 
-#[derive(Clone, Copy, FromBytes, AsBytes)]
+#[derive(Clone, Copy, FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub struct AllocHeader {
     pub magic_bytes: [u8; 12],
@@ -47,7 +47,7 @@ pub struct AllocHeader {
     /// you do you have other problems.
     ///
     /// unused entries will have the number set to zero.
-    pub free_list: [AllocCategoryHeader; tuning::FREE_LIST_SIZE],
+    pub free_list: [AllocCategoryHeader; tuning!(FREE_LIST_SIZE)],
 }
 
 impl AllocHeader {
@@ -57,8 +57,8 @@ impl AllocHeader {
             _padding: [0u8; 4],
             entrypoint,
             used: std::mem::size_of::<Self>() as _,
-            free_list_size: tuning::FREE_LIST_SIZE as _,
-            free_list: <_ as FromBytes>::new_zeroed(),
+            free_list_size: tuning!(FREE_LIST_SIZE) as _,
+            free_list: <_ as FromZeroes>::new_zeroed(),
         }
     }
 
@@ -67,7 +67,7 @@ impl AllocHeader {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, FromBytes, AsBytes)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct AllocCategoryHeader {
     pub size: u64,

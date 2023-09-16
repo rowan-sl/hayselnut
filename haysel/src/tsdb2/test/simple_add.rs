@@ -48,7 +48,7 @@ pub async fn do_simple_add_periodic() -> (Uuid, Uuid, Vec<(DateTime<Utc>, f32)>,
             30.0 + (rand::random::<f32>() - 0.5) * 4.0
         };
         __time += x as i64;
-        DateTime::from_utc(
+        DateTime::from_naive_utc_and_offset(
             NaiveDateTime::from_timestamp_opt(__time, 0).unwrap(),
             chrono::Utc,
         )
@@ -89,7 +89,7 @@ pub async fn do_simple_add_sporadic() -> (Uuid, Uuid, Vec<(DateTime<Utc>, f32)>,
     let mut get_time = || {
         let x = 120.0 + rand::random::<f32>() * 1200.0;
         __time += x as i64;
-        DateTime::from_utc(
+        DateTime::from_naive_utc_and_offset(
             NaiveDateTime::from_timestamp_opt(__time, 0).unwrap(),
             chrono::Utc,
         )

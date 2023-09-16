@@ -10,11 +10,12 @@ use std::{
 
 use tokio::join;
 use uuid::Uuid;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 use crate::tsdb2::{
     alloc::{
         ptr::{Ptr, Void},
+        util::manual_zerocopy_impl,
         Storage, UntypedStorage,
     },
     repr::info::sfmt,
@@ -29,7 +30,7 @@ mod raid_ids {
 
 /// Header, present in all raid stores (written by this one)
 /// that describes this part's contribution, and the overall array (for verification uses)
-#[derive(Clone, Copy, FromBytes, AsBytes)]
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct RaidHeader {
     pub magic_bytes: [u8; 13],
@@ -42,6 +43,8 @@ struct RaidHeader {
     /// UUID of this array
     pub array_identifier: Uuid,
 }
+
+manual_zerocopy_impl!(RaidHeader; { true };;);
 
 #[derive(Debug, thiserror::Error)]
 #[error("Storage Error (store {0}, error {1}): {2:?}")]

@@ -22,7 +22,7 @@
 use chrono::{DateTime, Utc};
 use mycelium::station::{capabilities::ChannelID, identity::StationID};
 use num_enum::TryFromPrimitive;
-use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use self::{
     alloc::{
@@ -41,22 +41,40 @@ pub mod repr;
 #[cfg(test)]
 pub mod test;
 
-mod tuning {
+/// exports of tuning! as constants
+pub(self) mod c_tuning {
+    use super::tuning;
+
+    pub const STATION_MAP_CHUNK_SIZE: usize = tuning!(STATION_MAP_CHUNK_SIZE);
+    pub const CHANNEL_MAP_CHUNK_SIZE: usize = tuning!(CHANNEL_MAP_CHUNK_SIZE);
+    pub const DATA_GROUP_PERIODIC_SIZE: usize = tuning!(DATA_GROUP_PERIODIC_SIZE);
+    pub const DATA_GROUP_SPORADIC_SIZE: usize = tuning!(DATA_GROUP_SPORADIC_SIZE);
+}
+
+macro_rules! tuning {
     // low values to force using the list functionality.
     // for real use, set higher
-    pub const STATION_MAP_CHUNK_SIZE: usize = 16;
-    pub const CHANNEL_MAP_CHUNK_SIZE: usize = 16;
-    // pub const DATA_INDEX_CHUNK_SIZE: usize = 1;
-
+    (STATION_MAP_CHUNK_SIZE) => {
+        16usize
+    };
+    (CHANNEL_MAP_CHUNK_SIZE) => {
+        16usize
+    };
     // optimize for the largest size (ish) that does not exceed the limit of the delta-time system.
     // must multiply by 2 to get a multiple of 8 (be a multiple of 4) (note: real value is 1 smaller than specified here)
     //
     // if periodic data chunks are consistantly left empty decrease this, or if they are consistantly full increase it.
     // TODO: specify size in a more customizeable way?
-    pub const DATA_GROUP_PERIODIC_SIZE: usize = 4;
-    /// honestly probably does not matter, as long as having one of them in the database is not too much of a big deal.
-    pub const DATA_GROUP_SPORADIC_SIZE: usize = 4;
+    (DATA_GROUP_PERIODIC_SIZE) => {
+        4usize
+    };
+    // honestly probably does not matter, as long as having one of them in the database is not too much of a big deal.
+    (DATA_GROUP_SPORADIC_SIZE) => {
+        4usize
+    };
 }
+
+pub(self) use tuning;
 
 /// the database
 pub struct Database<Store: Storage> {
@@ -79,10 +97,10 @@ impl<Store: Storage + Send> Database<Store> {
             // the database, and it is used to get at everything else
             let map = Object::new_alloc(
                 &mut alloc,
-                ChunkedLinkedList::<{ tuning::STATION_MAP_CHUNK_SIZE }, repr::Station> {
+                ChunkedLinkedList::<{ tuning!(STATION_MAP_CHUNK_SIZE) }, repr::Station> {
                     next: Ptr::null(),
                     used: 0,
-                    data: [repr::Station::new_zeroed(); tuning::STATION_MAP_CHUNK_SIZE],
+                    data: [repr::Station::new_zeroed(); tuning!(STATION_MAP_CHUNK_SIZE)],
                 },
             )
             .await?
@@ -262,8 +280,8 @@ impl<Store: Storage + Send> Database<Store> {
         let gtype = repr::DataGroupType::try_from_primitive(channel.metadata.group_type)
             .expect("invalid group type");
         let gtype_size = match gtype {
-            repr::DataGroupType::Periodic => tuning::DATA_GROUP_PERIODIC_SIZE - 1,
-            repr::DataGroupType::Sporadic => tuning::DATA_GROUP_SPORADIC_SIZE,
+            repr::DataGroupType::Periodic => tuning!(DATA_GROUP_PERIODIC_SIZE) - 1,
+            repr::DataGroupType::Sporadic => tuning!(DATA_GROUP_SPORADIC_SIZE),
         } as u64;
 
         if channel.data.is_null() {
@@ -273,8 +291,8 @@ impl<Store: Storage + Send> Database<Store> {
                         // only one entry
                         avg_dt: 0,
                         _pad: 0,
-                        dt: [0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
-                        data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                        dt: [0; tuning!(DATA_GROUP_PERIODIC_SIZE) - 1],
+                        data: [0.0; tuning!(DATA_GROUP_PERIODIC_SIZE) - 1],
                     };
                     data.data[0] = reading;
                     let pointer = Object::new_alloc(&mut self.alloc, data)
@@ -285,8 +303,8 @@ impl<Store: Storage + Send> Database<Store> {
                 }
                 repr::DataGroupType::Sporadic => {
                     let mut data = repr::DataGroupSporadic {
-                        dt: [0; tuning::DATA_GROUP_SPORADIC_SIZE],
-                        data: [0.0; tuning::DATA_GROUP_SPORADIC_SIZE],
+                        dt: [0; tuning!(DATA_GROUP_SPORADIC_SIZE)],
+                        data: [0.0; tuning!(DATA_GROUP_SPORADIC_SIZE)],
                     };
                     data.data[0] = reading;
                     let pointer = Object::new_alloc(&mut self.alloc, data)
@@ -310,7 +328,7 @@ impl<Store: Storage + Send> Database<Store> {
             data.dispose_immutated();
             channel.data = data_pointer;
             channel_idx
-                .write::<{ tuning::CHANNEL_MAP_CHUNK_SIZE }, _, _>(&mut self.alloc, channel)
+                .write::<{ tuning!(CHANNEL_MAP_CHUNK_SIZE) }, _, _>(&mut self.alloc, channel)
                 .await?;
             return Ok(());
         }
@@ -496,7 +514,7 @@ impl<Store: Storage + Send> Database<Store> {
                             let avg_dt_move = helpers::calc_avg_dt(&abs_dt_move).unwrap();
                             let rel_dt_keep =
                                 helpers::calc_rel_dt(avg_dt_keep, &abs_dt_keep).unwrap();
-                            let mut rel_dt_move = [0i16; tuning::DATA_GROUP_PERIODIC_SIZE - 1];
+                            let mut rel_dt_move = [0i16; tuning!(DATA_GROUP_PERIODIC_SIZE) - 1];
                             rel_dt_move[0..abs_dt_move.len()].copy_from_slice(
                                 &helpers::calc_rel_dt(avg_dt_move, &abs_dt_move).unwrap(),
                             );
@@ -519,7 +537,7 @@ impl<Store: Storage + Send> Database<Store> {
                                         avg_dt: avg_dt_move,
                                         _pad: 0,
                                         dt: rel_dt_move,
-                                        data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
+                                        data: [0.0; tuning!(DATA_GROUP_PERIODIC_SIZE) - 1],
                                     };
                                     new_data.data[0..data_move.len()].copy_from_slice(&data_move);
                                     debug!("(Periodic, branch {}) - t={time} after(keep)={}, after(move)={} entry_dt={entry_dt} reading={reading} final (keep)={:?} final (move)={:?}", line!(), index.after, index.after + abs_dt_move[0] as i64, &*data, new_data);
@@ -541,7 +559,7 @@ impl<Store: Storage + Send> Database<Store> {
                                 None => {
                                     channel.data = new_entry_ptr;
                                     channel_idx
-                                        .write::<{ tuning::CHANNEL_MAP_CHUNK_SIZE }, _, _>(
+                                        .write::<{ tuning!(CHANNEL_MAP_CHUNK_SIZE) }, _, _>(
                                             &mut self.alloc,
                                             channel,
                                         )

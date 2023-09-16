@@ -93,7 +93,7 @@ impl<'a, Store: Storage + Send> QueryParams<'a, Store> {
                                 + (data.avg_dt as i64 * i as i64 + data.dt[i as usize] as i64);
                             if validate(time, readings.len()) {
                                 readings.push((
-                                    DateTime::from_utc(
+                                    DateTime::from_naive_utc_and_offset(
                                         NaiveDateTime::from_timestamp_opt(time, 0).unwrap(),
                                         Utc,
                                     ),
@@ -113,7 +113,7 @@ impl<'a, Store: Storage + Send> QueryParams<'a, Store> {
                             let time = index.after + data.dt[i as usize] as i64;
                             if validate(time, readings.len()) {
                                 readings.push((
-                                    DateTime::from_utc(
+                                    DateTime::from_naive_utc_and_offset(
                                         NaiveDateTime::from_timestamp_opt(time, 0).unwrap(),
                                         Utc,
                                     ),

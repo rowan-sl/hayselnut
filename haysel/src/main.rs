@@ -1,6 +1,7 @@
 #![allow(incomplete_features)]
 // num_enum!!!! (again)
 #![allow(non_upper_case_globals)]
+#![feature(trivial_bounds)]
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]
@@ -31,16 +32,17 @@ use trust_dns_resolver::TokioAsyncResolver;
 
 mod args;
 mod commands;
+mod config;
 mod consumer;
 mod ipc;
 mod log;
-pub mod paths;
-pub mod registry;
-pub mod route;
-pub mod shutdown;
-pub mod tsdb;
+mod paths;
+mod registry;
+mod route;
+mod shutdown;
+// pub mod tsdb;
 pub mod tsdb2;
-pub mod util;
+mod util;
 
 use args::ArgsParser;
 use consumer::{db::RecordDB, ipc::IPCConsumer};
@@ -212,7 +214,7 @@ async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
     let resolver = TokioAsyncResolver::tokio(
         resolveconf::ResolverConfig::default(),
         resolveconf::ResolverOpts::default(),
-    )?;
+    );
     let addrs = resolver
         .lookup_ip(url)
         .await?
