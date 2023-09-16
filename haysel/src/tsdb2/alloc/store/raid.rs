@@ -54,17 +54,20 @@ pub struct DynStorageError(
     Box<(dyn Error + Sync + Send + 'static)>,
 );
 
-struct DynStorage<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static>(T);
+pub struct DynStorage<
+    T: UntypedStorage<Error = E> + Sync + Send + 'static,
+    E: Error + Sync + Send + 'static,
+>(pub T);
 
 #[async_trait::async_trait]
-trait IsDynStorage: UntypedStorage + Send {
+pub trait IsDynStorage: UntypedStorage + Sync + Send + 'static {
     async fn close_boxed(self: Box<Self>) -> Result<(), <Self as UntypedStorage>::Error>;
     fn type_name(&self) -> &'static str;
 }
 
 #[async_trait::async_trait]
-impl<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static> IsDynStorage
-    for DynStorage<T, E>
+impl<T: UntypedStorage<Error = E> + Sync + Send + 'static, E: Error + Sync + Send + 'static>
+    IsDynStorage for DynStorage<T, E>
 {
     async fn close_boxed(self: Box<Self>) -> Result<(), <Self as UntypedStorage>::Error> {
         self.close().await
@@ -76,8 +79,41 @@ impl<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static> IsDynStorag
 }
 
 #[async_trait::async_trait]
-impl<T: UntypedStorage<Error = E>, E: Error + Sync + Send + 'static> UntypedStorage
-    for DynStorage<T, E>
+impl<E: Error + Sync + Send + 'static> UntypedStorage for Box<dyn IsDynStorage<Error = E>> {
+    type Error = E;
+    async fn read_buf(
+        &mut self,
+        at: Ptr<Void>,
+        amnt: u64,
+        into: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        (*self).read_buf(at, amnt, into).await
+    }
+    async fn write_buf(
+        &mut self,
+        at: Ptr<Void>,
+        amnt: u64,
+        from: &[u8],
+    ) -> Result<(), Self::Error> {
+        (*self).write_buf(at, amnt, from).await
+    }
+    async fn close(self) -> Result<(), Self::Error> {
+        self.close_boxed().await
+    }
+    async fn size(&mut self) -> Result<u64, Self::Error> {
+        (*self).size().await
+    }
+    async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error> {
+        (*self).expand_by(amnt).await
+    }
+    async fn resizeable(&mut self) -> Result<bool, Self::Error> {
+        (*self).resizeable().await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: UntypedStorage<Error = E> + Sync + Send + 'static, E: Error + Sync + Send + 'static>
+    UntypedStorage for DynStorage<T, E>
 {
     type Error = DynStorageError;
     async fn read_buf(
@@ -179,7 +215,10 @@ impl ArrayR0 {
         }
     }
 
-    pub async fn add_element<S: Storage + Send>(&mut self, elem: S) -> Result<(), RaidError> {
+    pub async fn add_element<S: Storage + Sync + Send>(
+        &mut self,
+        elem: S,
+    ) -> Result<(), RaidError> {
         if self.ready {
             return Err(RaidError::ModifyInitialized);
         }

@@ -9,7 +9,7 @@ use super::consumer::{Record, RecordConsumer};
 
 #[derive(Default)]
 pub struct Router {
-    consumers: Vec<Box<(dyn RecordConsumer + Send + Sync + 'static)>>,
+    consumers: Vec<Box<(dyn RecordConsumer + Send + 'static)>>,
 }
 
 impl Router {
@@ -17,10 +17,7 @@ impl Router {
         Self::default()
     }
 
-    pub fn with_consumer<C: RecordConsumer + Send + Sync + 'static>(
-        &mut self,
-        consumer: C,
-    ) -> &mut Self {
+    pub fn with_consumer<C: RecordConsumer + Send + 'static>(&mut self, consumer: C) -> &mut Self {
         self.consumers.push(Box::new(consumer));
         self
     }
@@ -31,7 +28,7 @@ impl Router {
         f: Fun,
     ) -> Result<()>
     where
-        Fun: FnMut(&'consumer mut Box<(dyn RecordConsumer + Send + Sync + 'static)>) -> Fut,
+        Fun: FnMut(&'consumer mut Box<(dyn RecordConsumer + Send + 'static)>) -> Fut,
         Fut: Future<Output = Result<()>> + 'result,
     {
         if join_all(self.consumers.iter_mut().map(f))

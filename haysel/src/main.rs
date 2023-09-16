@@ -5,6 +5,7 @@
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]
+#![feature(trait_upcasting)]
 
 #[macro_use]
 extern crate async_trait;
@@ -49,9 +50,18 @@ use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
-use tsdb2::{alloc::store::disk::DiskStore, Database};
+use tsdb2::{
+    alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
+    Database,
+};
 
-use crate::tsdb2::alloc::store::disk::DiskMode;
+use crate::tsdb2::alloc::{
+    store::{
+        disk::DiskMode,
+        raid::{self, DynStorage, IsDynStorage},
+    },
+    Storage, UntypedStorage,
+};
 
 fn main() -> anyhow::Result<()> {
     let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -70,13 +80,22 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
         commands::Delegation::RunMain(args) => args,
     };
 
+    info!("Reading configuration from {:?}", args.config);
+    if !tokio::fs::try_exists(args.config.clone()).await? {
+        error!("Configuration file does not exist!");
+        bail!("Configuration file does not exist!");
+    }
+    let cfg = config::open(args.config).await?;
+
     // trap the ctrl+csignal, will only start listening later in the main loop
     shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
-    let addrs = lookup_server_ip(args.url, args.port).await?;
+    let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
 
-    let records_dir = paths::RecordsPath::new(args.data_dir.canonicalize()?);
+    let records_dir = paths::RecordsPath::new(cfg.directory.data.canonicalize()?);
     records_dir.ensure_exists().await?;
+    let run_dir = paths::RecordsPath::new(cfg.directory.run.canonicalize()?);
+    run_dir.ensure_exists().await?;
 
     info!("Loading info for known stations");
     let mut stations =
@@ -109,26 +128,78 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
     debug!("Loading database");
     warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
     let db_router_client = {
-        let raw_path = if let Some(p) = args.alt_db {
-            p
-        } else {
-            records_dir.path("data.tsdb2")
+        let store: Box<(dyn IsDynStorage<Error = raid::DynStorageError> + 'static)> = match cfg
+            .database
+            .storage
+        {
+            config::StorageMode::default => {
+                let path = records_dir.path("data.tsdb2");
+                Box::new(DynStorage(
+                    DiskStore::new(&path, false, DiskMode::Dynamic).await?,
+                ))
+            }
+            config::StorageMode::file => {
+                if cfg.database.files.len() != 1 {
+                    if cfg.database.files.is_empty() {
+                        error!("Failed to create database storage: file mode is requested, but no file is provided");
+                    } else {
+                        error!("Failed to create database storage: file mode is requested, but more than one file is proveded (did you mean to enable RAID?)");
+                    }
+                    bail!("Failed to create database store");
+                }
+                let config::File { path, blockdevice } = cfg.database.files[0].clone();
+                Box::new(DynStorage(
+                    DiskStore::new(
+                        &path,
+                        false,
+                        if blockdevice {
+                            DiskMode::BlockDevice
+                        } else {
+                            DiskMode::Dynamic
+                        },
+                    )
+                    .await?,
+                ))
+            }
+            config::StorageMode::raid => {
+                if cfg.database.files.is_empty() {
+                    error!("Failed to create database storage: RAID mode is requested, but no file(s) are provided");
+                    bail!("Failed to create database store");
+                }
+                if cfg.database.files.len() == 1 {
+                    warn!("RAID mode is requested, but only one backing file is specified. this will cause unnecessary overhead, and it is recommended to switch to using single file mode");
+                }
+                let mut array = RaidArray::new();
+                for config::File { path, blockdevice } in cfg.database.files {
+                    let store = DiskStore::new(
+                        &path,
+                        false,
+                        if blockdevice {
+                            DiskMode::BlockDevice
+                        } else {
+                            DiskMode::Dynamic
+                        },
+                    )
+                    .await?;
+                    array.add_element(store).await?;
+                }
+                if args.overwrite_reinit {
+                    warn!("Deleting and Re-Initializing the RAID storage");
+                    array.wipe_all_your_data_away().await?;
+                }
+                debug!("Building array...");
+                array.build().await?;
+                Box::new(DynStorage(array))
+            }
         };
-        let path = raw_path.canonicalize()?;
-        debug!("database path ({raw_path:?}) resolves to {path:?}");
-        let mode = if args.is_blockdevice {
-            DiskMode::BlockDevice
-        } else {
-            DiskMode::Dynamic
-        };
-        let store = DiskStore::new(&path, false, mode).await?;
-        let database = Database::new(store, args.init_overwrite).await?;
+        let database = Database::new(store, args.overwrite_reinit).await?;
         RecordDB::new(database, shutdown.handle()).await?
     };
     info!("Database loaded");
 
-    debug!("Setting up IPC at {:?}", args.ipc_sock);
-    let ipc_router_client = IPCConsumer::new(args.ipc_sock, shutdown.handle()).await?;
+    let ipc_path = run_dir.path("ipc.sock");
+    debug!("Setting up IPC at {:?}", ipc_path);
+    let ipc_router_client = IPCConsumer::new(ipc_path, shutdown.handle()).await?;
     info!("IPC configured");
 
     let mut router = Router::new();

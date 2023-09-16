@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::Result;
 use serde::Deserialize;
 
 #[cfg(test)]
@@ -17,16 +18,28 @@ fn load_example_config() {
     println!("{:?}", settings.try_deserialize::<Config>().unwrap());
 }
 
+pub async fn open(path: PathBuf) -> Result<self::Config> {
+    let config_file = tokio::fs::read_to_string(path).await?;
+    let settings = config::Config::builder()
+        .add_source(config::File::from_str(
+            &config_file,
+            config::FileFormat::Toml,
+        ))
+        .build()?
+        .try_deserialize()?;
+    Ok(settings)
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Config {
     /// directories to store various things
-    directory: Directories,
+    pub directory: Directories,
     /// meta server info (url, port)
-    server: Server,
+    pub server: Server,
     /// database configuration
-    database: Database,
+    pub database: Database,
     /// misc
-    misc: Misc,
+    pub misc: Misc,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

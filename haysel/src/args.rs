@@ -47,31 +47,11 @@ pub enum Cmd {
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
-    #[arg(
-        short,
-        long,
-        help = "directory for station/channel ID records and the database to be placed"
-    )]
-    pub data_dir: PathBuf,
-    #[arg(short, long, help = "path of the unix socket for the servers IPC API")]
-    pub ipc_sock: PathBuf,
-    #[arg(short, long, help = "url of the server that this is to be run on")]
-    pub url: String,
-    #[arg(short, long, help = "port to run the server on")]
-    pub port: u16,
+    #[arg(long, short, help = "config filepath")]
+    pub config: PathBuf,
     #[arg(
         long,
-        help = "allow initiailizing a database using a file that contains data (this may cause silent deletion of corrupt databases, so it is recommended to only use this when running the server for the first time)"
+        help = "Delete the current database contents (if they exist) and re-initialize (must be passed on the first run if the database contains anything (e.g. is a physical disk) to prevent first-time init occurring accidentally)"
     )]
-    pub init_overwrite: bool,
-    #[arg(
-        long,
-        help = "allow using an aternate database file, instead of the default under `data_dir`. this allows for use of *special* files like block devices..."
-    )]
-    pub alt_db: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Use the disk storage's block device mode. required (and exclusively used for) using block devices as databases"
-    )]
-    pub is_blockdevice: bool,
+    pub overwrite_reinit: bool,
 }
