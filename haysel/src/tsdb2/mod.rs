@@ -866,8 +866,7 @@ impl<Store: Storage + Send> Database<Store> {
         Ok(())
     }
 
-    #[instrument(skip(self))]
-    pub async fn query<'a>(&'a mut self) -> QueryBuilder<'a, Store> {
+    pub fn query<'a>(&'a mut self) -> QueryBuilder<'a, Store> {
         QueryBuilder::new(self)
     }
 

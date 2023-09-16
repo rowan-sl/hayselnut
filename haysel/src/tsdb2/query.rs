@@ -48,7 +48,7 @@ impl<'a, Store: Storage + Send> QueryParams<'a, Store> {
             Object::new_read(&mut db.alloc, channel.data).await?
         };
 
-        if after_time.is_none() && before_time.is_none() {
+        if after_time.is_none() && before_time.is_none() && max_results.is_none() {
             warn!(
                 "A query has been made for *all* values in the database. This may take a moment..."
             );
@@ -72,7 +72,7 @@ impl<'a, Store: Storage + Send> QueryParams<'a, Store> {
                 // is this index before the `before` time (if specified)
                 // if this fails, we do not exit, but rather skip to the next (if it exists)
                 // because it could be before the `before` time
-                if before_time.is_none() || before_time.unwrap().timestamp() > index.after {
+                if !(before_time.is_none() || before_time.unwrap().timestamp() > index.after) {
                     break 'read_index;
                 }
 
