@@ -549,6 +549,7 @@ impl<Store: Storage + Send> Database<Store> {
                                 }
                             }
                         }
+                        #[allow(unreachable_code)]
                         repr::DataGroupType::Sporadic => {
                             // this is validated by the match statement, but just in case.
                             // - means that ALL entries in `data.dt` and `data.data` are currently in use.
