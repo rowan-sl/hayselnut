@@ -89,9 +89,9 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
 
     let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
 
-    let records_dir = paths::RecordsPath::new(cfg.directory.data.canonicalize()?);
+    let records_dir = paths::RecordsPath::new(cfg.directory.data);
     records_dir.ensure_exists().await?;
-    let run_dir = paths::RecordsPath::new(cfg.directory.run.canonicalize()?);
+    let run_dir = paths::RecordsPath::new(cfg.directory.run);
     run_dir.ensure_exists().await?;
 
     info!("Loading info for known stations");
