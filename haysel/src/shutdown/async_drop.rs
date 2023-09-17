@@ -1,4 +1,4 @@
-use futures::{pending, Future};
+use futures::Future;
 use tokio::runtime;
 
 use crate::shutdown;
@@ -12,7 +12,6 @@ pub struct AsyncDrop {
 
 impl AsyncDrop {
     pub async fn new(shutdown: ShutdownHandle) -> Self {
-        pending!();
         Self {
             handle: runtime::Handle::current(),
             shutdown: Some(shutdown),
