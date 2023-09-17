@@ -3,7 +3,7 @@ data = "data/"
 run = "run/"
 
 [server]
-url = "https://example.com"
+url = "example.com"
 port = 8998
 
 [database]
