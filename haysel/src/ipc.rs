@@ -81,7 +81,6 @@ pub async fn ipc_task(
                             mycelium::ipc_send(&mut sock, &initial_packet).await?;
                             loop {
                                 select! {
-                                    // TODO: notify clients of server closure
                                     _ = handle.wait_for_shutdown() => {
                                         mycelium::ipc_send(&mut sock, &IPCMsg { kind: mycelium::IPCMsgKind::Bye }).await?;
                                         break;
