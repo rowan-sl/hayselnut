@@ -6,6 +6,7 @@ use std::{
     error::Error,
     fmt::Write,
     mem::{replace, size_of, swap},
+    ops::DerefMut,
 };
 
 use tokio::join;
@@ -87,7 +88,9 @@ impl<E: Error + Sync + Send + 'static> UntypedStorage for Box<dyn IsDynStorage<E
         amnt: u64,
         into: &mut [u8],
     ) -> Result<(), Self::Error> {
-        (*self).read_buf(at, amnt, into).await
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.read_buf(at, amnt, into).await
     }
     async fn write_buf(
         &mut self,
@@ -95,19 +98,27 @@ impl<E: Error + Sync + Send + 'static> UntypedStorage for Box<dyn IsDynStorage<E
         amnt: u64,
         from: &[u8],
     ) -> Result<(), Self::Error> {
-        (*self).write_buf(at, amnt, from).await
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.write_buf(at, amnt, from).await
     }
     async fn close(self) -> Result<(), Self::Error> {
         self.close_boxed().await
     }
     async fn size(&mut self) -> Result<u64, Self::Error> {
-        (*self).size().await
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.size().await
     }
     async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error> {
-        (*self).expand_by(amnt).await
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.expand_by(amnt).await
     }
     async fn resizeable(&mut self) -> Result<bool, Self::Error> {
-        (*self).resizeable().await
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.resizeable().await
     }
 }
 
