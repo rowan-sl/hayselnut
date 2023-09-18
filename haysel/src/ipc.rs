@@ -3,6 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::Result;
 use flume::Receiver;
 use mycelium::{
+    ipc_recv_cancel_safe,
     station::{capabilities::KnownChannels, identity::KnownStations},
     IPCMsg,
 };
@@ -71,6 +72,8 @@ pub async fn ipc_task(
                     let (mut sock, addr) = res?;
                     let mut recv = ipc_broadcast_queue.subscribe();
                     let mut handle = shutdown_ipc.handle();
+                    let mut buffer = vec![];
+                    let mut buf_amnt = 0usize;
                     debug!("Connecting to new IPC client at {addr:?}");
                     let initial_packet = IPCMsg { kind: mycelium::IPCMsgKind::Haiii {
                         stations: cache_stations.clone(),
@@ -84,6 +87,10 @@ pub async fn ipc_task(
                                     _ = handle.wait_for_shutdown() => {
                                         mycelium::ipc_send(&mut sock, &IPCMsg { kind: mycelium::IPCMsgKind::Bye }).await?;
                                         break;
+                                    }
+                                    res = ipc_recv_cancel_safe::<IPCMsg>(&mut buffer, &mut buf_amnt, &mut sock) => {
+                                        let msg = res?;
+                                        trace!("IPC: Received {msg:?}");
                                     }
                                     res = recv.recv() => {
                                         mycelium::ipc_send(&mut sock, &res?).await?

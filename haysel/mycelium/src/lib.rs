@@ -5,7 +5,7 @@ extern crate serde;
 #[macro_use]
 extern crate thiserror;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::repeat};
 
 use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Serialize};
@@ -23,6 +23,8 @@ pub enum IPCError {
     IO(#[from] io::Error),
     #[error("Serialize/Deserialize failed {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("Reader reached EOF")]
+    EOF,
 }
 
 /// Write a IPC packet to a stream.
@@ -52,6 +54,38 @@ pub async fn ipc_recv<T: DeserializeOwned>(
     let mut buf = vec![0u8; amnt as _];
     socket.read_exact(&mut buf).await?;
     Ok(serde_json::from_slice(&buf)?)
+}
+
+/// same as ipc_recv, but cancel safe
+pub async fn ipc_recv_cancel_safe<T: DeserializeOwned>(
+    buffer: &mut Vec<u8>,
+    amnt: &mut usize,
+    socket: &mut (impl AsyncReadExt + Unpin),
+) -> Result<T, IPCError> {
+    loop {
+        assert!(*amnt <= buffer.len());
+        if *amnt == buffer.len() {
+            buffer.extend(repeat(0).take(128));
+        }
+        if *amnt < 8 {
+            match socket.read(&mut buffer[*amnt..]).await? {
+                0 => return Err(IPCError::EOF),
+                n => *amnt += n,
+            }
+        } else {
+            let the_rest = u64::from_be_bytes(buffer[..8].try_into().unwrap()) as usize;
+            if *amnt < 8 + the_rest {
+                match socket.read(&mut buffer[*amnt..]).await? {
+                    0 => return Err(IPCError::EOF),
+                    n => *amnt += n,
+                }
+            } else {
+                buffer.copy_within(8 + the_rest..*amnt, 0);
+                *amnt = 0;
+                return Ok(serde_json::from_slice(&buffer[8..][..the_rest])?);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
