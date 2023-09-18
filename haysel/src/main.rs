@@ -63,10 +63,17 @@ use crate::tsdb2::alloc::store::{
 fn main() -> anyhow::Result<()> {
     let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
     let mut shutdown = Shutdown::new();
-    runtime.block_on(async_main(&mut shutdown))?;
-    shutdown.trigger_shutdown();
-    runtime.shutdown_timeout(Duration::from_secs(60 * 5));
-    Ok(())
+    let result = runtime.block_on(async {
+        let result = async_main(&mut shutdown).await;
+        if let Err(e) = &result {
+            error!("Main task exited with error: {e:?}");
+        }
+        shutdown.trigger_shutdown();
+        info!("shut down - waiting for tasks to stop");
+        shutdown.wait_for_completion().await;
+        result
+    });
+    result
 }
 
 async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
@@ -186,6 +193,7 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
                 }
                 debug!("Building array...");
                 array.build().await?;
+                array.print_info().await?;
                 Box::new(DynStorage(array))
             }
         };
@@ -196,6 +204,9 @@ async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
 
     let ipc_path = run_dir.path("ipc.sock");
     debug!("Setting up IPC at {:?}", ipc_path);
+    if tokio::fs::try_exists(&ipc_path).await? {
+        tokio::fs::remove_file(&ipc_path).await?;
+    }
     let ipc_router_client = IPCConsumer::new(ipc_path, shutdown.handle()).await?;
     info!("IPC configured");
 
