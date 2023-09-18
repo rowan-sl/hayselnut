@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use flume::Receiver;
@@ -6,7 +6,7 @@ use mycelium::{
     station::{capabilities::KnownChannels, identity::KnownStations},
     IPCMsg,
 };
-use tokio::{net::UnixListener, select, spawn, sync};
+use tokio::{net::UnixListener, select, spawn, sync, time::sleep};
 
 use crate::{route::StationInfoUpdate, shutdown::ShutdownHandle};
 
@@ -48,8 +48,20 @@ pub async fn ipc_task(
                     break;
                 }
                 recv = ipc_task_rx.recv_async() => {
+                    let recv = match recv {
+                        Err(flume::RecvError::Disconnected) => {
+                            select! {
+                                _ = handle.wait_for_shutdown() => { break }
+                                _ = sleep(Duration::from_secs(10)) => {
+                                    error!("IPC task disconnected, but did not receive a shutdown signal within 5 seconds");
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(x) => x,
+                    };
                     handle_recv(
-                        recv?,
+                        recv,
                         &ipc_broadcast_queue,
                         &mut cache_stations,
                         &mut cache_channels
