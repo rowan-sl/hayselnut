@@ -14,8 +14,15 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
+use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, process, time::Duration};
+
 use anyhow::Result;
 use clap::Parser;
+use nix::{
+    sys::signal::{kill, Signal},
+    unistd::{daemon, Pid},
+};
+use paths::RecordsPath;
 use squirrel::{
     api::{
         station::{
@@ -26,7 +33,6 @@ use squirrel::{
     },
     transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
 };
-use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, time::Duration};
 use tokio::{net::UdpSocket, runtime, select};
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
@@ -45,7 +51,7 @@ mod shutdown;
 pub mod tsdb2;
 mod util;
 
-use args::ArgsParser;
+use args::{ArgsParser, RunArgs};
 use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
 use route::{Router, StationInfoUpdate};
@@ -61,45 +67,118 @@ use crate::tsdb2::alloc::store::{
 };
 
 fn main() -> anyhow::Result<()> {
-    let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
-    let mut shutdown = Shutdown::new();
-    let result = runtime.block_on(async {
-        let result = async_main(&mut shutdown).await;
-        if let Err(e) = &result {
-            error!("Main task exited with error: {e:?}");
-        }
-        shutdown.trigger_shutdown();
-        info!("shut down - waiting for tasks to stop");
-        shutdown.wait_for_completion().await;
-        result
-    });
-    result
-}
-
-async fn async_main(shutdown: &mut Shutdown) -> anyhow::Result<()> {
+    let args = ArgsParser::parse();
     log::init_logging()?;
 
-    let args = match commands::delegate(ArgsParser::parse()).await {
-        commands::Delegation::SubcommandRan(result) => return result,
-        commands::Delegation::RunMain(args) => args,
+    let run_args;
+    match args {
+        ArgsParser {
+            cmd: args::Cmd::Run { args },
+        } => run_args = args,
+        ArgsParser {
+            cmd: args::Cmd::Kill { config },
+        } => {
+            info!("Reading configuration from {:?}", config);
+            if !config.exists() {
+                error!("Configuration file does not exist!");
+                bail!("Configuration file does not exist!");
+            }
+
+            let cfg = {
+                let buf = std::fs::read_to_string(&config)?;
+                self::config::from_str(&buf)?
+            };
+
+            let run_dir = paths::RecordsPath::new(cfg.directory.run.clone());
+            run_dir.ensure_exists_blocking()?;
+            let pid_file = run_dir.path("daemon.lock");
+            if !pid_file.try_exists()? {
+                warn!("No known haysel daemon is currently running, exiting with no-op");
+                return Ok(());
+            }
+            let pid_txt = std::fs::read_to_string(pid_file)?;
+            let pid = pid_txt
+                .parse::<u32>()
+                .map_err(|e| anyhow!("failed to parse PID: {e:?}"))?;
+            info!("Killing process {pid} - sending SIGINT (ctrl+c) to allow for gracefull shutdown\nThe PID file will only be removed when the server has exited");
+            kill(Pid::from_raw(pid.try_into()?), Some(Signal::SIGINT))?;
+            return Ok(());
+        }
+        other => {
+            let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
+            return runtime.block_on(commands::delegate(other));
+        }
     };
 
-    info!("Reading configuration from {:?}", args.config);
-    if !tokio::fs::try_exists(args.config.clone()).await? {
+    info!("Reading configuration from {:?}", run_args.config);
+    if !run_args.config.exists() {
         error!("Configuration file does not exist!");
         bail!("Configuration file does not exist!");
     }
-    let cfg = config::open(args.config).await?;
 
+    let cfg = {
+        let buf = std::fs::read_to_string(&run_args.config)?;
+        self::config::from_str(&buf)?
+    };
+
+    let records_dir = paths::RecordsPath::new(cfg.directory.data.clone());
+    records_dir.ensure_exists_blocking()?;
+    let run_dir = paths::RecordsPath::new(cfg.directory.run.clone());
+    run_dir.ensure_exists_blocking()?;
+
+    let pid_file = run_dir.path("daemon.lock");
+    if pid_file.try_exists()? {
+        error!("A server is already running, refusing to start!");
+        info!("If this is incorrect, remove the `daemon.lock` file and try again");
+        bail!("Server already started");
+    }
+
+    if run_args.daemonize {
+        debug!("Forking!");
+        daemon(true, true)?;
+        info!("[daemon] - copying logs ")
+    }
+    debug!("Writing PID file {:?}", pid_file);
+    let pid = process::id();
+    std::fs::write(&pid_file, format!("{pid}").as_bytes())?;
+
+    debug!("Launching async runtime");
+    let result = std::panic::catch_unwind(move || {
+        let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
+        let mut shutdown = Shutdown::new();
+        runtime.block_on(async {
+            let result = async_main(cfg, run_args, &mut shutdown, records_dir, run_dir).await;
+            if let Err(e) = &result {
+                error!("Main task exited with error: {e:?}");
+            }
+            shutdown.trigger_shutdown();
+            info!("shut down - waiting for tasks to stop");
+            shutdown.wait_for_completion().await;
+            result
+        })
+    });
+    debug!("Deleting PID file {:?}", pid_file);
+    std::fs::remove_file(&pid_file)?;
+    match result {
+        Ok(inner) => inner,
+        Err(err) => {
+            error!("Main thread panic! - stuff is likely messed up: {err:?}");
+            bail!("Main thread panic!");
+        }
+    }
+}
+
+async fn async_main(
+    cfg: self::config::Config,
+    args: RunArgs,
+    shutdown: &mut Shutdown,
+    records_dir: RecordsPath,
+    run_dir: RecordsPath,
+) -> anyhow::Result<()> {
     // trap the ctrl+csignal, will only start listening later in the main loop
     shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
     let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
-
-    let records_dir = paths::RecordsPath::new(cfg.directory.data);
-    records_dir.ensure_exists().await?;
-    let run_dir = paths::RecordsPath::new(cfg.directory.run);
-    run_dir.ensure_exists().await?;
 
     info!("Loading info for known stations");
     let mut stations =

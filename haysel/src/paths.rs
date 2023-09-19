@@ -13,7 +13,7 @@ impl RecordsPath {
         Self { records_dir: path }
     }
 
-    pub async fn ensure_exists(&self) -> Result<()> {
+    pub fn ensure_exists_blocking(&self) -> Result<()> {
         if self.records_dir.exists() {
             if !self.records_dir.canonicalize()?.is_dir() {
                 error!("records directory path already exists, and is a file!");
@@ -21,7 +21,7 @@ impl RecordsPath {
             }
         } else {
             info!("Creating new records directory at {:#?}", self.records_dir);
-            tokio::fs::create_dir(self.records_dir.clone()).await?;
+            std::fs::create_dir(self.records_dir.clone())?;
         }
         Ok(())
     }

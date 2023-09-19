@@ -43,6 +43,11 @@ pub enum Cmd {
         )]
         is_blockdevice: bool,
     },
+    /// kill the currently running haysel daemon (if there is one)
+    Kill {
+        #[arg(long, short, help = "config filepath")]
+        config: PathBuf,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -54,4 +59,9 @@ pub struct RunArgs {
         help = "Delete the current database contents (if they exist) and re-initialize (must be passed on the first run if the database contains anything (e.g. is a physical disk) to prevent first-time init occurring accidentally)"
     )]
     pub overwrite_reinit: bool,
+    #[arg(
+        long,
+        help = "Start and then immedietally fork, running in the background untill killed with `haysel kill`"
+    )]
+    pub daemonize: bool,
 }

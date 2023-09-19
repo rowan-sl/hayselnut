@@ -18,13 +18,9 @@ fn load_example_config() {
     println!("{:?}", settings.try_deserialize::<Config>().unwrap());
 }
 
-pub async fn open(path: PathBuf) -> Result<self::Config> {
-    let config_file = tokio::fs::read_to_string(path).await?;
+pub fn from_str(conf: &str) -> Result<self::Config> {
     let settings = config::Config::builder()
-        .add_source(config::File::from_str(
-            &config_file,
-            config::FileFormat::Toml,
-        ))
+        .add_source(config::File::from_str(conf, config::FileFormat::Toml))
         .build()?
         .try_deserialize()?;
     Ok(settings)
