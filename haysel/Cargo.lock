@@ -446,6 +446,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dabus"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323f3c35f7a50febc5bf9f629f8f8c644e34ca470aaa3002afa9d6a0df745285"
+dependencies = [
+ "async-trait",
+ "flume 0.10.14",
+ "futures",
+ "log",
+ "thiserror",
+ "unique-type",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -530,6 +544,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "flume"
+version = "0.10.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1657b4441c3403d9f7b3409e47575237dac27b1b5726df654a6ecbf92f0f7577"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "nanorand",
+ "pin-project",
+ "spin",
 ]
 
 [[package]]
@@ -711,8 +738,9 @@ dependencies = [
  "chrono",
  "clap",
  "config",
+ "dabus",
  "derivative",
- "flume",
+ "flume 0.11.0",
  "futures",
  "haysel_macro",
  "mycelium",
@@ -728,6 +756,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "tracing-test",
  "trust-dns-resolver",
@@ -1217,6 +1246,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fda4ed1c6c173e3fc7a83629421152e01d7b1f9b7f65fb301e490e8cfc656422"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4359fd9c9171ec6e8c62926d6faaf553a8dc3f64e1507e76da7911b4f6a04405"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.35",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1610,7 +1659,7 @@ dependencies = [
 name = "squirrel"
 version = "0.1.0"
 dependencies = [
- "flume",
+ "flume 0.11.0",
  "futures",
  "log",
  "num_enum 0.6.1",
@@ -1923,6 +1972,12 @@ checksum = "5c5713f0fc4b5db668a2ac63cdb7bb4469d8c9fed047b1d0292cc7b0ce2ba921"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unique-type"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65276803d5c0b9aeb522fffd31e97ec312a60344f6d345dfa640e809038c740f"
 
 [[package]]
 name = "url"

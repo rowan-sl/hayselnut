@@ -1,5 +1,6 @@
 use anyhow::Result;
 use tracing::metadata::LevelFilter;
+use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub fn init_logging() -> Result<()> {
@@ -14,5 +15,6 @@ pub fn init_logging() -> Result<()> {
             .pretty()
             .finish(),
     )?;
+    LogTracer::init()?;
     Ok(())
 }
