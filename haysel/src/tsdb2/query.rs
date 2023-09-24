@@ -17,13 +17,16 @@ impl<'a, Store: Storage + Send> QueryParams<'a, Store> {
         self,
     ) -> Result<Vec<(DateTime<Utc>, f32)>, DBError<<Store as UntypedStorage>::Error>> {
         let QueryParams {
-            db,
+            db: Some(db),
             station,
             channel,
             max_results,
             before_time,
             after_time,
-        } = self;
+        } = self
+        else {
+            unreachable!()
+        };
         let (station, channel) = (station.unwrap(), channel.unwrap());
         let mut readings = Vec::new();
 

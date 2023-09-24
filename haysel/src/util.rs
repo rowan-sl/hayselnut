@@ -8,8 +8,18 @@ impl<T> Take<T> {
         Self(Some(val))
     }
 
+    pub fn empty() -> Self {
+        Self(None)
+    }
+
     pub fn take(&mut self) -> T {
         self.0.take().unwrap()
+    }
+
+    pub fn put(&mut self, val: T) -> Option<T> {
+        let x = self.0.take();
+        self.0 = Some(val);
+        x
     }
 }
 

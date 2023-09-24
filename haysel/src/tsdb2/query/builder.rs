@@ -5,6 +5,7 @@ use mycelium::station::{capabilities::ChannelID, identity::StationID};
 
 use crate::tsdb2::{
     alloc::{
+        store::void::VoidStorage,
         util::comptime_hacks::{Condition, IsTrue},
         Storage,
     },
@@ -28,7 +29,7 @@ static_assertions::const_assert_eq!(0b011, 3);
 static_assertions::const_assert_eq!(0b11, 3);
 
 pub struct QueryBuilder<'a, Store: Storage + Send, const STEP: usize = INITIAL> {
-    pub(super) db: &'a mut Database<Store>,
+    pub(super) db: Option<&'a mut Database<Store>>,
     pub(super) station: Option<StationID>,
     pub(super) channel: Option<ChannelID>,
     pub(super) max_results: Option<usize>,
@@ -37,11 +38,41 @@ pub struct QueryBuilder<'a, Store: Storage + Send, const STEP: usize = INITIAL> 
 }
 
 pub type QueryParams<'a, Store> = QueryBuilder<'a, Store, VERIFIED>;
+pub type QueryParamsNoDB = QueryBuilder<'static, VoidStorage, VERIFIED>;
+
+impl QueryParamsNoDB {
+    pub fn with_db<'a, Store: Storage + Send>(
+        self,
+        db: &'a mut Database<Store>,
+    ) -> QueryParams<'a, Store> {
+        QueryParams {
+            db: Some(db),
+            station: self.station,
+            channel: self.channel,
+            max_results: self.max_results,
+            after_time: self.after_time,
+            before_time: self.before_time,
+        }
+    }
+}
+
+impl QueryBuilder<'static, VoidStorage, INITIAL> {
+    pub fn new_nodb() -> Self {
+        Self {
+            db: None,
+            station: None,
+            channel: None,
+            max_results: None,
+            after_time: None,
+            before_time: None,
+        }
+    }
+}
 
 impl<'a, Store: Storage + Send> QueryBuilder<'a, Store, INITIAL> {
     pub(in crate::tsdb2) fn new(db: &'a mut Database<Store>) -> Self {
         Self {
-            db,
+            db: Some(db),
             station: None,
             channel: None,
             max_results: None,

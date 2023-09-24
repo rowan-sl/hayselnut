@@ -8,6 +8,7 @@ pub mod disk;
 pub mod raid;
 #[cfg(test)]
 pub mod test;
+pub mod void;
 
 /// trait that all storage backings for any allocator must implement.
 #[async_trait::async_trait]
