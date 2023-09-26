@@ -1,26 +1,90 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{self, AtomicU64},
+        atomic::{self, AtomicPtr, AtomicU64},
         Arc,
     },
+    time::Duration,
 };
 
+use anyhow::Result;
 use dabus::extras::DynVar;
-use tokio::{spawn, sync::broadcast};
+use tokio::{spawn, sync::broadcast, time::timeout};
 use uuid::Uuid;
 
 pub mod async_fn_ptr;
+
+use crate::flag::Flag;
 
 use self::async_fn_ptr::HandlerCallableErased;
 
 use super::{
     id::Uid,
-    msg::{self, Msg, Str},
+    msg::{self, HandlerInstance, Msg, Str},
     MgmntMsg,
 };
 
 pub struct Interface;
+
+pub(in crate::bus) async fn bus_dispatch_event(
+    uid_src: Arc<AtomicU64>,
+    comm: broadcast::Sender<Arc<Msg>>,
+    _mgmnt_comm: flume::Sender<MgmntMsg>,
+    source: HandlerInstance,
+    target: msg::Target,
+    method: msg::MethodID,
+    arguments: DynVar,
+) -> Result<Option<DynVar>> {
+    let message_id = Uid::gen_with(&uid_src);
+    let mut has_response = false;
+    let response = if let msg::Target::Instance(..) = target {
+        has_response = true;
+        Some(msg::Responder {
+            value: AtomicPtr::new(0 as *mut _),
+            waker: Flag::new(),
+        })
+    } else {
+        None
+    };
+    let message = Arc::new(msg::Msg {
+        id: message_id,
+        kind: msg::MsgKind::Request {
+            source,
+            target,
+            method,
+            arguments,
+            response,
+        },
+    });
+    comm.send(message.clone())?;
+    if has_response {
+        let msg::MsgKind::Request {
+            response: Some(responder),
+            ..
+        } = &message.kind
+        else {
+            unreachable!()
+        };
+        if let Ok(..) = timeout(Duration::from_secs(60), &responder.waker).await {
+            let pointer = responder.value.load(atomic::Ordering::SeqCst);
+            if pointer.is_null() {
+                error!("Responder waker was triggered, but no response was found");
+                bail!("Received null response");
+            } else {
+                // Saftey: no other (correctly implemented) handlers should read and use a value.
+                // TODO: safe code can do things that violate the saftey of this (by putting a
+                // dangleing pointer in this field)
+                let boxed = unsafe { Box::from_raw(pointer) };
+                Ok(Some(*boxed))
+            }
+        } else {
+            error!("Waiting for response timed out");
+            bail!("timeout waiting for response");
+        }
+    } else {
+        Ok(None)
+    }
+}
 
 pub(in crate::bus) async fn handler_task_rt_launch(
     // Bus stuff

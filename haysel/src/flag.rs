@@ -30,6 +30,26 @@ impl Flag {
 
 impl Future for Flag {
     type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // quick check to avoid registration if already done.
+        if self.set.load(Relaxed) {
+            return Poll::Ready(());
+        }
+
+        self.waker.register(cx.waker());
+
+        // Need to check condition **after** `register` to avoid a race
+        // condition that would result in lost notifications.
+        if self.set.load(Relaxed) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl Future for &Flag {
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         // quick check to avoid registration if already done.
