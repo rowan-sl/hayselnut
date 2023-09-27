@@ -56,7 +56,11 @@ pub(in crate::bus) async fn bus_dispatch_event(
             response,
         },
     });
-    comm.send(message.clone())?;
+    // avoid erroring when no tasks are watching the channel
+    if let Err(..) = comm.send(message.clone()) {
+        trace!("Sent message, but no one is listening - silently failing");
+        return Ok(None);
+    }
     if has_response {
         let msg::MsgKind::Request {
             response: Some(responder),
