@@ -24,18 +24,21 @@ use super::{
     MgmntMsg,
 };
 
-pub struct Interface;
+#[derive(Clone)]
+pub struct Interface {
+    pub(in crate::bus) uid_src: Arc<AtomicU64>,
+    pub(in crate::bus) comm: broadcast::Sender<Arc<Msg>>,
+    pub(in crate::bus) mgmnt_comm: flume::Sender<MgmntMsg>,
+}
 
 pub(in crate::bus) async fn bus_dispatch_event(
-    uid_src: Arc<AtomicU64>,
-    comm: broadcast::Sender<Arc<Msg>>,
-    _mgmnt_comm: flume::Sender<MgmntMsg>,
+    int: Interface,
     source: HandlerInstance,
     target: msg::Target,
     method: msg::MethodID,
     arguments: DynVar,
 ) -> Result<Option<DynVar>> {
-    let message_id = Uid::gen_with(&uid_src);
+    let message_id = Uid::gen_with(&int.uid_src);
     let mut has_response = false;
     let response = if let msg::Target::Instance(..) = target {
         has_response = true;
@@ -57,7 +60,7 @@ pub(in crate::bus) async fn bus_dispatch_event(
         },
     });
     // avoid erroring when no tasks are watching the channel
-    if let Err(..) = comm.send(message.clone()) {
+    if let Err(..) = int.comm.send(message.clone()) {
         trace!("Sent message, but no one is listening - silently failing");
         return Ok(None);
     }
@@ -92,9 +95,7 @@ pub(in crate::bus) async fn bus_dispatch_event(
 
 pub(in crate::bus) async fn handler_task_rt_launch(
     // Bus stuff
-    uid_src: Arc<AtomicU64>,
-    comm: broadcast::Sender<Arc<Msg>>,
-    _mgmnt_comm: flume::Sender<MgmntMsg>,
+    int: Interface,
     // handler stuff
     handler_id: Uuid,
     mut handler: DynVar,
@@ -102,7 +103,7 @@ pub(in crate::bus) async fn handler_task_rt_launch(
     method_map: HashMap<Uuid, Method>,
 ) -> HandlerInstance {
     // instance-spacific UID of this handler
-    let handler_inst_id = Uid::gen_with(&uid_src);
+    let handler_inst_id = Uid::gen_with(&int.uid_src);
     #[cfg(feature = "bus_dbg")]
     let handler_inst_desc = Str::from("todo: instance descriptions");
     let inst = HandlerInstance {
@@ -115,7 +116,7 @@ pub(in crate::bus) async fn handler_task_rt_launch(
     };
     // this must be before the task is launched, so that a handler will start receiving
     // as soon as the launch function (this one) is called.
-    let mut comm_recv = comm.subscribe();
+    let mut comm_recv = int.comm.subscribe();
     spawn(async move {
         let res = async {
             'recv_next: loop {
@@ -156,7 +157,7 @@ pub(in crate::bus) async fn handler_task_rt_launch(
                             continue 'recv_next;
                         }
                         let func = &method_val.unwrap().handler_func;
-                        match func.call(&mut handler, arguments, Interface) {
+                        match func.call(&mut handler, arguments, int.clone()) {
                             Ok(future) => {
                                 let result = future.await;
                                 // if a response is desired, it is sent back.

@@ -53,6 +53,14 @@ impl Bus {
         bus.mgmnt_task.put(mgnmt_task);
         bus
     }
+
+    pub fn interface(&self) -> handler::Interface {
+        handler::Interface {
+            uid_src: self.uid_src.clone(),
+            comm: self.comm.clone(),
+            mgmnt_comm: self.mgmnt_comm.clone(),
+        }
+    }
 }
 
 async fn mgmnt_launch(bus: &Bus, mgmnt_comm: flume::Receiver<MgmntMsg>) -> JoinHandle<()> {

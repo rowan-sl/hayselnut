@@ -33,9 +33,7 @@ async fn bus_send_message() {
     }
     const HDL_FN_1_ID: Uuid = const_uuid_v4();
     let instance_id = handler_task_rt_launch(
-        bus.uid_src.clone(),
-        bus.comm.clone(),
-        bus.mgmnt_comm.clone(),
+        bus.interface(),
         HDL_ID,
         DynVar::new(Handler),
         Str::from("Test handler"),
@@ -50,9 +48,7 @@ async fn bus_send_message() {
     .await;
     let flag = Arc::new(AtomicBool::new(false));
     bus_dispatch_event(
-        bus.uid_src.clone(),
-        bus.comm.clone(),
-        bus.mgmnt_comm.clone(),
+        bus.interface(),
         msg::HandlerInstance {
             typ: msg::HandlerType {
                 id: const_uuid_v4(),
