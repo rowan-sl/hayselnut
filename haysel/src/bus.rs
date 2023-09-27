@@ -2,16 +2,16 @@
 use std::sync::{atomic::AtomicU64, Arc};
 
 use tokio::{spawn, sync::broadcast, task::JoinHandle};
-use uuid::Uuid;
 
 use crate::util::Take;
 
 pub mod handler;
 pub mod id;
 pub mod msg;
+#[cfg(test)]
+mod test;
 
-use id::Uid;
-use msg::{Msg, MsgKind, Str};
+use msg::Msg;
 
 /// size of the inter-handler comm queue.
 /// this must be large enough that it will not fill up while a task is busy, because the queue only

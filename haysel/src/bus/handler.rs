@@ -96,14 +96,24 @@ pub(in crate::bus) async fn handler_task_rt_launch(
     mut handler: DynVar,
     #[cfg(feature = "bus_dbg")] handler_desc: Str,
     method_map: HashMap<Uuid, Method>,
-) {
+) -> HandlerInstance {
     // instance-spacific UID of this handler
     let handler_inst_id = Uid::gen_with(&uid_src);
     #[cfg(feature = "bus_dbg")]
     let handler_inst_desc = Str::from("todo: instance descriptions");
+    let inst = HandlerInstance {
+        typ: msg::HandlerType {
+            id: handler_id,
+            id_desc: handler_desc.clone(),
+        },
+        discriminant: handler_inst_id,
+        discriminant_desc: handler_inst_desc.clone(),
+    };
+    // this must be before the task is launched, so that a handler will start receiving
+    // as soon as the launch function (this one) is called.
+    let mut comm_recv = comm.subscribe();
     spawn(async move {
         let res = async {
-            let mut comm_recv = comm.subscribe();
             'recv_next: loop {
                 let message = comm_recv.recv().await?;
                 match &message.kind {
@@ -200,6 +210,7 @@ pub(in crate::bus) async fn handler_task_rt_launch(
             }
         }
     });
+    inst
 }
 
 /// Describes the (non-ID portion) of a method, incl its handler function
