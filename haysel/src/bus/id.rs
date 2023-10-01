@@ -17,6 +17,9 @@ impl Uid {
     pub(in crate::bus) fn gen_with(source: &AtomicU64) -> Self {
         Self(source.fetch_add(1, atomic::Ordering::Relaxed))
     }
+    pub(in crate::bus) const fn nill() -> Self {
+        Self(0)
+    }
 }
 
 /// Generates a random Uuid at compile time

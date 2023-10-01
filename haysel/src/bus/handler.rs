@@ -1,5 +1,7 @@
 use std::{
+    any::type_name,
     collections::HashMap,
+    marker::PhantomData,
     sync::{
         atomic::{self, AtomicPtr, AtomicU64},
         Arc,
@@ -16,19 +18,158 @@ pub mod async_fn_ptr;
 
 use crate::flag::Flag;
 
-use self::async_fn_ptr::HandlerCallableErased;
+use self::async_fn_ptr::{AsyncFnPtr, HandlerCallableErased, HandlerFn};
 
 use super::{
-    id::Uid,
+    id::{const_uuid_v4, Uid},
     msg::{self, HandlerInstance, Msg, Str},
-    MgmntMsg,
+};
+
+pub trait HandlerInit: Send + Sync + 'static {
+    const DECL: msg::HandlerType;
+    // description of this handler instance
+    fn describe(&self) -> Str;
+    // methods of this handler instance
+    fn methods(&self, register: &mut MethodRegister<Self>);
+}
+
+pub struct MethodRegister<H: HandlerInit + ?Sized> {
+    methods: HashMap<Uuid, MethodRaw>,
+    _ph: PhantomData<H>,
+}
+
+impl<H: HandlerInit> MethodRegister<H> {
+    pub(in crate::bus) fn new() -> Self {
+        Self {
+            methods: HashMap::new(),
+            _ph: PhantomData,
+        }
+    }
+
+    pub fn register<
+        At: Send + Sync + 'static,
+        Rt: Send + Sync + 'static,
+        Fn: for<'a> AsyncFnPtr<'a, H, At, Rt> + Copy + Sync + Send + 'static,
+    >(
+        &mut self,
+        func: Fn,
+        decl: MethodDecl<At, Rt>,
+    ) {
+        self.methods.insert(
+            decl.id,
+            MethodRaw {
+                handler_func: Box::new(HandlerFn::new(func)),
+                handler_desc: decl.desc.clone(),
+            },
+        );
+    }
+
+    pub(in crate::bus) fn finalize(self) -> HashMap<Uuid, MethodRaw> {
+        self.methods
+    }
+}
+
+pub struct MethodDecl<At: 'static, Rt: 'static> {
+    id: Uuid,
+    desc: Str,
+    _ph: PhantomData<&'static (At, Rt)>,
+}
+
+impl<At: 'static, Rt: 'static> MethodDecl<At, Rt> {
+    #[doc(hidden)]
+    pub const fn new(desc: &'static str) -> Self {
+        Self {
+            id: const_uuid_v4(),
+            desc: Str::Borrowed(desc),
+            _ph: PhantomData,
+        }
+    }
+}
+
+macro_rules! method_decl {
+    ($name:ident, $arg:ty, $ret:ty) => {
+        pub const $name: $crate::bus::handler::MethodDecl<$arg, $ret> =
+            $crate::bus::handler::MethodDecl::new(concat!(stringify!($name)));
+    };
+}
+
+macro_rules! handler_decl_t {
+    ($desc:literal) => {
+        $crate::bus::msg::HandlerType {
+            id: $crate::bus::id::const_uuid_v4(),
+            #[cfg(feature = "bus_dbg")]
+            id_desc: Str::Borrowed($desc),
+        }
+    };
+}
+
+pub(crate) use handler_decl_t;
+pub(crate) use method_decl;
+
+pub const EXTERNAL: HandlerInstance = HandlerInstance {
+    typ: handler_decl_t!("External event dispatcher"),
+    discriminant: Uid::nill(),
+    discriminant_desc: Str::Borrowed("External event dispatcher"),
 };
 
 #[derive(Clone)]
 pub struct Interface {
     pub(in crate::bus) uid_src: Arc<AtomicU64>,
     pub(in crate::bus) comm: broadcast::Sender<Arc<Msg>>,
-    pub(in crate::bus) mgmnt_comm: flume::Sender<MgmntMsg>,
+}
+
+impl Interface {
+    pub async fn spawn<H: HandlerInit>(&mut self, instance: H) -> HandlerInstance {
+        let mut register = MethodRegister::new();
+        instance.methods(&mut register);
+        let desc = instance.describe();
+        handler_task_rt_launch(
+            self.clone(),
+            H::DECL.id,
+            DynVar::new(instance),
+            #[cfg(feature = "bus_dbg")]
+            H::DECL.id_desc,
+            register.finalize(),
+            #[cfg(feature = "bus_dbg")]
+            desc,
+        )
+        .await
+    }
+
+    pub async fn dispatch_as<At: Sync + Send + 'static, Rt: 'static>(
+        &mut self,
+        source: HandlerInstance,
+        target: msg::Target,
+        method: MethodDecl<At, Rt>,
+        args: At,
+    ) -> Result<Option<Rt>> {
+        if let Some(ret) = bus_dispatch_event(
+            self.clone(),
+            source,
+            target,
+            msg::MethodID {
+                id: method.id,
+                id_desc: method.desc,
+            },
+            DynVar::new(args),
+        )
+        .await?
+        {
+            match ret.try_to() {
+                Ok(ret) => Ok(Some(ret)),
+                Err(ret) => {
+                    error!(
+                        "Mismatched return type - expected {}, found {}",
+                        type_name::<Rt>(),
+                        ret.type_name()
+                    );
+                    bail!("Mismatched return type");
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 pub(in crate::bus) async fn bus_dispatch_event(
@@ -100,12 +241,11 @@ pub(in crate::bus) async fn handler_task_rt_launch(
     handler_id: Uuid,
     mut handler: DynVar,
     #[cfg(feature = "bus_dbg")] handler_desc: Str,
-    method_map: HashMap<Uuid, Method>,
+    method_map: HashMap<Uuid, MethodRaw>,
+    #[cfg(feature = "bus_dbg")] handler_inst_desc: Str,
 ) -> HandlerInstance {
     // instance-spacific UID of this handler
     let handler_inst_id = Uid::gen_with(&int.uid_src);
-    #[cfg(feature = "bus_dbg")]
-    let handler_inst_desc = Str::from("todo: instance descriptions");
     let inst = HandlerInstance {
         typ: msg::HandlerType {
             id: handler_id,
@@ -219,7 +359,7 @@ pub(in crate::bus) async fn handler_task_rt_launch(
 }
 
 /// Describes the (non-ID portion) of a method, incl its handler function
-pub struct Method {
+pub struct MethodRaw {
     pub handler_func: Box<(dyn HandlerCallableErased + Sync + Send)>,
     #[cfg(feature = "bus_dbg")]
     pub handler_desc: Str,
