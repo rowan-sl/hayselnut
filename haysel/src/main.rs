@@ -63,9 +63,12 @@ use tsdb2::{
     Database,
 };
 
-use crate::tsdb2::alloc::store::{
-    disk::DiskMode,
-    raid::{self, DynStorage, IsDynStorage},
+use crate::{
+    bus::Bus,
+    tsdb2::alloc::store::{
+        disk::DiskMode,
+        raid::{self, DynStorage, IsDynStorage},
+    },
 };
 
 fn main() -> anyhow::Result<()> {
@@ -210,9 +213,11 @@ async fn async_main(
         );
     }
 
+    let mut bus = Bus::new().await;
+
     debug!("Loading database");
     warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
-    let db_router_client = {
+    {
         let store: Box<(dyn IsDynStorage<Error = raid::DynStorageError> + 'static)> = match cfg
             .database
             .storage
@@ -279,7 +284,8 @@ async fn async_main(
             }
         };
         let database = Database::new(store, args.overwrite_reinit).await?;
-        RecordDB::new(database, shutdown.handle()).await?
+        let db_stop = tsdb2::bus::TStopDBus2::new(database).await;
+        bus.interface().spawn(db_stop).await;
     };
     info!("Database loaded");
 

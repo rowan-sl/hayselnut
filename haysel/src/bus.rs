@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 
 use tokio::sync::broadcast;
 
+pub mod common;
 pub mod handler;
 pub mod id;
 pub mod msg;

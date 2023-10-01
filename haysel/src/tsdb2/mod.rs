@@ -34,6 +34,7 @@ use self::{
 };
 
 pub mod alloc;
+pub mod bus;
 pub mod error;
 pub mod helpers;
 pub mod query;

@@ -108,12 +108,6 @@ pub(crate) use handler_decl_t;
 #[allow(unused_imports)]
 pub(crate) use method_decl;
 
-pub const EXTERNAL: HandlerInstance = HandlerInstance {
-    typ: handler_decl_t!("External event dispatcher"),
-    discriminant: Uid::nill(),
-    discriminant_desc: Str::Borrowed("External event dispatcher"),
-};
-
 #[derive(Clone)]
 pub struct Interface {
     pub(in crate::bus) uid_src: Arc<AtomicU64>,

@@ -40,6 +40,19 @@ pub struct QueryBuilder<'a, Store: Storage + Send, const STEP: usize = INITIAL> 
 pub type QueryParams<'a, Store> = QueryBuilder<'a, Store, VERIFIED>;
 pub type QueryParamsNoDB = QueryBuilder<'static, VoidStorage, VERIFIED>;
 
+impl Clone for QueryParamsNoDB {
+    fn clone(&self) -> Self {
+        Self {
+            db: None,
+            station: self.station.clone(),
+            channel: self.channel.clone(),
+            max_results: self.max_results.clone(),
+            after_time: self.after_time.clone(),
+            before_time: self.before_time.clone(),
+        }
+    }
+}
+
 impl QueryParamsNoDB {
     pub fn with_db<'a, Store: Storage + Send>(
         self,

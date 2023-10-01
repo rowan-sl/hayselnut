@@ -9,7 +9,8 @@ use std::{
 use tracing_test::traced_test;
 
 use super::{
-    handler::{handler_decl_t, method_decl, HandlerInit, Interface, MethodRegister, EXTERNAL},
+    common::HDL_EXTERNAL,
+    handler::{handler_decl_t, method_decl, HandlerInit, Interface, MethodRegister},
     msg::{self, HandlerType, Str},
     Bus,
 };
@@ -39,7 +40,7 @@ async fn bus_send_message() {
     let flag = Arc::new(AtomicBool::new(false));
     bus.interface()
         .dispatch_as(
-            EXTERNAL,
+            HDL_EXTERNAL,
             msg::Target::Instance(instance_id),
             METHOD_1,
             flag.clone(),
