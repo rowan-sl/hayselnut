@@ -86,6 +86,7 @@ impl<At: 'static, Rt: 'static> MethodDecl<At, Rt> {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! method_decl {
     ($name:ident, $arg:ty, $ret:ty) => {
         pub const $name: $crate::bus::handler::MethodDecl<$arg, $ret> =
@@ -104,6 +105,7 @@ macro_rules! handler_decl_t {
 }
 
 pub(crate) use handler_decl_t;
+#[allow(unused_imports)]
 pub(crate) use method_decl;
 
 pub const EXTERNAL: HandlerInstance = HandlerInstance {
@@ -348,10 +350,10 @@ pub(in crate::bus) async fn handler_task_rt_launch(
         .await;
         match res {
             Ok(()) => {
-                todo!()
+                debug!("Task closed");
             }
             Err(err) => {
-                todo!()
+                error!("Task closed with error {err:?}")
             }
         }
     });

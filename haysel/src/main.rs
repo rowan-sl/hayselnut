@@ -48,7 +48,7 @@ mod registry;
 mod route;
 mod shutdown;
 // pub mod tsdb;
-mod bus;
+pub mod bus;
 mod flag;
 pub mod tsdb2;
 mod util;
