@@ -12,7 +12,7 @@ use std::{
 use super::dyn_var::DynVar;
 use anyhow::Result;
 use futures::{future::BoxFuture, Future};
-use tokio::{spawn, sync::broadcast, time::timeout};
+use tokio::{select, spawn, sync::broadcast, task::JoinSet, time::timeout};
 use uuid::Uuid;
 
 pub mod async_fn_ptr;
@@ -280,13 +280,10 @@ pub(in crate::bus) struct HandlerTaskRt<H: HandlerInit> {
 
 impl<H: HandlerInit> HandlerTaskRt<H> {
     pub fn new(inter: Interface, instance: H) -> Self {
-        let mut register = MethodRegister::new();
-        instance.methods(&mut register);
         let discriminant = Uid::gen_with(&inter.uid_src);
-        let discriminant_desc = instance.describe();
         let (bg_spawner, bg_spawner_recv) = flume::unbounded();
         let comm = inter.comm.subscribe();
-        Self {
+        let mut rt = Self {
             inter: LocalInterface {
                 nonlocal: inter,
                 bg_spawner,
@@ -297,12 +294,23 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             inst: HandlerInstance {
                 typ: H::DECL,
                 discriminant,
-                discriminant_desc,
+                discriminant_desc: Str::Owned(String::new()),
             },
-            methods: register.finalize(),
+            methods: HashMap::default(),
             comm,
             _ph: PhantomData,
-        }
+        };
+        rt.update_metadata();
+        rt
+    }
+
+    fn update_metadata(&mut self) {
+        let instance = self.hdl.as_ref::<H>().unwrap();
+        let mut register = MethodRegister::new();
+        instance.methods(&mut register);
+        let discriminant_desc = instance.describe();
+        self.methods = register.finalize();
+        self.inst.discriminant_desc = discriminant_desc;
     }
 
     pub fn id(&self) -> HandlerInstance {
@@ -311,9 +319,40 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
 
     pub async fn run(mut self) -> Result<()> {
         self.hdl.as_mut::<H>().unwrap().init(&self.inter).await;
+        let mut background = JoinSet::<(DynVar, Uuid, &'static str)>::new();
         loop {
-            let message = self.comm.recv().await?;
-            self.handle_message(message).await?;
+            select! {
+                message = self.comm.recv() => self.handle_message(message?).await?,
+                _ = &self.inter.update_metadata => self.update_metadata(),
+                // Err is unreachable
+                (future, method_id, method_desc) = async { self.bg_spawner_recv.recv_async().await.unwrap() } => {
+                    background.spawn(async move {
+                        (future.await, method_id, method_desc)
+                    });
+                }
+                // if None, it will be ignored (good)
+                Some(result) = background.join_next() => {
+                    let Ok((result, method_id, method_desc)) = result else {
+                        error!("Background task panicked! - ignoring would-be return value");
+                        continue
+                    };
+                    let Some(method_val) = self.methods.get(&method_id) else {
+                        warn!("Background task would have called method on return that was not registered - its return value will be ignored");
+                        continue
+                    };
+                    if method_val.handler_desc != method_desc {
+                        warn!(
+                            "method description [registered] vs [called] do not match: ({:?} vs {:?})",
+                            method_val.handler_desc,
+                            method_desc,
+                        );
+                    }
+                    // TODO: pass result by-value?
+                    let _output = method_val.handler_func.call(&mut self.hdl, &result, &self.inter)
+                        .expect("unreachable: handler method type mismatch")
+                        .await;
+                }
+            }
         }
         #[allow(unreachable_code)]
         anyhow::Ok(())
@@ -328,7 +367,9 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 arguments,
                 response,
             } => {
-                self.validate_msg_target(target, method).await;
+                if !self.validate_msg_target(target, method).await {
+                    return Ok(());
+                }
                 let method_val = self.methods.get(&method.id).unwrap();
                 let result = method_val
                     .handler_func
