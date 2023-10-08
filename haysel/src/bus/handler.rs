@@ -311,99 +311,106 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
 
     pub async fn run(mut self) -> Result<()> {
         self.hdl.as_mut::<H>().unwrap().init(&self.inter).await;
-        'recv_next: loop {
+        loop {
             let message = self.comm.recv().await?;
-            match &message.kind {
-                msg::MsgKind::Request {
-                    source: _source,
-                    target,
-                    method,
-                    arguments,
-                    response,
-                } => {
-                    let target_matches = match target {
-                        msg::Target::Any => true,
-                        msg::Target::Type(typ) if typ.id == self.inst.typ.id => true,
-                        msg::Target::Instance(inst)
-                            if inst.discriminant == self.inst.discriminant
-                                && inst.typ.id == self.inst.typ.id =>
-                        {
-                            true
-                        }
-                        _ => false,
-                    };
-                    let method_val = self.methods.get(&method.id);
-                    let method_exists = method_val.is_some_and(|val| {
-                        #[cfg(feature = "bus_dbg")]
-                        {
-                            if method.id_desc != val.handler_desc {
-                                error!("Method description (for method {}) is not consistant between the discription sent with the request, and the stored description! ({} vs {}) - this event will be ignored as if the ID had not matched", method.id, method.id_desc, val.handler_desc);
-                                warn!("TODO: inform the management task about this");
-                                false
-                            } else {
-                                true
-                            }
-                        }
-                        #[cfg(not(feature = "bus_dbg"))]
-                        { true }
-                    });
-                    if !(target_matches && method_exists) {
-                        // message is irrelevant
-                        continue 'recv_next;
-                    }
-                    let func = &method_val.unwrap().handler_func;
-                    match func.call(&mut self.hdl, arguments, &self.inter) {
-                        Ok(future) => {
-                            let result = future.await;
-                            // if a response is desired, it is sent back.
-                            // if not, it is dropped
-                            if let msg::Target::Instance(..) = target {
-                                if let Some(responder) = response {
-                                    let boxed = Box::new(result);
-                                    let pointer = Box::into_raw(boxed);
-                                    if let Err(pointer) = responder.value.compare_exchange(
-                                        0 as *mut DynVar,
-                                        pointer,
-                                        atomic::Ordering::SeqCst,
-                                        atomic::Ordering::SeqCst,
-                                    ) {
-                                        // de-allocate fail_pointer to avoid memory leak
-                                        // Saftey: if compare_exchange fails, then the pointer could not possibly
-                                        // have been seen (much less used) by any other tasks
-                                        unsafe {
-                                            // value is dropped at the end of the unsafe block (dropbox???)
-                                            let _boxed = Box::from_raw(pointer);
-                                        }
-                                        // now, who tf caused this??
-                                        warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
-                                    } else {
-                                        // wake the receiving task
-                                        responder.waker.signal();
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            #[cfg(not(feature = "bus_dbg"))]
-                            {
-                                error!("Handler type mismatch {err:?} - enable the bus_dbg feature for more details")
-                            }
-                            #[cfg(feature = "bus_dbg")]
-                            {
-                                error!(
-                                    "Hnadler type mismatch {err:?} (method: {}, handler: {}, instance: {})",
-                                    method_val.unwrap().handler_desc,
-                                    self.inst.typ.id_desc,
-                                    self.inst.discriminant_desc
-                                );
-                            }
-                        }
-                    };
-                }
-            }
+            self.handle_message(message).await?;
         }
         #[allow(unreachable_code)]
         anyhow::Ok(())
+    }
+
+    async fn handle_message(&mut self, message: Arc<Msg>) -> Result<()> {
+        match &message.kind {
+            msg::MsgKind::Request {
+                source: _source,
+                target,
+                method,
+                arguments,
+                response,
+            } => {
+                self.validate_msg_target(target, method).await;
+                let method_val = self.methods.get(&method.id).unwrap();
+                match method_val
+                    .handler_func
+                    .call(&mut self.hdl, arguments, &self.inter)
+                {
+                    Ok(future) => {
+                        let result = future.await;
+                        // if a response is desired, it is sent back.
+                        // if not, it is dropped
+                        if let (msg::Target::Instance(..), Some(responder)) = (target, response) {
+                            let boxed = Box::new(result);
+                            let pointer = Box::into_raw(boxed);
+                            if let Err(pointer) = responder.value.compare_exchange(
+                                0 as *mut DynVar,
+                                pointer,
+                                atomic::Ordering::SeqCst,
+                                atomic::Ordering::SeqCst,
+                            ) {
+                                // de-allocate fail_pointer to avoid memory leak
+                                // Saftey: if compare_exchange fails, then the pointer could not possibly
+                                // have been seen (much less used) by any other tasks
+                                unsafe {
+                                    // value is dropped at the end of the unsafe block (dropbox???)
+                                    let _boxed = Box::from_raw(pointer);
+                                }
+                                // now, who tf caused this??
+                                warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
+                            } else {
+                                // wake the receiving task
+                                responder.waker.signal();
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        #[cfg(not(feature = "bus_dbg"))]
+                        {
+                            error!("Handler type mismatch {err:?} - enable the bus_dbg feature for more details")
+                        }
+                        #[cfg(feature = "bus_dbg")]
+                        {
+                            error!(
+                                "Hnadler type mismatch {err:?} (method: {}, handler: {}, instance: {})",
+                                method_val.handler_desc,
+                                self.inst.typ.id_desc,
+                                self.inst.discriminant_desc
+                            );
+                        }
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+
+    async fn validate_msg_target(&mut self, target: &msg::Target, method: &msg::MethodID) -> bool {
+        let target_matches = match target {
+            msg::Target::Any => true,
+            msg::Target::Type(typ) if typ.id == self.inst.typ.id => true,
+            msg::Target::Instance(inst)
+                if inst.discriminant == self.inst.discriminant
+                    && inst.typ.id == self.inst.typ.id =>
+            {
+                true
+            }
+            _ => false,
+        };
+        let method_val = self.methods.get(&method.id);
+        let method_exists = method_val.is_some_and(|val| {
+            #[cfg(feature = "bus_dbg")]
+            {
+                if method.id_desc != val.handler_desc {
+                    error!("Method description (for method {}) is not consistant between the discription sent with the request, and the stored description! ({} vs {}) - this event will be ignored as if the ID had not matched", method.id, method.id_desc, val.handler_desc);
+                    warn!("TODO: inform the management task about this");
+                    false
+                } else {
+                    true
+                }
+            }
+            #[cfg(not(feature = "bus_dbg"))]
+            { true }
+        });
+        target_matches && method_exists
     }
 }
 
