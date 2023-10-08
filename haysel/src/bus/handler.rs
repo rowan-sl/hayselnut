@@ -330,54 +330,36 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             } => {
                 self.validate_msg_target(target, method).await;
                 let method_val = self.methods.get(&method.id).unwrap();
-                match method_val
+                let result = method_val
                     .handler_func
                     .call(&mut self.hdl, arguments, &self.inter)
-                {
-                    Ok(future) => {
-                        let result = future.await;
-                        // if a response is desired, it is sent back.
-                        // if not, it is dropped
-                        if let (msg::Target::Instance(..), Some(responder)) = (target, response) {
-                            let boxed = Box::new(result);
-                            let pointer = Box::into_raw(boxed);
-                            if let Err(pointer) = responder.value.compare_exchange(
-                                0 as *mut DynVar,
-                                pointer,
-                                atomic::Ordering::SeqCst,
-                                atomic::Ordering::SeqCst,
-                            ) {
-                                // de-allocate fail_pointer to avoid memory leak
-                                // Saftey: if compare_exchange fails, then the pointer could not possibly
-                                // have been seen (much less used) by any other tasks
-                                unsafe {
-                                    // value is dropped at the end of the unsafe block (dropbox???)
-                                    let _boxed = Box::from_raw(pointer);
-                                }
-                                // now, who tf caused this??
-                                warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
-                            } else {
-                                // wake the receiving task
-                                responder.waker.signal();
-                            }
+                    .expect("unreachable: handler method type mismatch")
+                    .await;
+                // if a response is desired, it is sent back.
+                // if not, it is dropped
+                if let (msg::Target::Instance(..), Some(responder)) = (target, response) {
+                    let boxed = Box::new(result);
+                    let pointer = Box::into_raw(boxed);
+                    if let Err(pointer) = responder.value.compare_exchange(
+                        0 as *mut DynVar,
+                        pointer,
+                        atomic::Ordering::SeqCst,
+                        atomic::Ordering::SeqCst,
+                    ) {
+                        // de-allocate fail_pointer to avoid memory leak
+                        // Saftey: if compare_exchange fails, then the pointer could not possibly
+                        // have been seen (much less used) by any other tasks
+                        unsafe {
+                            // value is dropped at the end of the unsafe block (dropbox???)
+                            let _boxed = Box::from_raw(pointer);
                         }
+                        // now, who tf caused this??
+                        warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
+                    } else {
+                        // wake the receiving task
+                        responder.waker.signal();
                     }
-                    Err(err) => {
-                        #[cfg(not(feature = "bus_dbg"))]
-                        {
-                            error!("Handler type mismatch {err:?} - enable the bus_dbg feature for more details")
-                        }
-                        #[cfg(feature = "bus_dbg")]
-                        {
-                            error!(
-                                "Hnadler type mismatch {err:?} (method: {}, handler: {}, instance: {})",
-                                method_val.handler_desc,
-                                self.inst.typ.id_desc,
-                                self.inst.discriminant_desc
-                            );
-                        }
-                    }
-                };
+                }
             }
         }
         Ok(())
