@@ -8,18 +8,18 @@
 //!
 //! (copied from dabus, modified to fit this better)
 
-use dabus::extras::DynVar;
+use super::super::dyn_var::DynVar;
 
 use core::marker::PhantomData;
 use std::any::type_name;
 
 use futures::future::{BoxFuture, Future};
 
-use super::Interface;
+use super::LocalInterface;
 
 pub trait AsyncFnPtr<'a, H: 'a, At: 'a, Rt> {
     type Fut: Future<Output = Rt> + Send + 'a;
-    fn call(self, h: &'a mut H, a: &'a At, i: Interface) -> Self::Fut;
+    fn call(self, h: &'a mut H, a: &'a At, i: &'a LocalInterface) -> Self::Fut;
 }
 
 impl<
@@ -27,11 +27,11 @@ impl<
         H: 'a,
         At: 'a,
         Fut: Future + Send + 'a,
-        F: FnOnce(&'a mut H, &'a At, Interface) -> Fut,
+        F: FnOnce(&'a mut H, &'a At, &'a LocalInterface) -> Fut,
     > AsyncFnPtr<'a, H, At, Fut::Output> for F
 {
     type Fut = Fut;
-    fn call(self, h: &'a mut H, a: &'a At, i: Interface) -> Self::Fut {
+    fn call(self, h: &'a mut H, a: &'a At, i: &'a LocalInterface) -> Self::Fut {
         self(h, a, i)
     }
 }
@@ -54,7 +54,12 @@ where
         Self { f, _t: PhantomData }
     }
 
-    pub fn call<'a, 'b>(&'b self, h: &'a mut H, a: &'a At, i: Interface) -> BoxFuture<'a, Rt> {
+    pub fn call<'a, 'b>(
+        &'b self,
+        h: &'a mut H,
+        a: &'a At,
+        i: &'a LocalInterface,
+    ) -> BoxFuture<'a, Rt> {
         let f = self.f;
         Box::pin(async move { f.call(h, a, i).await })
     }
@@ -65,7 +70,7 @@ pub trait HandlerCallableErased {
         &'a self,
         h: &'a mut DynVar,
         a: &'a DynVar,
-        i: Interface,
+        i: &'a LocalInterface,
     ) -> Result<BoxFuture<'a, DynVar>, CallError>;
 }
 
@@ -80,7 +85,7 @@ where
         &'a self,
         h: &'a mut DynVar,
         a: &'a DynVar,
-        i: Interface,
+        i: &'a LocalInterface,
     ) -> Result<BoxFuture<'a, DynVar>, CallError> {
         let h_name = h.type_name();
         let a_name = h.type_name();

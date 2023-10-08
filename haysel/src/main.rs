@@ -6,6 +6,7 @@
 #![feature(specialization)]
 #![feature(is_sorted)]
 #![feature(trait_upcasting)]
+#![feature(downcast_unchecked)]
 
 #[macro_use]
 extern crate async_trait;
@@ -285,7 +286,7 @@ async fn async_main(
         };
         let database = Database::new(store, args.overwrite_reinit).await?;
         let db_stop = tsdb2::bus::TStopDBus2::new(database).await;
-        bus.interface().spawn(db_stop).await;
+        bus.interface().spawn(db_stop);
     };
     info!("Database loaded");
 
@@ -298,7 +299,6 @@ async fn async_main(
     info!("IPC configured");
 
     let mut router = Router::new();
-    router.with_consumer(db_router_client);
     router.with_consumer(ipc_router_client);
     // send the initial update with the current state
     router

@@ -10,7 +10,7 @@ use tracing_test::traced_test;
 
 use super::{
     common::HDL_EXTERNAL,
-    handler::{handler_decl_t, method_decl, HandlerInit, Interface, MethodRegister},
+    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
     msg::{self, HandlerType, Str},
     Bus,
 };
@@ -22,7 +22,7 @@ async fn bus_send_message() {
     method_decl!(METHOD_1, Arc<AtomicBool>, ());
     struct Handler;
     impl Handler {
-        async fn function_1(&mut self, args: &Arc<AtomicBool>, _interface: Interface) -> () {
+        async fn function_1(&mut self, args: &Arc<AtomicBool>, _: &LocalInterface) -> () {
             args.store(true, atomic::Ordering::Relaxed);
         }
     }
@@ -35,7 +35,7 @@ async fn bus_send_message() {
             register.register(Self::function_1, METHOD_1)
         }
     }
-    let instance_id = bus.interface().spawn(Handler).await;
+    let instance_id = bus.interface().spawn(Handler);
 
     let flag = Arc::new(AtomicBool::new(false));
     bus.interface()

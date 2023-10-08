@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     bus::{
         common::EV_SHUTDOWN,
-        handler::{handler_decl_t, method_decl, HandlerInit, Interface},
+        handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface},
         msg::{HandlerType, Str},
     },
     util::Take,
@@ -29,7 +29,7 @@ impl<S: Storage> TStopDBus2<S> {
         Self { db: Take::new(db) }
     }
 
-    async fn close(&mut self, _args: &(), _int: Interface) {
+    async fn close(&mut self, _args: &(), _: &LocalInterface) {
         if let Err(e) = self.db.take().close().await {
             error!("Failed to close db: {e:?}")
         }
@@ -38,7 +38,7 @@ impl<S: Storage> TStopDBus2<S> {
     async fn query(
         &mut self,
         args: &QueryParamsNoDB,
-        _int: Interface,
+        _int: &LocalInterface,
     ) -> Result<Vec<(DateTime<Utc>, f32)>> {
         Ok(args.clone().with_db(&mut self.db).execute().await?)
     }
@@ -46,13 +46,13 @@ impl<S: Storage> TStopDBus2<S> {
     async fn ensure_exists(
         &mut self,
         (_stations, _channels): &(KnownStations, KnownChannels),
-        _int: Interface,
+        _int: &LocalInterface,
     ) -> Result<()> {
         warn!("Initial state verification unimplemented (necessary stations/channels may not exist in the database)");
         Ok(())
     }
 
-    async fn new_station(&mut self, &id: &Uuid, _int: Interface) -> Result<()> {
+    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) -> Result<()> {
         self.db.add_station(id).await?;
         Ok(())
     }
@@ -60,7 +60,7 @@ impl<S: Storage> TStopDBus2<S> {
     async fn station_new_channel(
         &mut self,
         (station, channel, channel_info): &(Uuid, Uuid, Channel),
-        _int: Interface,
+        _int: &LocalInterface,
     ) -> Result<()> {
         self.db
             .add_channel(

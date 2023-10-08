@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::atomic::AtomicPtr;
 
-use dabus::extras::DynVar;
+use super::dyn_var::DynVar;
 use uuid::Uuid;
 
 use crate::flag::Flag;
@@ -52,7 +52,7 @@ pub struct MethodID {
 }
 
 /// describe a type of handler (UUID, a constant associated with that handler) (similar to a struct's type)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HandlerType {
     /// the UUID of this type
     pub id: Uuid,
@@ -63,7 +63,7 @@ pub struct HandlerType {
 
 /// describe an instance of a spacific handler type (similar to a struct instance)
 /// (UID, associated with an instance)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HandlerInstance {
     /// the UUID of the handler type
     pub typ: HandlerType,

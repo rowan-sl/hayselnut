@@ -13,6 +13,8 @@ use crate::{route::StationInfoUpdate, shutdown::ShutdownHandle};
 
 use super::shutdown::Shutdown;
 
+pub mod bus;
+
 #[derive(Debug)]
 pub enum IPCTaskMsg {
     Broadcast(IPCMsg),
