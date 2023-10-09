@@ -341,9 +341,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                     }
                 };
                 if match &recvd.kind {
-                    msg::MsgKind::Request { target, method, .. } => {
-                        Self::msg_target_match(&inst2, target, method)
-                    }
+                    msg::MsgKind::Request { target, .. } => Self::msg_target_match(&inst2, target),
                 } {
                     match cf_send.try_send(recvd) {
                         Ok(()) => {}
@@ -482,11 +480,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         })
     }
 
-    fn msg_target_match(
-        this: &HandlerInstance,
-        target: &msg::Target,
-        method: &msg::MethodID,
-    ) -> bool {
+    fn msg_target_match(this: &HandlerInstance, target: &msg::Target) -> bool {
         match target {
             msg::Target::Any => true,
             msg::Target::Type(typ) if typ.id == this.typ.id => true,

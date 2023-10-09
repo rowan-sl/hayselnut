@@ -75,6 +75,7 @@ method_decl_owned!(
 );
 
 struct IPCConnection {
+    #[allow(unused)]
     write: OwnedWriteHalf,
     read: Take<OwnedReadHalf>,
     addr: SocketAddr,
