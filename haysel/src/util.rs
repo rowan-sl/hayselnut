@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    mem::replace,
+    ops::{Deref, DerefMut},
+};
 
 pub struct Take<T>(Option<T>);
 
@@ -10,6 +13,10 @@ impl<T> Take<T> {
 
     pub fn take(&mut self) -> T {
         self.0.take().unwrap()
+    }
+
+    pub fn put(&mut self, val: T) -> Option<T> {
+        replace(&mut self.0, Some(val))
     }
 }
 

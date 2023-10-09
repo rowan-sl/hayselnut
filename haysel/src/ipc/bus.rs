@@ -37,7 +37,7 @@ impl IPCNewConnections {
                 let (read, write) = stream.into_split();
                 let conn = IPCConnection {
                     write,
-                    read: Take::new((read, vec![], 0)),
+                    read: Take::new(read),
                     addr,
                 };
                 int.nonlocal.spawn(conn);
@@ -79,39 +79,50 @@ method_decl_owned!(
 
 struct IPCConnection {
     write: OwnedWriteHalf,
-    read: Take<(OwnedReadHalf, Vec<u8>, usize)>,
+    read: Take<OwnedReadHalf>,
     addr: SocketAddr,
 }
 
 impl IPCConnection {
-    pub fn bg_read(&mut self, read: OwnedReadHalf, int: &LocalInterface) {
-        // int.bg_spawn(EV_PRIV_READ, async move {read.try_read
-        //     let res = mycelium::ipc_recv(&mut read).await;
-        // })
+    fn bg_read(&mut self, mut read: OwnedReadHalf, int: &LocalInterface) {
+        int.bg_spawn(EV_PRIV_READ, async move {
+            let res = mycelium::ipc_recv(&mut read).await;
+            (read, res)
+        })
+    }
+    async fn handle_read(
+        &mut self,
+        (read, res): (OwnedReadHalf, Result<IPCMsg, IPCError>),
+        int: &LocalInterface,
+    ) {
+        match res {
+            Ok(_msg) => {
+                self.bg_read(read, int);
+            }
+            Err(e) => {
+                error!("Failed to receive IPC message: {e} - no further attempts to read will be performed");
+                self.read.put(read);
+            }
+        }
     }
 }
 
 #[async_trait]
 impl HandlerInit for IPCConnection {
     const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC Connection Handler");
-    // type BgGenerated = Result<IPCMsg, IPCError>;
-    // const BG_RUN: bool = true;
-    // async fn bg_generate(&mut self) -> Self::BgGenerated {
-    //     mycelium::ipc_recv_cancel_safe(
-    //         &mut self.buffer,
-    //         &mut self.buf_amnt,
-    //         &mut self.stream
-    //     ).await
-    // }
-    // async fn bg_consume(&mut self, args: Self::BgGenerated, int: LocalInterface) {
-    //     todo!()
-    // }
+
+    async fn init(&mut self, int: &LocalInterface) {
+        let read = self.read.take();
+        self.bg_read(read, int);
+    }
     // description of this handler instance
     fn describe(&self) -> Str {
         Str::Owned(format!("IPC Connection (to: {:?})", self.addr))
     }
     // methods of this handler instance
-    fn methods(&self, _register: &mut MethodRegister<Self>) {}
+    fn methods(&self, reg: &mut MethodRegister<Self>) {
+        reg.register_owned(Self::handle_read, EV_PRIV_READ);
+    }
 }
 
-method_decl!(EV_PRIV_READ, Result<IPCMsg, IPCError>, ());
+method_decl_owned!(EV_PRIV_READ, (OwnedReadHalf, Result<IPCMsg, IPCError>), ());
