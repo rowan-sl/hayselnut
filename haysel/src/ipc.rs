@@ -68,7 +68,7 @@ pub async fn ipc_task(
                         &ipc_broadcast_queue,
                         &mut cache_stations,
                         &mut cache_channels
-                    ).await?
+        ).await?
                 }
                 res = listener.accept() => {
                     let (mut sock, addr) = res?;
