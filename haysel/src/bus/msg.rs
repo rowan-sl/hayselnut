@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::sync::atomic::AtomicPtr;
 
+use super::atomic_cell::AtomicCell;
 use super::dyn_var::DynVar;
 use uuid::Uuid;
 
@@ -81,10 +81,11 @@ pub struct Responder {
     /// then use compare_exchange(current = null, new = Box::into_raw, Relaxed, Relaxed).
     /// if this fails, than it is made aware of the fact that some other handler has (erronously,
     /// given that `from` and `discriminant` are specified and can raise an error accordingly)
+    /// NOTE: AtomicCell now does this for us
     ///
     /// After this is done (if successfull) the `response_waker` should be woke
     /// to trigger the requesting task to check for this value
-    pub value: AtomicPtr<DynVar>,
+    pub value: AtomicCell<DynVar>,
     /// see `value`
     pub waker: Flag,
 }

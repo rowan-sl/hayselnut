@@ -15,8 +15,16 @@ use super::{
     Bus,
 };
 
-#[tokio::test]
 #[traced_test]
+#[test]
+fn bus_send_message_rt() {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(bus_send_message());
+}
+
 async fn bus_send_message() {
     let bus = Bus::new().await;
     method_decl!(METHOD_1, Arc<AtomicBool>, ());

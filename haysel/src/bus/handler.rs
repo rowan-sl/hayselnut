@@ -2,14 +2,11 @@ use std::{
     any::type_name,
     collections::HashMap,
     marker::PhantomData,
-    sync::{
-        atomic::{self, AtomicPtr, AtomicU64},
-        Arc,
-    },
+    sync::{atomic::AtomicU64, Arc},
     time::Duration,
 };
 
-use super::dyn_var::DynVar;
+use super::{atomic_cell::AtomicCell, dyn_var::DynVar};
 use anyhow::Result;
 use futures::{future::BoxFuture, Future};
 use tokio::{select, sync::broadcast, task::JoinSet, time::timeout};
@@ -19,7 +16,7 @@ pub mod async_fn_ptr;
 
 use crate::flag::Flag;
 
-use self::async_fn_ptr::{AsyncFnPtr, HandlerCallableErased, HandlerFn};
+use self::async_fn_ptr::{AsyncFnPtr, HandlerCallableErased, HandlerFn, HandlerFnOwnArgs};
 
 use super::{
     id::{const_uuid_v4, Uid},
@@ -57,17 +54,37 @@ impl<H: HandlerInit> MethodRegister<H> {
     pub fn register<
         At: Send + Sync + 'static,
         Rt: Send + Sync + 'static,
-        Fn: for<'a> AsyncFnPtr<'a, H, At, Rt> + Copy + Sync + Send + 'static,
+        Fn: for<'a> AsyncFnPtr<'a, H, &'a At, Rt> + Copy + Sync + Send + 'static,
     >(
         &mut self,
         func: Fn,
-        decl: MethodDecl<At, Rt>,
+        decl: MethodDecl<false, At, Rt>,
     ) {
         self.methods.insert(
             decl.id,
             MethodRaw {
                 handler_func: Box::new(HandlerFn::new(func)),
                 handler_desc: Str::Borrowed(decl.desc),
+                is_owned: false,
+            },
+        );
+    }
+
+    pub fn register_owned<
+        At: Send + Sync + 'static,
+        Rt: Send + Sync + 'static,
+        Fn: for<'a> AsyncFnPtr<'a, H, At, Rt> + Copy + Sync + Send + 'static,
+    >(
+        &mut self,
+        func: Fn,
+        decl: MethodDecl<true, At, Rt>,
+    ) {
+        self.methods.insert(
+            decl.id,
+            MethodRaw {
+                handler_func: Box::new(HandlerFnOwnArgs::new(func)),
+                handler_desc: Str::Borrowed(decl.desc),
+                is_owned: true,
             },
         );
     }
@@ -77,18 +94,18 @@ impl<H: HandlerInit> MethodRegister<H> {
     }
 }
 
-pub struct MethodDecl<At: 'static, Rt: 'static> {
+pub struct MethodDecl<const OWN: bool, At: 'static, Rt: 'static> {
     id: Uuid,
     desc: &'static str,
     _ph: PhantomData<&'static (At, Rt)>,
 }
-impl<At: 'static, Rt: 'static> Clone for MethodDecl<At, Rt> {
+impl<const OWN: bool, At: 'static, Rt: 'static> Clone for MethodDecl<OWN, At, Rt> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<At: 'static, Rt: 'static> Copy for MethodDecl<At, Rt> {}
-impl<At: 'static, Rt: 'static> MethodDecl<At, Rt> {
+impl<const OWN: bool, At: 'static, Rt: 'static> Copy for MethodDecl<OWN, At, Rt> {}
+impl<const OWN: bool, At: 'static, Rt: 'static> MethodDecl<OWN, At, Rt> {
     #[doc(hidden)]
     pub const fn new(desc: &'static str) -> Self {
         Self {
@@ -102,7 +119,15 @@ impl<At: 'static, Rt: 'static> MethodDecl<At, Rt> {
 #[allow(unused_macros)]
 macro_rules! method_decl {
     ($name:ident, $arg:ty, $ret:ty) => {
-        pub const $name: $crate::bus::handler::MethodDecl<$arg, $ret> =
+        pub const $name: $crate::bus::handler::MethodDecl<false, $arg, $ret> =
+            $crate::bus::handler::MethodDecl::new(concat!(stringify!($name)));
+    };
+}
+
+#[allow(unused_macros)]
+macro_rules! method_decl_owned {
+    ($name:ident, $arg:ty, $ret:ty) => {
+        pub const $name: $crate::bus::handler::MethodDecl<true, $arg, $ret> =
             $crate::bus::handler::MethodDecl::new(concat!(stringify!($name)));
     };
 }
@@ -120,6 +145,8 @@ macro_rules! handler_decl_t {
 pub(crate) use handler_decl_t;
 #[allow(unused_imports)]
 pub(crate) use method_decl;
+#[allow(unused_imports)]
+pub(crate) use method_decl_owned;
 
 #[derive(Clone)]
 pub struct Interface {
@@ -142,7 +169,7 @@ impl LocalInterface {
     /// waits to receive, then returns itself + what it received, and finally the handler spawns the task again.
     pub fn bg_spawn<T: Sync + Send>(
         &self,
-        m: MethodDecl<T, ()>,
+        m: MethodDecl<true, T, ()>,
         f: impl Future<Output = T> + Send + 'static,
     ) {
         let dyn_f: BoxFuture<'static, DynVar> = Box::pin(async move { DynVar::new(f.await) });
@@ -163,7 +190,7 @@ impl LocalInterface {
     pub async fn dispatch<At: Sync + Send + 'static, Rt: 'static>(
         &self,
         target: msg::Target,
-        method: MethodDecl<At, Rt>,
+        method: MethodDecl<false, At, Rt>,
         args: At,
     ) -> Result<Option<Rt>> {
         self.nonlocal
@@ -190,7 +217,7 @@ impl Interface {
         &self,
         source: HandlerInstance,
         target: msg::Target,
-        method: MethodDecl<At, Rt>,
+        method: MethodDecl<false, At, Rt>,
         args: At,
     ) -> Result<Option<Rt>> {
         if let Some(ret) = bus_dispatch_event(
@@ -234,7 +261,7 @@ pub(in crate::bus) async fn bus_dispatch_event(
     let response = if let msg::Target::Instance(..) = target {
         has_response = true;
         Some(msg::Responder {
-            value: AtomicPtr::new(0 as *mut _),
+            value: AtomicCell::new(),
             waker: Flag::new(),
         })
     } else {
@@ -264,16 +291,12 @@ pub(in crate::bus) async fn bus_dispatch_event(
             unreachable!()
         };
         if let Ok(..) = timeout(Duration::from_secs(60), &responder.waker).await {
-            let pointer = responder.value.load(atomic::Ordering::SeqCst);
-            if pointer.is_null() {
+            let res = responder.value.take();
+            if res.is_none() {
                 error!("Responder waker was triggered, but no response was found");
                 bail!("Received null response");
             } else {
-                // Saftey: no other (correctly implemented) handlers should read and use a value.
-                // TODO: safe code can do things that violate the saftey of this (by putting a
-                // dangleing pointer in this field)
-                let boxed = unsafe { Box::from_raw(pointer) };
-                Ok(Some(*boxed))
+                Ok(res.map(|x| *x))
             }
         } else {
             error!("Waiting for response timed out");
@@ -398,22 +421,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 // if a response is desired, it is sent back.
                 // if not, it is dropped
                 if let (msg::Target::Instance(..), Some(responder)) = (target, response) {
-                    let boxed = Box::new(result);
-                    let pointer = Box::into_raw(boxed);
-                    if let Err(pointer) = responder.value.compare_exchange(
-                        0 as *mut DynVar,
-                        pointer,
-                        atomic::Ordering::SeqCst,
-                        atomic::Ordering::SeqCst,
-                    ) {
-                        // de-allocate fail_pointer to avoid memory leak
-                        // Saftey: if compare_exchange fails, then the pointer could not possibly
-                        // have been seen (much less used) by any other tasks
-                        unsafe {
-                            // value is dropped at the end of the unsafe block (dropbox???)
-                            let _boxed = Box::from_raw(pointer);
-                        }
-                        // now, who tf caused this??
+                    if let Some(..) = responder.value.put(result) {
                         warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
                     } else {
                         // wake the receiving task
@@ -461,4 +469,6 @@ pub struct MethodRaw {
     pub handler_func: Box<(dyn HandlerCallableErased + Sync + Send)>,
     #[cfg(feature = "bus_dbg")]
     pub handler_desc: Str,
+    /// does this accept `&'a At` or `At`
+    pub is_owned: bool,
 }
