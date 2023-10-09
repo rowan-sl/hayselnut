@@ -1,6 +1,6 @@
 //! IPC Bus integration
 
-use std::sync::Arc;
+use std::{cell::Cell, sync::Arc};
 
 use mycelium::{IPCError, IPCMsg};
 use tokio::{
@@ -9,12 +9,22 @@ use tokio::{
 };
 
 use crate::bus::{
-    handler::{handler_decl_t, HandlerInit, LocalInterface, MethodRegister},
+    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
     msg::Str,
 };
 
 struct IPCNewConnections {
     listener: Arc<UnixListener>,
+}
+
+impl IPCNewConnections {
+    async fn handle_new_client(
+        &mut self,
+        cli: &Cell<(UnixStream, SocketAddr)>,
+        int: &LocalInterface,
+    ) {
+        todo!()
+    }
 }
 
 #[async_trait]
@@ -50,6 +60,8 @@ impl HandlerInit for IPCNewConnections {
     // methods of this handler instance
     fn methods(&self, _register: &mut MethodRegister<Self>) {}
 }
+
+method_decl!(EV_PRIV_NEW_CONNECTION, Cell<(UnixStream, SocketAddr)>, ());
 
 struct IPCConnection {
     stream: UnixStream,

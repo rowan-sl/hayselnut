@@ -12,7 +12,7 @@ use std::{
 use super::dyn_var::DynVar;
 use anyhow::Result;
 use futures::{future::BoxFuture, Future};
-use tokio::{select, spawn, sync::broadcast, task::JoinSet, time::timeout};
+use tokio::{select, sync::broadcast, task::JoinSet, time::timeout};
 use uuid::Uuid;
 
 pub mod async_fn_ptr;
@@ -131,6 +131,7 @@ pub struct LocalInterface {
     pub nonlocal: Interface,
     pub(in crate::bus) bg_spawner: flume::Sender<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
     pub(in crate::bus) update_metadata: Flag,
+    pub(in crate::bus) instance: HandlerInstance,
 }
 
 impl LocalInterface {
@@ -153,6 +154,21 @@ impl LocalInterface {
 
     pub fn update_metadata(&self) {
         self.update_metadata.signal();
+    }
+
+    pub fn whoami(&self) -> HandlerInstance {
+        self.instance.clone()
+    }
+
+    pub async fn dispatch<At: Sync + Send + 'static, Rt: 'static>(
+        &self,
+        target: msg::Target,
+        method: MethodDecl<At, Rt>,
+        args: At,
+    ) -> Result<Option<Rt>> {
+        self.nonlocal
+            .dispatch_as(self.whoami(), target, method, args)
+            .await
     }
 }
 
@@ -283,19 +299,21 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         let discriminant = Uid::gen_with(&inter.uid_src);
         let (bg_spawner, bg_spawner_recv) = flume::unbounded();
         let comm = inter.comm.subscribe();
+        let inst = HandlerInstance {
+            typ: H::DECL,
+            discriminant,
+            discriminant_desc: Str::Owned(String::new()),
+        };
         let mut rt = Self {
             inter: LocalInterface {
                 nonlocal: inter,
                 bg_spawner,
                 update_metadata: Flag::new(),
+                instance: inst.clone(),
             },
             bg_spawner_recv,
             hdl: DynVar::new(instance),
-            inst: HandlerInstance {
-                typ: H::DECL,
-                discriminant,
-                discriminant_desc: Str::Owned(String::new()),
-            },
+            inst,
             methods: HashMap::default(),
             comm,
             _ph: PhantomData,
@@ -326,6 +344,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 _ = &self.inter.update_metadata => self.update_metadata(),
                 // Err is unreachable
                 (future, method_id, method_desc) = async { self.bg_spawner_recv.recv_async().await.unwrap() } => {
+                    warn!("TODO: Re-implement as a seperate task (like HandlerTaskRt) that sends a normal `comm` message (also consider if the performance vs code size is worth it.)");
                     background.spawn(async move {
                         (future.await, method_id, method_desc)
                     });
