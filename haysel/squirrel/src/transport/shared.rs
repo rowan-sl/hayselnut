@@ -3,19 +3,10 @@ use std::{
     io,
     time::{Duration, Instant},
 };
+use tokio::{net::UdpSocket, time::sleep_until};
 
-async fn sleep_until(when: Instant) {
-    #[cfg(feature = "tokio")]
-    tokio::time::sleep_until(when.into()).await;
-    #[cfg(feature = "smol")]
-    smol::Timer::at(when).await;
-}
-
-use crate::{
-    net::UdpSocket,
-    transport::{
-        extract_packet_type, read_packet, CmdKind, Packet, PACKET_TYPE_COMMAND, UDP_MAX_SIZE,
-    },
+use crate::transport::{
+    extract_packet_type, read_packet, CmdKind, Packet, PACKET_TYPE_COMMAND, UDP_MAX_SIZE,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -65,7 +56,7 @@ pub async fn send_and_wait(
                         continue;
                     }
                 }
-                _ = sleep_until(wait_end).fuse() => {
+                _ = sleep_until(wait_end.into()).fuse() => {
                     warn!("send_and_wait: attempt {attempt}/{max_attempts} timed out after {wait_dur:?} retrying");
                     continue 'send;
                 }

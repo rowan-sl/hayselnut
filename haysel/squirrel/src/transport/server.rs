@@ -1,24 +1,21 @@
 use std::{
     collections::VecDeque,
     mem::swap,
+    net::SocketAddr,
     time::{Duration, Instant},
 };
 
 use num_enum::TryFromPrimitive;
+use tokio::{io, net::UdpSocket};
 
-use crate::{
-    api::station::identity::StationID,
-    net::{SocketAddr, UdpSocket},
-};
+use crate::api::station::identity::StationID;
 
 use super::{
     read_packet, Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE, PACKET_TYPE_COMMAND,
     PACKET_TYPE_FRAME, UDP_MAX_SIZE,
 };
 
-pub async fn recv_next_packet(
-    sock: &UdpSocket,
-) -> Result<Option<(SocketAddr, Packet)>, crate::net::Error> {
+pub async fn recv_next_packet(sock: &UdpSocket) -> io::Result<Option<(SocketAddr, Packet)>> {
     let mut buf = [0; UDP_MAX_SIZE];
     let (amnt, from) = sock.recv_from(&mut buf).await?;
     if amnt > buf.len() {

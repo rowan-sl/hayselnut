@@ -52,7 +52,7 @@ pub struct MethodID {
 }
 
 /// describe a type of handler (UUID, a constant associated with that handler) (similar to a struct's type)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HandlerType {
     /// the UUID of this type
     pub id: Uuid,
@@ -63,7 +63,7 @@ pub struct HandlerType {
 
 /// describe an instance of a spacific handler type (similar to a struct instance)
 /// (UID, associated with an instance)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HandlerInstance {
     /// the UUID of the handler type
     pub typ: HandlerType,

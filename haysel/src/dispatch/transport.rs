@@ -48,7 +48,7 @@ impl HandlerInit for TransportClient {
 }
 
 impl TransportClient {
-    pub async fn new(
+    pub fn new(
         addr: SocketAddr,
         max_trans_t: Duration,
         controller: HandlerInstance,

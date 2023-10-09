@@ -51,7 +51,7 @@ bus_dbg = []
 
 [dependencies.squirrel]
 path = "squirrel"
-features = ["server-utils", "tokio"]
+features = ["server-utils"]
 
 [dependencies.mycelium]
 path = "mycelium"

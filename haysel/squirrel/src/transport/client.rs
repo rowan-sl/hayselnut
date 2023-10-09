@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::net::UdpSocket;
+use tokio::net::UdpSocket;
 
 use crate::transport::{
     shared::{self, send_and_wait},
