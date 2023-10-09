@@ -19,6 +19,7 @@ use tokio::{
 
 use crate::{
     bus::{
+        common::EV_SHUTDOWN,
         handler::{
             handler_decl_t, method_decl, method_decl_owned, HandlerInit, LocalInterface,
             MethodRegister,
@@ -153,6 +154,48 @@ impl IPCConnection {
     async fn send(&mut self, msg: &IPCMsg) -> Result<(), IPCError> {
         mycelium::ipc_send(&mut self.write, msg).await
     }
+
+    async fn new_station(&mut self, &id: &StationID, _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::NewStation { id },
+        })
+        .await
+        .expect("Failed to send `new station` message");
+    }
+
+    async fn new_channel(&mut self, (id, ch): &(ChannelID, Channel), _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::NewChannel {
+                id: *id,
+                ch: ch.clone(),
+            },
+        })
+        .await
+        .expect("Failed to send `new channel` message");
+    }
+
+    async fn station_new_channel(
+        &mut self,
+        (station, channel, _channel_info): &(StationID, ChannelID, Channel),
+        _int: &LocalInterface,
+    ) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::StationNewChannel {
+                station: *station,
+                channel: *channel,
+            },
+        })
+        .await
+        .expect("Failed to send `channel assoc` message");
+    }
+
+    async fn close(&mut self, _: &(), _int: &LocalInterface) {
+        let _ = self
+            .send(&IPCMsg {
+                kind: mycelium::IPCMsgKind::Bye,
+            })
+            .await;
+    }
 }
 
 #[async_trait]
@@ -176,6 +219,10 @@ impl HandlerInit for IPCConnection {
     // methods of this handler instance
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register_owned(Self::handle_read, EV_PRIV_READ);
+        reg.register(Self::new_station, EV_META_NEW_STATION);
+        reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
+        reg.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
+        reg.register(Self::close, EV_SHUTDOWN);
     }
 }
 
