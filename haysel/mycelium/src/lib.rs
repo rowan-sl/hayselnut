@@ -119,4 +119,6 @@ pub enum IPCMsgKind {
         station: StationID,
         channel: ChannelID,
     },
+    /// -- client to server --
+    ClientDisconnect,
 }

@@ -214,7 +214,7 @@ async fn async_main(
         );
     }
 
-    let mut bus = Bus::new().await;
+    let bus = Bus::new().await;
 
     debug!("Loading database");
     warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
@@ -298,18 +298,10 @@ async fn async_main(
     if tokio::fs::try_exists(&ipc_path).await? {
         tokio::fs::remove_file(&ipc_path).await?;
     }
-    let ipc_router_client = IPCConsumer::new(ipc_path, shutdown.handle()).await?;
+    let ipc_stop =
+        ipc::bus::IPCNewConnections::new(ipc_path, stations.clone(), channels.clone()).await?;
+    bus.interface().spawn(ipc_stop);
     info!("IPC configured");
-
-    let mut router = Router::new();
-    router.with_consumer(ipc_router_client);
-    // send the initial update with the current state
-    router
-        .update_station_info(&[StationInfoUpdate::InitialState {
-            stations: stations.clone(),
-            channels: channels.clone(),
-        }])
-        .await?;
 
     info!("running -- press ctrl+c to exit");
     let sock = UdpSocket::bind(addrs.as_slice()).await?;

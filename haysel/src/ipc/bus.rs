@@ -1,6 +1,6 @@
 //! IPC Bus integration
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use mycelium::{
     station::{
@@ -29,13 +29,25 @@ use crate::{
     util::Take,
 };
 
-struct IPCNewConnections {
+pub struct IPCNewConnections {
     listener: Arc<UnixListener>,
     stations: KnownStations,
     channels: KnownChannels,
 }
 
 impl IPCNewConnections {
+    pub async fn new(
+        path: PathBuf,
+        stations: KnownStations,
+        channels: KnownChannels,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            listener: Arc::new(UnixListener::bind(path)?),
+            stations,
+            channels,
+        })
+    }
+
     async fn handle_new_client(
         &mut self,
         cli: io::Result<(UnixStream, SocketAddr)>,
@@ -43,6 +55,7 @@ impl IPCNewConnections {
     ) {
         match cli {
             Ok((stream, addr)) => {
+                debug!("New IPC client connected from {addr:?}");
                 let (read, write) = stream.into_split();
                 let conn = IPCConnection {
                     write,
@@ -98,6 +111,7 @@ impl IPCNewConnections {
 impl HandlerInit for IPCNewConnections {
     const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC New Connection Handler");
     async fn init(&mut self, int: &LocalInterface) {
+        debug!("Launching IPC client listener");
         self.bg_handle_new_client(int);
     }
     // description of this handler instance
@@ -119,7 +133,7 @@ method_decl_owned!(
     ()
 );
 
-struct IPCConnection {
+pub struct IPCConnection {
     write: OwnedWriteHalf,
     read: Take<OwnedReadHalf>,
     addr: SocketAddr,
@@ -140,9 +154,20 @@ impl IPCConnection {
         int: &LocalInterface,
     ) {
         match res {
-            Ok(_msg) => {
-                todo!();
-                self.bg_read(read, int);
+            Ok(msg) => {
+                trace!("IPC: Received {msg:?}");
+                match msg.kind {
+                    mycelium::IPCMsgKind::ClientDisconnect => {
+                        debug!("IPC Client {:?} disconnected", self.addr);
+                        warn!("IPC Client disconnected, but the task will not close (TODO/unimplemented)");
+                        let _ = self
+                            .send(&IPCMsg {
+                                kind: mycelium::IPCMsgKind::Bye,
+                            })
+                            .await;
+                    }
+                    _other => self.bg_read(read, int),
+                }
             }
             Err(e) => {
                 error!("Failed to receive IPC message: {e} - no further attempts to read will be performed");
