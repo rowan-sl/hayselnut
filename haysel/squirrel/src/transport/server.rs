@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flume::Sender;
 use num_enum::TryFromPrimitive;
 
 use crate::{
@@ -61,7 +60,6 @@ enum State {
 #[derive(Debug)]
 pub struct ClientInterface {
     state: State,
-    addr: SocketAddr,
     // packet the next packet is responding to
     respond_to: u32,
     last_sent: u32,
@@ -78,10 +76,9 @@ pub struct ClientInterface {
 
 impl ClientInterface {
     /// dispatch must be unbounded
-    pub fn new(max_transaction_time: Duration, addr: SocketAddr, meta: ClientMetadata) -> Self {
+    pub fn new(max_transaction_time: Duration, meta: ClientMetadata) -> Self {
         Self {
             state: State::default(),
-            addr,
             respond_to: 0,
             last_sent: 0,
             uid_gen: UidGenerator::new(),
