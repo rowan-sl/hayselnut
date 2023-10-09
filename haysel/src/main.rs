@@ -285,7 +285,10 @@ async fn async_main(
             }
         };
         let database = Database::new(store, args.overwrite_reinit).await?;
-        let db_stop = tsdb2::bus::TStopDBus2::new(database).await;
+        let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
+        db_stop
+            .ensure_exists(&(stations.clone(), channels.clone()))
+            .await?;
         bus.interface().spawn(db_stop);
     };
     info!("Database loaded");

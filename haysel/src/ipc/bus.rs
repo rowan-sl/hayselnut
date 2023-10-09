@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use mycelium::{IPCError, IPCMsg};
+use mycelium::{station::capabilities::Channel, IPCError, IPCMsg};
 use tokio::{
     io,
     net::{
@@ -10,10 +10,14 @@ use tokio::{
         UnixListener, UnixStream,
     },
 };
+use uuid::Uuid;
 
 use crate::{
     bus::{
-        handler::{handler_decl_t, method_decl_owned, HandlerInit, LocalInterface, MethodRegister},
+        handler::{
+            handler_decl_t, method_decl, method_decl_owned, HandlerInit, LocalInterface,
+            MethodRegister,
+        },
         msg::Str,
     },
     util::Take,
@@ -104,6 +108,9 @@ impl IPCConnection {
             }
         }
     }
+    async fn send(&mut self, msg: &IPCMsg) -> Result<(), IPCError> {
+        mycelium::ipc_send(&mut self.write, msg).await
+    }
 }
 
 #[async_trait]
@@ -125,3 +132,6 @@ impl HandlerInit for IPCConnection {
 }
 
 method_decl_owned!(EV_PRIV_READ, (OwnedReadHalf, Result<IPCMsg, IPCError>), ());
+method_decl!(EV_META_NEW_STATION, Uuid, ());
+method_decl!(EV_META_NEW_CHANNEL, (Uuid, Channel), ());
+method_decl!(EV_META_STATION_ASSOC_CHANNEL, (Uuid, Uuid, Channel), ());

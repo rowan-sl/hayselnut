@@ -14,6 +14,7 @@ use crate::{
         handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface},
         msg::{HandlerType, Str},
     },
+    ipc::bus::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
     util::Take,
 };
 
@@ -43,26 +44,28 @@ impl<S: Storage> TStopDBus2<S> {
         Ok(args.clone().with_db(&mut self.db).execute().await?)
     }
 
-    async fn ensure_exists(
+    pub async fn ensure_exists(
         &mut self,
         (_stations, _channels): &(KnownStations, KnownChannels),
-        _int: &LocalInterface,
     ) -> Result<()> {
         warn!("Initial state verification unimplemented (necessary stations/channels may not exist in the database)");
         Ok(())
     }
 
-    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) -> Result<()> {
-        self.db.add_station(id).await?;
-        Ok(())
+    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) {
+        if let Err(err) = self.db.add_station(id).await {
+            error!("Error occured adding station to DB: {err:?}");
+            warn!("Handling of this error is not implemented");
+        }
     }
 
     async fn station_new_channel(
         &mut self,
         (station, channel, channel_info): &(Uuid, Uuid, Channel),
         _int: &LocalInterface,
-    ) -> Result<()> {
-        self.db
+    ) {
+        if let Err(err) = self
+            .db
             .add_channel(
                 *station,
                 *channel,
@@ -71,8 +74,11 @@ impl<S: Storage> TStopDBus2<S> {
                     ChannelType::Triggered => DataGroupType::Sporadic,
                 },
             )
-            .await?;
-        Ok(())
+            .await
+        {
+            error!("Error occured adding channel to station in DB: {err:?}");
+            warn!("Handling of this error is not implemented");
+        }
     }
 }
 
@@ -84,9 +90,8 @@ impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
     fn methods(&self, r: &mut crate::bus::handler::MethodRegister<Self>) {
         r.register(Self::close, EV_SHUTDOWN);
         r.register(Self::query, EV_DB_QUERY);
-        r.register(Self::ensure_exists, EV_DB_META_ENSURE_EXISTS);
-        r.register(Self::new_station, EV_DB_META_NEW_STATION);
-        r.register(Self::station_new_channel, EV_DB_META_STATION_ASSOC_CHANNEL);
+        r.register(Self::new_station, EV_META_NEW_STATION);
+        r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
     }
 }
 
@@ -94,15 +99,4 @@ method_decl!(
     EV_DB_QUERY,
     QueryParamsNoDB,
     Result<Vec<(DateTime<Utc>, f32)>>
-);
-method_decl!(
-    EV_DB_META_ENSURE_EXISTS,
-    (KnownStations, KnownChannels),
-    Result<()>
-);
-method_decl!(EV_DB_META_NEW_STATION, Uuid, Result<()>);
-method_decl!(
-    EV_DB_META_STATION_ASSOC_CHANNEL,
-    (Uuid, Uuid, Channel),
-    Result<()>
 );
