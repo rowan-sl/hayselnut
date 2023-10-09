@@ -313,7 +313,7 @@ pub(in crate::bus) struct HandlerTaskRt<H: HandlerInit> {
     hdl: DynVar,
     inst: HandlerInstance,
     methods: HashMap<Uuid, MethodRaw>,
-    comm: broadcast::Receiver<Arc<Msg>>,
+    comm_filtered: flume::Receiver<Arc<Msg>>,
     _ph: PhantomData<H>,
 }
 
@@ -321,12 +321,43 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
     pub fn new(inter: Interface, instance: H) -> Self {
         let discriminant = Uid::gen_with(&inter.uid_src);
         let (bg_spawner, bg_spawner_recv) = flume::unbounded();
-        let comm = inter.comm.subscribe();
+        let mut comm = inter.comm.subscribe();
+        let (cf_send, comm_filtered) = flume::bounded(512);
         let inst = HandlerInstance {
             typ: H::DECL,
             discriminant,
             discriminant_desc: Str::Owned(String::new()),
         };
+        let inst2 = inst.clone();
+        tokio::spawn(async move {
+            let name = type_name::<H>();
+            loop {
+                let recvd = match comm.recv().await {
+                    Ok(recvd) => recvd,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(num_missed)) => {
+                        error!("Handler task for handler {} lagged, skipped {num_missed} messages. beware!", name);
+                        continue;
+                    }
+                };
+                if match &recvd.kind {
+                    msg::MsgKind::Request { target, method, .. } => {
+                        Self::msg_target_match(&inst2, target, method)
+                    }
+                } {
+                    match cf_send.try_send(recvd) {
+                        Ok(()) => {}
+                        Err(flume::TrySendError::Disconnected(..)) => break,
+                        Err(flume::TrySendError::Full(value)) => {
+                            warn!("Buffer queue for task {} is full! if this continues, the bus receiver may lag!", name);
+                            if let Err(..) = cf_send.send_async(value).await {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
         let mut rt = Self {
             inter: LocalInterface {
                 nonlocal: inter,
@@ -338,7 +369,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             hdl: DynVar::new(instance),
             inst,
             methods: HashMap::default(),
-            comm,
+            comm_filtered,
             _ph: PhantomData,
         };
         rt.update_metadata();
@@ -363,7 +394,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         let mut background = JoinSet::<(DynVar, Uuid, &'static str)>::new();
         loop {
             select! {
-                message = self.comm.recv() => self.handle_message(message?).await?,
+                message = self.comm_filtered.recv_async() => self.handle_message(message?).await?,
                 _ = &self.inter.update_metadata => self.update_metadata(),
                 // Err is unreachable
                 (future, method_id, method_desc) = async { self.bg_spawner_recv.recv_async().await.unwrap() } => {
@@ -409,7 +440,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 arguments,
                 response,
             } => {
-                if !self.validate_msg_target(target, method).await {
+                if !self.msg_method_validate(method) {
                     return Ok(());
                 }
                 let method_val = self.methods.get(&method.id).unwrap();
@@ -433,20 +464,9 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         Ok(())
     }
 
-    async fn validate_msg_target(&mut self, target: &msg::Target, method: &msg::MethodID) -> bool {
-        let target_matches = match target {
-            msg::Target::Any => true,
-            msg::Target::Type(typ) if typ.id == self.inst.typ.id => true,
-            msg::Target::Instance(inst)
-                if inst.discriminant == self.inst.discriminant
-                    && inst.typ.id == self.inst.typ.id =>
-            {
-                true
-            }
-            _ => false,
-        };
+    fn msg_method_validate(&self, method: &msg::MethodID) -> bool {
         let method_val = self.methods.get(&method.id);
-        let method_exists = method_val.is_some_and(|val| {
+        method_val.is_some_and(|val| {
             #[cfg(feature = "bus_dbg")]
             {
                 if method.id_desc != val.handler_desc {
@@ -459,8 +479,24 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             }
             #[cfg(not(feature = "bus_dbg"))]
             { true }
-        });
-        target_matches && method_exists
+        })
+    }
+
+    fn msg_target_match(
+        this: &HandlerInstance,
+        target: &msg::Target,
+        method: &msg::MethodID,
+    ) -> bool {
+        match target {
+            msg::Target::Any => true,
+            msg::Target::Type(typ) if typ.id == this.typ.id => true,
+            msg::Target::Instance(inst)
+                if inst.discriminant == this.discriminant && inst.typ.id == this.typ.id =>
+            {
+                true
+            }
+            _ => false,
+        }
     }
 }
 

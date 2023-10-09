@@ -13,10 +13,7 @@ use tokio::{
 
 use crate::{
     bus::{
-        handler::{
-            handler_decl_t, method_decl_owned, HandlerInit, LocalInterface,
-            MethodRegister,
-        },
+        handler::{handler_decl_t, method_decl_owned, HandlerInit, LocalInterface, MethodRegister},
         msg::Str,
     },
     util::Take,
