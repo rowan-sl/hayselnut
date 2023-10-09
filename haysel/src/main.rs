@@ -39,25 +39,24 @@ use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
 mod args;
+pub mod bus;
 mod commands;
 mod config;
 mod consumer;
+mod dispatch;
+mod flag;
 mod ipc;
 mod log;
 mod paths;
 mod registry;
 mod route;
 mod shutdown;
-// pub mod tsdb;
-pub mod bus;
-mod flag;
 pub mod tsdb2;
 mod util;
 
 use args::{ArgsParser, RunArgs};
-use consumer::{db::RecordDB, ipc::IPCConsumer};
 use registry::JsonLoader;
-use route::{Router, StationInfoUpdate};
+use route::StationInfoUpdate;
 use shutdown::Shutdown;
 use tsdb2::{
     alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
@@ -336,7 +335,6 @@ async fn async_main(
                                     packet,
                                     &mut stations,
                                     &mut channels,
-                                    &mut router,
                                     ip,
                                     &mut clients
                                 ).await?
@@ -392,7 +390,6 @@ async fn handle_packet(
     packet: PacketKind,
     stations: &mut JsonLoader<KnownStations>,
     channels: &mut JsonLoader<KnownChannels>,
-    router: &mut Router,
     ip: SocketAddr,
     clients: &mut HashMap<SocketAddr, ClientInterface>,
 ) -> Result<()> {
