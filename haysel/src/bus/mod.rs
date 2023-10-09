@@ -9,6 +9,7 @@ pub mod dyn_var;
 pub mod handler;
 pub mod id;
 pub mod msg;
+pub mod one_of;
 #[cfg(test)]
 mod test;
 

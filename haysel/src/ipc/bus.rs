@@ -14,7 +14,7 @@ use tokio::{
 use crate::{
     bus::{
         handler::{
-            handler_decl_t, method_decl, method_decl_owned, HandlerInit, LocalInterface,
+            handler_decl_t, method_decl_owned, HandlerInit, LocalInterface,
             MethodRegister,
         },
         msg::Str,
@@ -97,6 +97,7 @@ impl IPCConnection {
     ) {
         match res {
             Ok(_msg) => {
+                todo!();
                 self.bg_read(read, int);
             }
             Err(e) => {
