@@ -8,7 +8,7 @@ use crate::{
         handler::{decl::MethodDecl, interface::Interface},
         msg::{self, HandlerInstance},
     },
-    flag::Flag,
+    misc::Flag,
 };
 
 pub struct LocalInterface {

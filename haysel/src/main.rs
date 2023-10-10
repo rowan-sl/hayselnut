@@ -15,35 +15,30 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
-use std::{net::SocketAddr, process, time::Duration};
+use std::{process, time::Duration};
 
-use anyhow::Result;
 use clap::Parser;
 use nix::{
     sys::signal::{kill, Signal},
     unistd::{daemon, Pid},
 };
-use paths::RecordsPath;
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 use tokio::{net::UdpSocket, runtime};
-use trust_dns_resolver::config as resolveconf;
-use trust_dns_resolver::TokioAsyncResolver;
 
 mod args;
 mod bus;
 mod commands;
 mod config;
 mod dispatch;
-mod flag;
 mod ipc;
 mod log;
-mod paths;
+mod misc;
 mod registry;
 mod shutdown;
-mod take;
 pub mod tsdb2;
 
 use args::{ArgsParser, RunArgs};
+use misc::{lookup_server_ip, RecordsPath};
 use registry::JsonLoader;
 use shutdown::Shutdown;
 use tsdb2::{
@@ -83,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                 self::config::from_str(&buf)?
             };
 
-            let run_dir = paths::RecordsPath::new(cfg.directory.run.clone());
+            let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
             run_dir.ensure_exists_blocking()?;
             let pid_file = run_dir.path("daemon.lock");
             if !pid_file.try_exists()? {
@@ -115,9 +110,9 @@ fn main() -> anyhow::Result<()> {
         self::config::from_str(&buf)?
     };
 
-    let records_dir = paths::RecordsPath::new(cfg.directory.data.clone());
+    let records_dir = misc::RecordsPath::new(cfg.directory.data.clone());
     records_dir.ensure_exists_blocking()?;
-    let run_dir = paths::RecordsPath::new(cfg.directory.run.clone());
+    let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
     run_dir.ensure_exists_blocking()?;
 
     let pid_file = run_dir.path("daemon.lock");
@@ -319,27 +314,4 @@ async fn async_main(
     shutdown.wait_for_completion().await;
 
     Ok(())
-}
-
-/// it is necessary to bind the server to the real external ip address,
-/// or risk confusing issues (forgot what, but it's bad)
-async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
-    info!(
-        "Performing DNS lookup of server's extranal IP (url={})",
-        url
-    );
-    let resolver = TokioAsyncResolver::tokio(
-        resolveconf::ResolverConfig::default(),
-        resolveconf::ResolverOpts::default(),
-    );
-    let addrs = resolver
-        .lookup_ip(url)
-        .await?
-        .into_iter()
-        .map(|addr| {
-            debug!("Resolved IP {addr}");
-            SocketAddr::new(addr, port)
-        })
-        .collect::<Vec<_>>();
-    Ok::<_, anyhow::Error>(addrs)
 }

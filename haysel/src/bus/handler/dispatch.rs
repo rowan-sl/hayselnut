@@ -11,7 +11,7 @@ use crate::{
         id::Uid,
         msg::{self, HandlerInstance},
     },
-    flag::Flag,
+    misc::Flag,
 };
 
 pub(in crate::bus) async fn bus_dispatch_event(

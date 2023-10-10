@@ -4,7 +4,7 @@ use super::atomic_cell::AtomicCell;
 use super::dyn_var::DynVar;
 use uuid::Uuid;
 
-use crate::flag::Flag;
+use crate::misc::Flag;
 
 use super::id::Uid;
 

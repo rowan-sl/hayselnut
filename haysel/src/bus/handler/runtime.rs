@@ -17,7 +17,7 @@ use crate::{
         id::Uid,
         msg::{self, HandlerInstance, Msg, Str},
     },
-    flag::Flag,
+    misc::Flag,
 };
 
 pub(in crate::bus) struct HandlerTaskRt<H: HandlerInit> {
