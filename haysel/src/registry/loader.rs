@@ -12,7 +12,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::shutdown::{async_drop::AsyncDrop, ShutdownHandle};
+use crate::core::shutdown::{async_drop::AsyncDrop, ShutdownHandle};
 
 pub struct JsonLoader<R: Serialize + DeserializeOwned> {
     file: Option<File>,

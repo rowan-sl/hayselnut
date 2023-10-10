@@ -25,22 +25,22 @@ use nix::{
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 use tokio::{net::UdpSocket, runtime};
 
-mod args;
 mod bus;
-mod commands;
-mod config;
+mod core;
 mod dispatch;
 mod ipc;
-mod log;
 mod misc;
 mod registry;
-mod shutdown;
 pub mod tsdb2;
 
-use args::{ArgsParser, RunArgs};
-use misc::{lookup_server_ip, RecordsPath};
+use core::lookup_server_ip;
+use core::{
+    args::{self, ArgsParser, RunArgs},
+    commands,
+    shutdown::{util::trap_ctrl_c, Shutdown},
+};
+use misc::RecordsPath;
 use registry::JsonLoader;
-use shutdown::Shutdown;
 use tsdb2::{
     alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
     Database,
@@ -57,7 +57,7 @@ use crate::{
 
 fn main() -> anyhow::Result<()> {
     let args = ArgsParser::parse();
-    log::init_logging()?;
+    core::init_logging()?;
 
     let run_args;
     match args {
@@ -75,7 +75,7 @@ fn main() -> anyhow::Result<()> {
 
             let cfg = {
                 let buf = std::fs::read_to_string(&config)?;
-                self::config::from_str(&buf)?
+                core::config::from_str(&buf)?
             };
 
             let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 
     let cfg = {
         let buf = std::fs::read_to_string(&run_args.config)?;
-        self::config::from_str(&buf)?
+        core::config::from_str(&buf)?
     };
 
     let records_dir = misc::RecordsPath::new(cfg.directory.data.clone());
@@ -158,14 +158,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn async_main(
-    cfg: self::config::Config,
+    cfg: core::config::Config,
     args: RunArgs,
     shutdown: &mut Shutdown,
     records_dir: RecordsPath,
     run_dir: RecordsPath,
 ) -> anyhow::Result<()> {
     // trap the ctrl+csignal, will only start listening later in the main loop
-    shutdown::util::trap_ctrl_c(shutdown.handle()).await;
+    trap_ctrl_c(shutdown.handle()).await;
 
     let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
     let bus = Bus::new().await;
@@ -207,13 +207,13 @@ async fn async_main(
             .database
             .storage
         {
-            config::StorageMode::default => {
+            core::config::StorageMode::default => {
                 let path = records_dir.path("data.tsdb2");
                 Box::new(DynStorage(
                     DiskStore::new(&path, false, DiskMode::Dynamic).await?,
                 ))
             }
-            config::StorageMode::file => {
+            core::config::StorageMode::file => {
                 if cfg.database.files.len() != 1 {
                     if cfg.database.files.is_empty() {
                         error!("Failed to create database storage: file mode is requested, but no file is provided");
@@ -222,7 +222,7 @@ async fn async_main(
                     }
                     bail!("Failed to create database store");
                 }
-                let config::File { path, blockdevice } = cfg.database.files[0].clone();
+                let core::config::File { path, blockdevice } = cfg.database.files[0].clone();
                 Box::new(DynStorage(
                     DiskStore::new(
                         &path,
@@ -236,7 +236,7 @@ async fn async_main(
                     .await?,
                 ))
             }
-            config::StorageMode::raid => {
+            core::config::StorageMode::raid => {
                 if cfg.database.files.is_empty() {
                     error!("Failed to create database storage: RAID mode is requested, but no file(s) are provided");
                     bail!("Failed to create database store");
@@ -245,7 +245,7 @@ async fn async_main(
                     warn!("RAID mode is requested, but only one backing file is specified. this will cause unnecessary overhead, and it is recommended to switch to using single file mode");
                 }
                 let mut array = RaidArray::new();
-                for config::File { path, blockdevice } in cfg.database.files {
+                for core::config::File { path, blockdevice } in cfg.database.files {
                     let store = DiskStore::new(
                         &path,
                         false,

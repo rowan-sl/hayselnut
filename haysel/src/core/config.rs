@@ -8,7 +8,7 @@ use serde::Deserialize;
 fn load_example_config() {
     let settings = config::Config::builder()
         .add_source(config::File::from_str(
-            include_str!("../config.example.toml"),
+            include_str!("../../config.example.toml"),
             config::FileFormat::Toml,
         ))
         .build()

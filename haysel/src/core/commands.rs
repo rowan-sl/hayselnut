@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    args::{ArgsParser, Cmd},
+    core::args::{ArgsParser, Cmd},
     tsdb2::alloc::store::disk::DiskMode,
 };
 

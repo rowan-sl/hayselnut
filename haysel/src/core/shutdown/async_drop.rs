@@ -1,13 +1,11 @@
 use futures::Future;
 use tokio::runtime;
 
-use crate::shutdown;
-
 use super::ShutdownHandle;
 
 pub struct AsyncDrop {
     handle: runtime::Handle,
-    shutdown: Option<shutdown::ShutdownHandle>,
+    shutdown: Option<super::ShutdownHandle>,
 }
 
 impl AsyncDrop {
