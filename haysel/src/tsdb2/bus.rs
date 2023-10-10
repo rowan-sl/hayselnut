@@ -3,7 +3,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mycelium::station::{
-    capabilities::{Channel, ChannelType, KnownChannels},
+    capabilities::{Channel, ChannelData, ChannelType, KnownChannels},
     identity::KnownStations,
 };
 use uuid::Uuid;
@@ -14,7 +14,9 @@ use crate::{
         handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface},
         msg::{HandlerType, Str},
     },
-    ipc::bus::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
+    consumer::Record,
+    dispatch::application::EV_WEATHER_DATA_RECEIVED,
+    registry::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
     util::Take,
 };
 
@@ -80,6 +82,26 @@ impl<S: Storage> TStopDBus2<S> {
             warn!("Handling of this error is not implemented");
         }
     }
+
+    async fn record_data(&mut self, data: &Record, _int: &LocalInterface) {
+        for (ch, val) in &data.data {
+            self.db
+                .add_data(
+                    data.recorded_by,
+                    *ch,
+                    data.recorded_at,
+                    match val {
+                        ChannelData::Float(val) => *val,
+                        ChannelData::Event { .. } => {
+                            error!("Database does not support recording `event` type events yet");
+                            continue;
+                        }
+                    },
+                )
+                .await
+                .expect("Failed to insert data into database");
+        }
+    }
 }
 
 impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
@@ -92,6 +114,7 @@ impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
         r.register(Self::query, EV_DB_QUERY);
         r.register(Self::new_station, EV_META_NEW_STATION);
         r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
+        r.register(Self::record_data, EV_WEATHER_DATA_RECEIVED);
     }
 }
 

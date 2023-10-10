@@ -32,7 +32,7 @@ use squirrel::{
         },
         ChannelMappings, PacketKind,
     },
-    transport::server::{recv_next_packet, ClientInterface, ClientMetadata, DispatchEvent},
+    transport::server::{recv_next_packet, ClientInterface, DispatchEvent},
 };
 use tokio::{net::UdpSocket, runtime, select};
 use trust_dns_resolver::config as resolveconf;
@@ -56,7 +56,7 @@ mod util;
 
 use args::{ArgsParser, RunArgs};
 use registry::JsonLoader;
-use route::StationInfoUpdate;
+use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
 use tsdb2::{
     alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
@@ -64,7 +64,8 @@ use tsdb2::{
 };
 
 use crate::{
-    bus::Bus,
+    bus::{msg, Bus},
+    registry::Registry,
     tsdb2::alloc::store::{
         disk::DiskMode,
         raid::{self, DynStorage, IsDynStorage},
@@ -184,15 +185,16 @@ async fn async_main(
     shutdown::util::trap_ctrl_c(shutdown.handle()).await;
 
     let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
+    let bus = Bus::new().await;
 
     info!("Loading info for known stations");
-    let mut stations =
+    let stations =
         JsonLoader::<KnownStations>::open(records_dir.path("stations.json"), shutdown.handle())
             .await?;
     debug!("Loaded known stations:");
 
     info!("Loading known channels");
-    let mut channels =
+    let channels =
         JsonLoader::<KnownChannels>::open(records_dir.path("channels.json"), shutdown.handle())
             .await?;
 
@@ -213,7 +215,7 @@ async fn async_main(
         );
     }
 
-    let bus = Bus::new().await;
+    let registry = bus.spawn(Registry::new(stations, channels));
 
     debug!("Loading database");
     warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
@@ -285,10 +287,17 @@ async fn async_main(
         };
         let database = Database::new(store, args.overwrite_reinit).await?;
         let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
-        db_stop
-            .ensure_exists(&(stations.clone(), channels.clone()))
-            .await?;
-        bus.interface().spawn(db_stop);
+        let (stations, channels) = bus
+            .dispatch_as(
+                bus::common::HDL_EXTERNAL,
+                msg::Target::Instance(registry.clone()),
+                registry::EV_REGISTRY_QUERY_ALL,
+                (),
+            )
+            .await?
+            .ok_or(anyhow!("Did not get a reply from the registry"))?;
+        db_stop.ensure_exists(&(stations, channels)).await?;
+        bus.spawn(db_stop);
     };
     info!("Database loaded");
 
@@ -297,65 +306,26 @@ async fn async_main(
     if tokio::fs::try_exists(&ipc_path).await? {
         tokio::fs::remove_file(&ipc_path).await?;
     }
-    let ipc_stop =
-        ipc::bus::IPCNewConnections::new(ipc_path, stations.clone(), channels.clone()).await?;
-    bus.interface().spawn(ipc_stop);
+    let ipc_stop = ipc::bus::IPCNewConnections::new(ipc_path, registry.clone()).await?;
+    bus.spawn(ipc_stop);
     info!("IPC configured");
 
     info!("running -- press ctrl+c to exit");
     let sock = UdpSocket::bind(addrs.as_slice()).await?;
     let max_transaction_time = Duration::from_secs(30);
-    let (dispatch, dispatch_rx) = flume::unbounded::<(SocketAddr, DispatchEvent)>();
-    let mut clients = HashMap::<SocketAddr, ClientInterface>::new();
-    let mut handle = shutdown.handle();
 
-    loop {
-        select! {
-            // TODO: complete transactions and inform clients before exit
-            _ = handle.wait_for_shutdown() => {
-                // shutdown of router clients is handled after the loop exists
-                drop(handle);
-                break;
-            }
-            recv = dispatch_rx.recv_async() => {
-                let (ip, event) = recv.unwrap();
-                match event {
-                    DispatchEvent::Send(packet) => {
-                        //debug!("Sending {packet:#?} to {ip:?}");
-                        sock.send_to(packet.as_bytes(), ip).await?;
-                    }
-                    DispatchEvent::TimedOut => {
-                        error!("Connection to {ip:?} timed out");
-                    }
-                    DispatchEvent::Received(recv_data) => {
-                        debug!("received [packet] from {ip:?}");
-                        match rmp_serde::from_slice::<PacketKind>(&recv_data) {
-                            Ok(packet) => {
-                                handle_packet(
-                                    packet,
-                                    &mut stations,
-                                    &mut channels,
-                                    ip,
-                                    &mut clients
-                                ).await?
-                            }
-                            Err(e) => {
-                                warn!("packet was malformed (failed to deserialize)\nerror: {e:?}");
-                            }
-                        }
-                    }
-                }
-            }
-            packet = recv_next_packet(&sock) => {
-                if let Some((from, packet)) = packet? {
-                    //debug!("Received {packet:#?} from {from:?}");
-                    let cl = clients.entry(from)
-                        .or_insert_with(|| ClientInterface::new(max_transaction_time, from, dispatch.clone(), ClientMetadata::default()));
-                    cl.handle(packet);
-                }
-            }
-        };
-    }
+    let dispatch_ctrl = dispatch::Controller::new(sock, max_transaction_time, registry.clone());
+    bus.spawn(dispatch_ctrl);
+
+    shutdown.handle().wait_for_shutdown().await;
+
+    bus.dispatch_as(
+        bus::common::HDL_EXTERNAL,
+        msg::Target::Any,
+        bus::common::EV_SHUTDOWN,
+        (),
+    )
+    .await?;
 
     trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
     shutdown.wait_for_completion().await;
@@ -390,6 +360,7 @@ async fn handle_packet(
     packet: PacketKind,
     stations: &mut JsonLoader<KnownStations>,
     channels: &mut JsonLoader<KnownChannels>,
+    mut router: Router,
     ip: SocketAddr,
     clients: &mut HashMap<SocketAddr, ClientInterface>,
 ) -> Result<()> {
@@ -478,7 +449,7 @@ async fn handle_packet(
             .unwrap();
             let client = clients.get_mut(&ip).unwrap();
             client.queue(resp);
-            client.access_metadata().uuid = Some(pkt_data.station_id);
+            // client.access_metadata().uuid = Some(pkt_data.station_id);
         }
         PacketKind::Data(pkt_data) => {
             let received_at = chrono::Utc::now();
@@ -498,18 +469,18 @@ async fn handle_packet(
                 }
             }
             info!("Received data:\n{buf}");
-            router
-                .process(consumer::Record {
-                    recorded_at: received_at,
-                    recorded_by: clients
-                        .get_mut(&ip)
-                        .unwrap()
-                        .access_metadata()
-                        .uuid
-                        .unwrap(),
-                    data: pkt_data.per_channel,
-                })
-                .await?;
+            // router
+            //     .process(consumer::Record {
+            //         recorded_at: received_at,
+            //         recorded_by: clients
+            //             .get_mut(&ip)
+            //             .unwrap()
+            //             .access_metadata()
+            //             .uuid
+            //             .unwrap(),
+            //         data: pkt_data.per_channel,
+            //     })
+            //     .await?;
         }
         _ => warn!("received unexpected packet, ignoring"),
     }

@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc};
 use mycelium::{
     station::{
         capabilities::{Channel, ChannelID, KnownChannels},
-        identity::{KnownStations, StationID, StationInfo},
+        identity::{KnownStations, StationID},
     },
     IPCError, IPCMsg,
 };
@@ -20,31 +20,25 @@ use tokio::{
 use crate::{
     bus::{
         common::EV_SHUTDOWN,
-        handler::{
-            handler_decl_t, method_decl, method_decl_owned, HandlerInit, LocalInterface,
-            MethodRegister,
-        },
-        msg::Str,
+        handler::{handler_decl_t, method_decl_owned, HandlerInit, LocalInterface, MethodRegister},
+        msg::{self, HandlerInstance, Str},
     },
+    consumer::Record,
+    dispatch::application::EV_WEATHER_DATA_RECEIVED,
+    registry::{self, EV_META_NEW_CHANNEL, EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
     util::Take,
 };
 
 pub struct IPCNewConnections {
     listener: Arc<UnixListener>,
-    stations: KnownStations,
-    channels: KnownChannels,
+    registry: HandlerInstance,
 }
 
 impl IPCNewConnections {
-    pub async fn new(
-        path: PathBuf,
-        stations: KnownStations,
-        channels: KnownChannels,
-    ) -> io::Result<Self> {
+    pub async fn new(path: PathBuf, registry: HandlerInstance) -> io::Result<Self> {
         Ok(Self {
             listener: Arc::new(UnixListener::bind(path)?),
-            stations,
-            channels,
+            registry,
         })
     }
 
@@ -57,11 +51,20 @@ impl IPCNewConnections {
             Ok((stream, addr)) => {
                 debug!("New IPC client connected from {addr:?}");
                 let (read, write) = stream.into_split();
+                let (stations, channels) = int
+                    .dispatch(
+                        msg::Target::Instance(self.registry.clone()),
+                        registry::EV_REGISTRY_QUERY_ALL,
+                        (),
+                    )
+                    .await
+                    .expect("Failed to dispatch")
+                    .expect("Received no reply from registry");
                 let conn = IPCConnection {
                     write,
                     read: Take::new(read),
                     addr,
-                    init_known: Take::new((self.stations.clone(), self.channels.clone())),
+                    init_known: Take::new((stations, channels)),
                 };
                 int.nonlocal.spawn(conn);
                 self.bg_handle_new_client(int);
@@ -75,35 +78,6 @@ impl IPCNewConnections {
     fn bg_handle_new_client(&mut self, int: &LocalInterface) {
         let li = self.listener.clone();
         int.bg_spawn(EV_PRIV_NEW_CONNECTION, async move { li.accept().await });
-    }
-
-    async fn new_station(&mut self, id: &StationID, _int: &LocalInterface) {
-        self.stations
-            .insert_station(
-                *id,
-                StationInfo {
-                    supports_channels: vec![],
-                },
-            )
-            .expect("new_station called with one that already exists");
-    }
-
-    async fn new_channel(&mut self, (id, ch): &(ChannelID, Channel), _int: &LocalInterface) {
-        self.channels
-            .insert_channel_with_id(ch.clone(), *id)
-            .expect("new_channel called with one that already exists")
-    }
-
-    async fn assoc_channel(
-        &mut self,
-        (sta_id, ch_id, _ch_inf): &(StationID, ChannelID, Channel),
-        _int: &LocalInterface,
-    ) {
-        self.channels.get_channel(ch_id)
-            .expect("StationNewChannel attempted to associate a station with a channel that does not exist!");
-        self.stations.map_info(sta_id, |_id, info| {
-            info.supports_channels.push(*ch_id);
-        }).expect("StationNewChannel attempted to associate a channel with a station that does not exist");
     }
 }
 
@@ -121,9 +95,6 @@ impl HandlerInit for IPCNewConnections {
     // methods of this handler instance
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register_owned(Self::handle_new_client, EV_PRIV_NEW_CONNECTION);
-        reg.register(Self::new_station, EV_META_NEW_STATION);
-        reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
-        reg.register(Self::assoc_channel, EV_META_STATION_ASSOC_CHANNEL);
     }
 }
 
@@ -221,6 +192,18 @@ impl IPCConnection {
             })
             .await;
     }
+
+    async fn send_data(&mut self, data: &Record, _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::FreshHotData {
+                from: data.recorded_by,
+                recorded_at: data.recorded_at,
+                by_channel: data.data.clone(),
+            },
+        })
+        .await
+        .expect("Failed to send `new data received` message");
+    }
 }
 
 #[async_trait]
@@ -247,15 +230,9 @@ impl HandlerInit for IPCConnection {
         reg.register(Self::new_station, EV_META_NEW_STATION);
         reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
         reg.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
+        reg.register(Self::send_data, EV_WEATHER_DATA_RECEIVED);
         reg.register(Self::close, EV_SHUTDOWN);
     }
 }
 
 method_decl_owned!(EV_PRIV_READ, (OwnedReadHalf, Result<IPCMsg, IPCError>), ());
-method_decl!(EV_META_NEW_STATION, StationID, ());
-method_decl!(EV_META_NEW_CHANNEL, (ChannelID, Channel), ());
-method_decl!(
-    EV_META_STATION_ASSOC_CHANNEL,
-    (StationID, ChannelID, Channel),
-    ()
-);

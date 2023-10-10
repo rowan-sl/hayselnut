@@ -5,6 +5,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use squirrel::transport::{server::recv_next_packet, Packet};
 use tokio::{io, net::UdpSocket};
 
+pub mod application;
 pub mod transport;
 
 use crate::bus::{
@@ -18,11 +19,14 @@ pub use transport::{
     TransportClient, EV_TRANS_CLI_DATA_RECVD, EV_TRANS_CLI_QUEUE_DATA, EV_TRANS_CLI_REQ_SEND_PKT,
 };
 
+use self::{application::AppClient, transport::EV_TRANS_CLI_IDENT_APP};
+
 pub struct Controller {
     sock: Arc<UdpSocket>,
     active_clients: HashMap<SocketAddr, HandlerInstance>,
     active_clients_inv: HashMap<HandlerInstance, SocketAddr>,
     max_trans_t: Duration,
+    registry: HandlerInstance,
 }
 
 // sent by `Controller` to the relevant `TransportClient` when it receives a packet
@@ -56,12 +60,13 @@ impl HandlerInit for Controller {
 }
 
 impl Controller {
-    pub async fn new(sock: UdpSocket, max_trans_t: Duration) -> Self {
+    pub fn new(sock: UdpSocket, max_trans_t: Duration, registry: HandlerInstance) -> Self {
         Self {
             sock: Arc::new(sock),
             active_clients: HashMap::new(),
             active_clients_inv: HashMap::new(),
             max_trans_t,
+            registry,
         }
     }
 
@@ -80,15 +85,24 @@ impl Controller {
                 let target = if self.active_clients.contains_key(&addr) {
                     self.active_clients.get(&addr).unwrap().clone()
                 } else {
-                    todo!("spawn actual application layer interface");
                     let trans_cli = TransportClient::new(
                         addr,
                         self.max_trans_t,
                         int.whoami(),
-                        // NEED TO REMOVE THIS< REPLACE W/ APPLICATION LAYER HANDLER ID
-                        int.whoami(),
                     );
                     let trans_cli_inst = int.nonlocal.spawn(trans_cli);
+                    let appl_cli = AppClient::new(
+                        addr,
+                        int.whoami(),
+                        trans_cli_inst.clone(),
+                        self.registry.clone(),
+                    );
+                    let appl_cli_inst = int.nonlocal.spawn(appl_cli);
+                    int.dispatch(
+                        msg::Target::Instance(trans_cli_inst.clone()),
+                        EV_TRANS_CLI_IDENT_APP,
+                        appl_cli_inst,
+                    ).await.unwrap();
                     self.insert_active_client(addr, trans_cli_inst.clone());
                     trans_cli_inst
                 };

@@ -8,8 +8,6 @@ use std::{
 use num_enum::TryFromPrimitive;
 use tokio::{io, net::UdpSocket};
 
-use crate::api::station::identity::StationID;
-
 use super::{
     read_packet, Cmd, CmdKind, Frame, Packet, UidGenerator, FRAME_BUF_SIZE, PACKET_TYPE_COMMAND,
     PACKET_TYPE_FRAME, UDP_MAX_SIZE,
@@ -34,12 +32,6 @@ pub enum DispatchEvent {
     TimedOut,
     /// data has been received
     Received(Vec<u8>),
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ClientMetadata {
-    /// =None when the station has not made its ID known
-    pub uuid: Option<StationID>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,12 +60,11 @@ pub struct ClientInterface {
     send_queue: VecDeque<Vec<u8>>,
     send_buf: Vec<u8>,
     last_sent_send_buf: Vec<u8>,
-    meta: ClientMetadata,
 }
 
 impl ClientInterface {
     /// dispatch must be unbounded
-    pub fn new(max_transaction_time: Duration, meta: ClientMetadata) -> Self {
+    pub fn new(max_transaction_time: Duration) -> Self {
         Self {
             state: State::default(),
             respond_to: 0,
@@ -85,12 +76,7 @@ impl ClientInterface {
             send_queue: Default::default(),
             send_buf: vec![],
             last_sent_send_buf: vec![],
-            meta,
         }
-    }
-
-    pub fn access_metadata(&mut self) -> &mut ClientMetadata {
-        &mut self.meta
     }
 
     pub fn queue(&mut self, to_send: Vec<u8>) {

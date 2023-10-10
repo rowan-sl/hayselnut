@@ -1,10 +1,9 @@
 use std::{net::SocketAddr, time::Duration};
 
 use squirrel::transport::{
-    server::{ClientInterface, ClientMetadata, DispatchEvent},
+    server::{ClientInterface, DispatchEvent},
     Packet,
 };
-use uuid::Uuid;
 
 use crate::bus::{
     handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
@@ -15,9 +14,11 @@ pub struct TransportClient {
     // controller instance
     ctrl: HandlerInstance,
     // external handler to notify of data received events.
-    ext: HandlerInstance,
+    ext: Option<HandlerInstance>,
     addr: SocketAddr,
     inter: ClientInterface,
+    // data received while `self.ext` is None
+    missed_events: Vec<Vec<u8>>,
 }
 
 // request by an external handler of `TransportClient` to queue `data` to be
@@ -34,31 +35,52 @@ method_decl!(EV_TRANS_CLI_DATA_RECVD, Vec<u8>, ());
 // (through `active_clients_inv` with the sending handler)
 method_decl!(EV_TRANS_CLI_REQ_SEND_PKT, Packet, ());
 
+// Controller notifies TransportClient of the identity of its
+// associated Application level client
+method_decl!(EV_TRANS_CLI_IDENT_APP, HandlerInstance, ());
+
 #[async_trait]
 impl HandlerInit for TransportClient {
     const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
-    async fn init(&mut self, int: &LocalInterface) {}
+    async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
-        Str::Owned(format!("Weather station interface for {:?}", self.addr))
+        Str::Owned(format!(
+            "Weather station interface [transport] for {:?}",
+            self.addr
+        ))
     }
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register(Self::queue_data, EV_TRANS_CLI_QUEUE_DATA);
         reg.register(Self::handle_pkt, super::EV_CONTROLLER_RECEIVED);
+        reg.register(Self::ident_appl, EV_TRANS_CLI_IDENT_APP);
     }
 }
 
 impl TransportClient {
-    pub fn new(
-        addr: SocketAddr,
-        max_trans_t: Duration,
-        controller: HandlerInstance,
-        ext: HandlerInstance,
-    ) -> Self {
+    pub fn new(addr: SocketAddr, max_trans_t: Duration, controller: HandlerInstance) -> Self {
         Self {
             ctrl: controller,
-            ext,
+            ext: None,
             addr,
-            inter: ClientInterface::new(max_trans_t, ClientMetadata::default()),
+            inter: ClientInterface::new(max_trans_t),
+            missed_events: vec![],
+        }
+    }
+
+    async fn ident_appl(&mut self, app: &HandlerInstance, int: &LocalInterface) {
+        debug!(
+            "sending {} missed events to newly received application client",
+            self.missed_events.len()
+        );
+        self.ext = Some(app.clone());
+        for pkt in self.missed_events.drain(..) {
+            int.dispatch(
+                msg::Target::Instance(app.clone()),
+                EV_TRANS_CLI_DATA_RECVD,
+                pkt,
+            )
+            .await
+            .unwrap();
         }
     }
 
@@ -70,11 +92,7 @@ impl TransportClient {
         for ev in self.inter.handle(*pkt) {
             match ev {
                 DispatchEvent::TimedOut => {
-                    warn!(
-                        "Connection to weather station {} at {:?} timed out",
-                        self.inter.access_metadata().uuid.unwrap_or(Uuid::nil()),
-                        self.addr,
-                    );
+                    warn!("Connection to weather station at {:?} timed out", self.addr,);
                 }
                 DispatchEvent::Send(pkt) => {
                     int.dispatch(
@@ -82,15 +100,18 @@ impl TransportClient {
                         EV_TRANS_CLI_REQ_SEND_PKT,
                         pkt,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 }
                 DispatchEvent::Received(pkt) => {
-                    int.dispatch(
-                        msg::Target::Instance(self.ext.clone()),
-                        EV_TRANS_CLI_DATA_RECVD,
-                        pkt,
-                    )
-                    .await;
+                    if let Some(ext) = self.ext.clone() {
+                        int.dispatch(msg::Target::Instance(ext), EV_TRANS_CLI_DATA_RECVD, pkt)
+                            .await
+                            .unwrap();
+                    } else {
+                        warn!("Transport received message, but has no assocated application client to send to");
+                        self.missed_events.push(pkt);
+                    }
                 }
             }
         }

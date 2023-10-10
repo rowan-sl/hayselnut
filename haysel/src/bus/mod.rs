@@ -1,5 +1,8 @@
 //! Bussin
-use std::sync::{atomic::AtomicU64, Arc};
+use std::{
+    ops::Deref,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 use tokio::sync::broadcast;
 
@@ -13,7 +16,7 @@ pub mod one_of;
 #[cfg(test)]
 mod test;
 
-use msg::Msg;
+use self::handler::Interface;
 
 /// size of the inter-handler comm queue.
 /// this must be large enough that it will not fill up while a task is busy, because the queue only
@@ -22,14 +25,7 @@ const COMM_QUEUE_CAP: usize = 64;
 
 /// bussin
 pub struct Bus {
-    /// source for generating uids (faster than Uuid::new_v4, since it only requires a single
-    /// fetch_add instruction)
-    uid_src: Arc<AtomicU64>,
-    /// Queue that is used for ALL inter-handler/task communication. ALL of it.
-    ///
-    /// Arc is used to avoid cloning a (large) Msg value that will never need writing to
-    /// TODO: arena allocate Msg?
-    comm: broadcast::Sender<Arc<Msg>>,
+    int: Interface,
 }
 
 impl Bus {
@@ -37,15 +33,21 @@ impl Bus {
     pub async fn new() -> Self {
         let (comm, _) = broadcast::channel(COMM_QUEUE_CAP);
         Self {
-            uid_src: Arc::new(AtomicU64::new(0)),
-            comm,
+            int: Interface {
+                uid_src: Arc::new(AtomicU64::new(0)),
+                comm,
+            },
         }
     }
 
     pub fn interface(&self) -> handler::Interface {
-        handler::Interface {
-            uid_src: self.uid_src.clone(),
-            comm: self.comm.clone(),
-        }
+        self.int.clone()
+    }
+}
+
+impl Deref for Bus {
+    type Target = handler::Interface;
+    fn deref(&self) -> &Self::Target {
+        &self.int
     }
 }

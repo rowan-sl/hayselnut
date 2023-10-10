@@ -1,95 +1,153 @@
-//! Utility for loading the registry types (`KnownStations`, `KnownChannels`, etc) from disk
+pub mod loader;
 
-use std::{
-    ops::{Deref, DerefMut},
-    path::PathBuf,
-};
+use std::{collections::HashMap, net::SocketAddr};
 
 use anyhow::Result;
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::{
-    fs::{File, OpenOptions},
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+pub use loader::JsonLoader;
+use mycelium::station::{
+    capabilities::{Channel, ChannelID, ChannelName, KnownChannels},
+    identity::{KnownStations, StationID, StationInfo},
+};
+use squirrel::api::OnConnect;
+
+use crate::bus::{
+    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
+    msg::Str,
 };
 
-use crate::shutdown::{async_drop::AsyncDrop, ShutdownHandle};
-
-pub struct JsonLoader<R: Serialize + DeserializeOwned> {
-    file: Option<File>,
-    value: R,
-    drop: AsyncDrop,
+pub struct Registry {
+    stations: JsonLoader<KnownStations>,
+    channels: JsonLoader<KnownChannels>,
 }
 
-impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
-    /// Loads the json at `path`, using `R::default` if it does not exist
-    #[instrument(skip(sh_handle))]
-    pub async fn open(path: PathBuf, sh_handle: ShutdownHandle) -> Result<Self>
-    where
-        R: Default,
-    {
-        let new = !path.exists();
-        if path.exists() && !path.is_file() {
-            error!("Could not open `{path:?}` -- directory exists here");
-            bail!("JsonLoader::open failed - invalid path");
+method_decl!(EV_REGISTRY_QUERY_ALL, (), (KnownStations, KnownChannels));
+method_decl!(EV_REGISTRY_QUERY_CHANNEL, ChannelID, Option<Channel>);
+method_decl!(
+    EV_REGISTRY_PROCESS_CONNECT,
+    (SocketAddr, OnConnect),
+    HashMap<ChannelName, ChannelID>
+);
+method_decl!(EV_META_NEW_STATION, StationID, ());
+method_decl!(EV_META_NEW_CHANNEL, (ChannelID, Channel), ());
+method_decl!(
+    EV_META_STATION_ASSOC_CHANNEL,
+    (StationID, ChannelID, Channel),
+    ()
+);
+
+#[async_trait]
+impl HandlerInit for Registry {
+    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
+    async fn init(&mut self, _int: &LocalInterface) {}
+    fn describe(&self) -> Str {
+        Str::Borrowed("Registry interface")
+    }
+    fn methods(&self, reg: &mut MethodRegister<Self>) {
+        reg.register(Self::query_all, EV_REGISTRY_QUERY_ALL);
+        reg.register(Self::process_connect, EV_REGISTRY_PROCESS_CONNECT);
+    }
+}
+
+impl Registry {
+    pub fn new(stations: JsonLoader<KnownStations>, channels: JsonLoader<KnownChannels>) -> Self {
+        Self { stations, channels }
+    }
+
+    async fn query_all(&mut self, _: &(), _int: &LocalInterface) -> (KnownStations, KnownChannels) {
+        (self.stations.clone(), self.channels.clone())
+    }
+
+    async fn process_connect(
+        &mut self,
+        (ip, data): &(SocketAddr, OnConnect),
+        int: &LocalInterface,
+    ) -> HashMap<ChannelName, ChannelID> {
+        let (ip, data) = (ip.clone(), data.clone());
+        let name_to_id_mappings = data
+            .channels
+            .iter()
+            .map(|ch| {
+                (
+                    ch.name.clone(),
+                    self.channels
+                        .id_by_name(&ch.name)
+                        .map(|id| (id, false))
+                        .unwrap_or_else(|| {
+                            info!("creating new channel: {ch:?}");
+                            (self.channels.insert_channel(ch.clone()).unwrap(), true)
+                        }),
+                )
+            })
+            .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
+        for (ch_id, _) in name_to_id_mappings.values().filter(|(_, is_new)| *is_new) {
+            let ch = self.channels.get_channel(&ch_id).unwrap();
+            int.dispatch(
+                crate::bus::msg::Target::Any,
+                EV_META_NEW_CHANNEL,
+                (*ch_id, ch.clone()),
+            )
+            .await
+            .unwrap();
         }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)
-            .await?;
-        let value = if new {
-            R::default()
+        let name_to_id_mappings = name_to_id_mappings
+            .into_iter()
+            .map(|(k, (v, _))| (k, v))
+            .collect::<HashMap<ChannelName, ChannelID>>();
+        if let Some(pre_info) = self.stations.get_info(&data.station_id) {
+            info!(
+                "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                data.station_id,
+                ip,
+                data.station_build_rev,
+                data.station_build_date
+            );
+            for new_channel in name_to_id_mappings
+                .values()
+                .filter(|&id| !pre_info.supports_channels.contains(id))
+            {
+                let ch = self.channels.get_channel(new_channel).unwrap();
+                int.dispatch(
+                    crate::bus::msg::Target::Any,
+                    EV_META_STATION_ASSOC_CHANNEL,
+                    (data.station_id, *new_channel, ch.clone()),
+                )
+                .await
+                .unwrap();
+            }
+            self.stations.map_info(&data.station_id, |_id, info| {
+                info.supports_channels = name_to_id_mappings.values().copied().collect()
+            });
         } else {
-            let mut buf = String::new();
-            file.read_to_string(&mut buf).await?;
-            serde_json::from_str(&buf)?
-        };
-        Ok(Self {
-            file: Some(file),
-            value,
-            drop: AsyncDrop::new(sh_handle).await,
-        })
-    }
-}
-
-impl<R: Serialize + DeserializeOwned> Deref for JsonLoader<R> {
-    type Target = R;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<R: Serialize + DeserializeOwned> DerefMut for JsonLoader<R> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
-    fn drop(&mut self) {
-        let Ok(serialized) = serde_json::to_string_pretty(&self.value) else {
-            error!("JsonLoader sync failed - could not serialize");
-            return;
-        };
-        let mut file: File = self.file.take().unwrap();
-        self.drop.run(async move {
-            if let Err(e) = file.set_len(0).await {
-                error!("JsonLoader sync failed - could not truncate: {e:#?}");
-                return;
+            info!(
+                "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
+                data.station_id, ip, data.station_build_rev, data.station_build_date
+            );
+            self.stations
+                .insert_station(
+                    data.station_id,
+                    StationInfo {
+                        supports_channels: name_to_id_mappings.values().copied().collect(),
+                    },
+                )
+                .unwrap();
+            int.dispatch(
+                crate::bus::msg::Target::Any,
+                EV_META_NEW_STATION,
+                data.station_id,
+            )
+            .await
+            .unwrap();
+            for new_channel in name_to_id_mappings.values() {
+                let ch = self.channels.get_channel(new_channel).unwrap();
+                int.dispatch(
+                    crate::bus::msg::Target::Any,
+                    EV_META_STATION_ASSOC_CHANNEL,
+                    (data.station_id, *new_channel, ch.clone()),
+                )
+                .await
+                .unwrap();
             }
-            if let Err(e) = file.seek(std::io::SeekFrom::Start(0)).await {
-                error!("JsonLoader sync failed - could not truncate: {e:#?}");
-                return;
-            }
-            if let Err(e) = file.write_all(serialized.as_bytes()).await {
-                error!("JsonLoader sync failed - could not write: {e:#?}");
-                return;
-            }
-            if let Err(e) = file.shutdown().await {
-                error!("JsonLoader drop failed - could not shutdown file stream: {e:#?}");
-                return;
-            }
-        });
+        }
+        name_to_id_mappings
     }
 }
