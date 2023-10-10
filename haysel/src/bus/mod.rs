@@ -12,7 +12,6 @@ pub mod dyn_var;
 pub mod handler;
 pub mod id;
 pub mod msg;
-pub mod one_of;
 #[cfg(test)]
 mod test;
 
@@ -40,6 +39,7 @@ impl Bus {
         }
     }
 
+    #[allow(dead_code)]
     pub fn interface(&self) -> handler::Interface {
         self.int.clone()
     }

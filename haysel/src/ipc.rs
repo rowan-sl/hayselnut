@@ -1,180 +1,237 @@
-use std::{path::PathBuf, time::Duration};
+//! IPC Bus integration
 
-use anyhow::Result;
-use flume::Receiver;
+use std::{path::PathBuf, sync::Arc};
+
 use mycelium::{
-    ipc_recv_cancel_safe,
-    station::{capabilities::KnownChannels, identity::KnownStations},
-    IPCMsg,
+    station::{
+        capabilities::{Channel, ChannelID, KnownChannels},
+        identity::{KnownStations, StationID},
+    },
+    IPCError, IPCMsg,
 };
-use tokio::{net::UnixListener, select, spawn, sync, time::sleep};
+use tokio::{
+    io,
+    net::{
+        unix::{OwnedReadHalf, OwnedWriteHalf, SocketAddr},
+        UnixListener, UnixStream,
+    },
+};
 
-use crate::{route::StationInfoUpdate, shutdown::ShutdownHandle};
+use crate::{
+    bus::{
+        common::EV_SHUTDOWN,
+        handler::{handler_decl_t, method_decl_owned, HandlerInit, LocalInterface, MethodRegister},
+        msg::{self, HandlerInstance, Str},
+    },
+    dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
+    registry::{self, EV_META_NEW_CHANNEL, EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
+    take::Take,
+};
 
-use super::shutdown::Shutdown;
-
-pub mod bus;
-
-#[derive(Debug)]
-pub enum IPCTaskMsg {
-    Broadcast(IPCMsg),
-    StationInfoUpdates(Vec<StationInfoUpdate>),
+pub struct IPCNewConnections {
+    listener: Arc<UnixListener>,
+    registry: HandlerInstance,
 }
 
-pub async fn ipc_task(
-    mut handle: ShutdownHandle,
-    ipc_task_rx: Receiver<IPCTaskMsg>,
-    ipc_sock_path: PathBuf,
-) -> Result<()> {
-    let mut shutdown_ipc = Shutdown::new();
-    let listener = UnixListener::bind(ipc_sock_path.clone()).unwrap();
-    let (ipc_broadcast_queue, _) = sync::broadcast::channel::<IPCMsg>(10);
-    let (mut cache_stations, mut cache_channels) = (KnownStations::new(), KnownChannels::new());
+impl IPCNewConnections {
+    pub async fn new(path: PathBuf, registry: HandlerInstance) -> io::Result<Self> {
+        Ok(Self {
+            listener: Arc::new(UnixListener::bind(path)?),
+            registry,
+        })
+    }
 
-    let res = async { 'res: {
-        select! {
-            _ = handle.wait_for_shutdown() => { break 'res Ok(()) }
-            recv = ipc_task_rx.recv_async() => {
-                let IPCTaskMsg::StationInfoUpdates(updates) = recv? else {
-                    unreachable!("First packet was not an info update");
+    async fn handle_new_client(
+        &mut self,
+        cli: io::Result<(UnixStream, SocketAddr)>,
+        int: &LocalInterface,
+    ) {
+        match cli {
+            Ok((stream, addr)) => {
+                debug!("New IPC client connected from {addr:?}");
+                let (read, write) = stream.into_split();
+                let (stations, channels) = int
+                    .dispatch(
+                        msg::Target::Instance(self.registry.clone()),
+                        registry::EV_REGISTRY_QUERY_ALL,
+                        (),
+                    )
+                    .await
+                    .expect("Failed to dispatch")
+                    .expect("Received no reply from registry");
+                let conn = IPCConnection {
+                    write,
+                    read: Take::new(read),
+                    addr,
+                    init_known: Take::new((stations, channels)),
                 };
-                let [StationInfoUpdate::InitialState { stations, channels }] = &updates[..] else {
-                    unreachable!("First packet was not the initial state packet");
-                };
-                cache_stations = stations.clone();
-                cache_channels = channels.clone();
+                int.nonlocal.spawn(conn);
+                self.bg_handle_new_client(int);
+            }
+            Err(io_err) => {
+                error!("Listening for connections failed: {io_err:#}: new client connections will not continue to be accepted");
             }
         }
-        loop {
-            select! {
-                _ = handle.wait_for_shutdown() => {
-                    break;
-                }
-                recv = ipc_task_rx.recv_async() => {
-                    let recv = match recv {
-                        Err(flume::RecvError::Disconnected) => {
-                            select! {
-                                _ = handle.wait_for_shutdown() => { break }
-                                _ = sleep(Duration::from_secs(10)) => {
-                                    error!("IPC task disconnected, but did not receive a shutdown signal within 5 seconds");
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(x) => x,
-                    };
-                    handle_recv(
-                        recv,
-                        &ipc_broadcast_queue,
-                        &mut cache_stations,
-                        &mut cache_channels
-        ).await?
-                }
-                res = listener.accept() => {
-                    let (mut sock, addr) = res?;
-                    let mut recv = ipc_broadcast_queue.subscribe();
-                    let mut handle = shutdown_ipc.handle();
-                    let mut buffer = vec![];
-                    let mut buf_amnt = 0usize;
-                    debug!("Connecting to new IPC client at {addr:?}");
-                    let initial_packet = IPCMsg { kind: mycelium::IPCMsgKind::Haiii {
-                        stations: cache_stations.clone(),
-                        channels: cache_channels.clone(),
-                    }};
-                    spawn(async move {
-                        let res = async move {
-                            mycelium::ipc_send(&mut sock, &initial_packet).await?;
-                            loop {
-                                select! {
-                                    _ = handle.wait_for_shutdown() => {
-                                        mycelium::ipc_send(&mut sock, &IPCMsg { kind: mycelium::IPCMsgKind::Bye }).await?;
-                                        break;
-                                    }
-                                    res = ipc_recv_cancel_safe::<IPCMsg>(&mut buffer, &mut buf_amnt, &mut sock) => {
-                                        let msg = res?;
-                                        trace!("IPC: Received {msg:?}");
-                                    }
-                                    res = recv.recv() => {
-                                        mycelium::ipc_send(&mut sock, &res?).await?
-                                    }
-                                }
-                            }
-                            Ok::<(), anyhow::Error>(())
-                        }.await;
-                        debug!("IPC client {addr:?} disconnected");
-                        match res {
-                            Ok(()) => {}
-                            Err(e) => error!("IPC task (for: addr:?) exited with error: {e:?}"),
-                        }
-                    });
-                }
-            };
-        }
-        Ok::<(), anyhow::Error>(())
-    }}.await;
-    drop(listener);
-    let _ = tokio::fs::remove_file(ipc_sock_path).await;
-    shutdown_ipc.trigger_shutdown();
-    shutdown_ipc.wait_for_completion().await;
-    res.unwrap();
-    Ok(())
+    }
+
+    fn bg_handle_new_client(&mut self, int: &LocalInterface) {
+        let li = self.listener.clone();
+        int.bg_spawn(EV_PRIV_NEW_CONNECTION, async move { li.accept().await });
+    }
 }
 
-pub async fn handle_recv(
-    recv: IPCTaskMsg,
-    ipc_broadcast_queue: &sync::broadcast::Sender<IPCMsg>,
-    cache_stations: &mut KnownStations,
-    cache_channels: &mut KnownChannels,
-) -> Result<()> {
-    match recv {
-        IPCTaskMsg::Broadcast(msg) => {
-            let num = ipc_broadcast_queue.send(msg).unwrap_or(0);
-            trace!("Sent IPC message to {num} IPC clients");
-        }
-        IPCTaskMsg::StationInfoUpdates(updates) => {
-            for update in updates {
-                match update {
-                    StationInfoUpdate::InitialState { .. } => {
-                        unreachable!("sent more than one InitialState update")
+#[async_trait]
+impl HandlerInit for IPCNewConnections {
+    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC New Connection Handler");
+    async fn init(&mut self, int: &LocalInterface) {
+        debug!("Launching IPC client listener");
+        self.bg_handle_new_client(int);
+    }
+    // description of this handler instance
+    fn describe(&self) -> Str {
+        Str::Borrowed("IPC New Connection Handler")
+    }
+    // methods of this handler instance
+    fn methods(&self, reg: &mut MethodRegister<Self>) {
+        reg.register_owned(Self::handle_new_client, EV_PRIV_NEW_CONNECTION);
+    }
+}
+
+method_decl_owned!(
+    EV_PRIV_NEW_CONNECTION,
+    io::Result<(UnixStream, SocketAddr)>,
+    ()
+);
+
+pub struct IPCConnection {
+    write: OwnedWriteHalf,
+    read: Take<OwnedReadHalf>,
+    addr: SocketAddr,
+    init_known: Take<(KnownStations, KnownChannels)>,
+}
+
+impl IPCConnection {
+    fn bg_read(&mut self, mut read: OwnedReadHalf, int: &LocalInterface) {
+        int.bg_spawn(EV_PRIV_READ, async move {
+            let res = mycelium::ipc_recv(&mut read).await;
+            (read, res)
+        })
+    }
+
+    async fn handle_read(
+        &mut self,
+        (read, res): (OwnedReadHalf, Result<IPCMsg, IPCError>),
+        int: &LocalInterface,
+    ) {
+        match res {
+            Ok(msg) => {
+                trace!("IPC: Received {msg:?}");
+                match msg.kind {
+                    mycelium::IPCMsgKind::ClientDisconnect => {
+                        debug!("IPC Client {:?} disconnected", self.addr);
+                        warn!("IPC Client disconnected, but the task will not close (TODO/unimplemented)");
+                        let _ = self
+                            .send(&IPCMsg {
+                                kind: mycelium::IPCMsgKind::Bye,
+                            })
+                            .await;
                     }
-                    StationInfoUpdate::NewStation { id } => {
-                        cache_stations
-                            .insert_station(
-                                id,
-                                mycelium::station::identity::StationInfo {
-                                    supports_channels: vec![],
-                                },
-                            )
-                            .map_err(|_| {
-                                anyhow!("NewStation used with station that already exists")
-                            })?;
-                        ipc_broadcast_queue.send(IPCMsg {
-                            kind: mycelium::IPCMsgKind::NewStation { id },
-                        })?;
-                    }
-                    StationInfoUpdate::NewChannel { id, ch } => {
-                        cache_channels
-                            .insert_channel_with_id(ch.clone(), id)
-                            .map_err(|_| {
-                                anyhow!("NewChannel was called with a channel that already exists")
-                            })?;
-                        ipc_broadcast_queue.send(IPCMsg {
-                            kind: mycelium::IPCMsgKind::NewChannel { id, ch },
-                        })?;
-                    }
-                    StationInfoUpdate::StationNewChannel { station, channel } => {
-                        let _channel_info = cache_channels.get_channel(&channel)
-                            .ok_or_else(|| anyhow!("StationNewChannel attempted to associate a station with a channel that does not exist!"))?;
-                        cache_stations.map_info(&station, |_id, info| {
-                            info.supports_channels.push(channel);
-                        }).ok_or_else(|| anyhow!("StationNewChannel attempted to associate a channel with a station that does not exist"))?;
-                        ipc_broadcast_queue.send(IPCMsg {
-                            kind: mycelium::IPCMsgKind::StationNewChannel { station, channel },
-                        })?;
-                    }
+                    _other => self.bg_read(read, int),
                 }
             }
+            Err(e) => {
+                error!("Failed to receive IPC message: {e} - no further attempts to read will be performed");
+                self.read.put(read);
+            }
         }
-    };
-    Ok(())
+    }
+
+    async fn send(&mut self, msg: &IPCMsg) -> Result<(), IPCError> {
+        mycelium::ipc_send(&mut self.write, msg).await
+    }
+
+    async fn new_station(&mut self, &id: &StationID, _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::NewStation { id },
+        })
+        .await
+        .expect("Failed to send `new station` message");
+    }
+
+    async fn new_channel(&mut self, (id, ch): &(ChannelID, Channel), _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::NewChannel {
+                id: *id,
+                ch: ch.clone(),
+            },
+        })
+        .await
+        .expect("Failed to send `new channel` message");
+    }
+
+    async fn station_new_channel(
+        &mut self,
+        (station, channel, _channel_info): &(StationID, ChannelID, Channel),
+        _int: &LocalInterface,
+    ) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::StationNewChannel {
+                station: *station,
+                channel: *channel,
+            },
+        })
+        .await
+        .expect("Failed to send `channel assoc` message");
+    }
+
+    async fn close(&mut self, _: &(), _int: &LocalInterface) {
+        let _ = self
+            .send(&IPCMsg {
+                kind: mycelium::IPCMsgKind::Bye,
+            })
+            .await;
+    }
+
+    async fn send_data(&mut self, data: &Record, _int: &LocalInterface) {
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::FreshHotData {
+                from: data.recorded_by,
+                recorded_at: data.recorded_at,
+                by_channel: data.data.clone(),
+            },
+        })
+        .await
+        .expect("Failed to send `new data received` message");
+    }
 }
+
+#[async_trait]
+impl HandlerInit for IPCConnection {
+    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC Connection Handler");
+
+    async fn init(&mut self, int: &LocalInterface) {
+        let read = self.read.take();
+        self.bg_read(read, int);
+        let (stations, channels) = self.init_known.take();
+        self.send(&IPCMsg {
+            kind: mycelium::IPCMsgKind::Haiii { stations, channels },
+        })
+        .await
+        .expect("Failed to send init packet");
+    }
+    // description of this handler instance
+    fn describe(&self) -> Str {
+        Str::Owned(format!("IPC Connection (to: {:?})", self.addr))
+    }
+    // methods of this handler instance
+    fn methods(&self, reg: &mut MethodRegister<Self>) {
+        reg.register_owned(Self::handle_read, EV_PRIV_READ);
+        reg.register(Self::new_station, EV_META_NEW_STATION);
+        reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
+        reg.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
+        reg.register(Self::send_data, EV_WEATHER_DATA_RECEIVED);
+        reg.register(Self::close, EV_SHUTDOWN);
+    }
+}
+
+method_decl_owned!(EV_PRIV_READ, (OwnedReadHalf, Result<IPCMsg, IPCError>), ());

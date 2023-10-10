@@ -2,7 +2,6 @@ pub mod loader;
 
 use std::{collections::HashMap, net::SocketAddr};
 
-use anyhow::Result;
 pub use loader::JsonLoader;
 use mycelium::station::{
     capabilities::{Channel, ChannelID, ChannelName, KnownChannels},

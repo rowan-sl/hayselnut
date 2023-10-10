@@ -1,6 +1,6 @@
 use tokio::sync::{broadcast, mpsc};
 
-use crate::util::Take;
+use crate::take::Take;
 
 pub mod async_drop;
 pub mod util;

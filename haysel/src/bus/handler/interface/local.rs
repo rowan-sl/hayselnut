@@ -36,6 +36,7 @@ impl LocalInterface {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update_metadata(&self) {
         self.update_metadata.signal();
     }

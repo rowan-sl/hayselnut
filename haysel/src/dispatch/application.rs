@@ -1,8 +1,12 @@
 //! application-layer packet handling
 
-use std::{fmt::Write, net::SocketAddr};
+use std::{collections::HashMap, fmt::Write, net::SocketAddr};
 
-use mycelium::station::{capabilities::ChannelName, identity::StationID};
+use chrono::{DateTime, Utc};
+use mycelium::station::{
+    capabilities::{ChannelData, ChannelID, ChannelName},
+    identity::StationID,
+};
 use squirrel::api::{ChannelMappings, OnConnect, PacketKind, SomeData};
 
 use crate::{
@@ -10,7 +14,6 @@ use crate::{
         handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
         msg::{self, HandlerInstance, Str},
     },
-    consumer::Record,
     registry,
 };
 
@@ -31,6 +34,13 @@ pub struct AppClient {
 }
 
 method_decl!(EV_WEATHER_DATA_RECEIVED, Record, ());
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub recorded_at: DateTime<Utc>,
+    pub recorded_by: StationID,
+    pub data: HashMap<ChannelID, ChannelData>,
+}
 
 #[async_trait]
 impl HandlerInit for AppClient {

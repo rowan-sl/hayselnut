@@ -14,10 +14,9 @@ use crate::{
         handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface},
         msg::{HandlerType, Str},
     },
-    consumer::Record,
-    dispatch::application::EV_WEATHER_DATA_RECEIVED,
+    dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
     registry::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
-    util::Take,
+    take::Take,
 };
 
 use super::{alloc::Storage, query::builder::QueryParamsNoDB, repr::DataGroupType, Database};

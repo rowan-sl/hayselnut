@@ -32,11 +32,13 @@ impl DynVar {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn to_raw(self) -> Box<dyn GeneralRequirements + Send + Sync + 'static> {
         self.val
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn from_raw(val: Box<dyn GeneralRequirements + Sync + Send + 'static>) -> Self {
         Self { val }
     }

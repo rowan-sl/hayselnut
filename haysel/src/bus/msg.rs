@@ -96,6 +96,7 @@ pub enum Target {
     /// this spacific instance of a handler
     Instance(HandlerInstance),
     /// all handlers of this type
+    #[allow(dead_code)]
     Type(HandlerType),
     /// any handlers
     Any,

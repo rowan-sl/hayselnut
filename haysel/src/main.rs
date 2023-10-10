@@ -15,7 +15,7 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
-use std::{collections::HashMap, fmt::Write as _, net::SocketAddr, process, time::Duration};
+use std::{net::SocketAddr, process, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
@@ -24,39 +24,27 @@ use nix::{
     unistd::{daemon, Pid},
 };
 use paths::RecordsPath;
-use squirrel::{
-    api::{
-        station::{
-            capabilities::{ChannelID, ChannelName, KnownChannels},
-            identity::{KnownStations, StationInfo},
-        },
-        ChannelMappings, PacketKind,
-    },
-    transport::server::{recv_next_packet, ClientInterface, DispatchEvent},
-};
-use tokio::{net::UdpSocket, runtime, select};
+use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
+use tokio::{net::UdpSocket, runtime};
 use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
 mod args;
-pub mod bus;
+mod bus;
 mod commands;
 mod config;
-mod consumer;
 mod dispatch;
 mod flag;
 mod ipc;
 mod log;
 mod paths;
 mod registry;
-mod route;
 mod shutdown;
+mod take;
 pub mod tsdb2;
-mod util;
 
 use args::{ArgsParser, RunArgs};
 use registry::JsonLoader;
-use route::{Router, StationInfoUpdate};
 use shutdown::Shutdown;
 use tsdb2::{
     alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
@@ -306,7 +294,7 @@ async fn async_main(
     if tokio::fs::try_exists(&ipc_path).await? {
         tokio::fs::remove_file(&ipc_path).await?;
     }
-    let ipc_stop = ipc::bus::IPCNewConnections::new(ipc_path, registry.clone()).await?;
+    let ipc_stop = ipc::IPCNewConnections::new(ipc_path, registry.clone()).await?;
     bus.spawn(ipc_stop);
     info!("IPC configured");
 
@@ -354,135 +342,4 @@ async fn lookup_server_ip(url: String, port: u16) -> Result<Vec<SocketAddr>> {
         })
         .collect::<Vec<_>>();
     Ok::<_, anyhow::Error>(addrs)
-}
-
-async fn handle_packet(
-    packet: PacketKind,
-    stations: &mut JsonLoader<KnownStations>,
-    channels: &mut JsonLoader<KnownChannels>,
-    mut router: Router,
-    ip: SocketAddr,
-    clients: &mut HashMap<SocketAddr, ClientInterface>,
-) -> Result<()> {
-    trace!("packet content: {packet:?}");
-    match packet {
-        PacketKind::Connect(pkt_data) => {
-            let name_to_id_mappings = pkt_data
-                .channels
-                .iter()
-                .map(|ch| {
-                    (
-                        ch.name.clone(),
-                        channels
-                            .id_by_name(&ch.name)
-                            .map(|id| (id, false))
-                            .unwrap_or_else(|| {
-                                info!("creating new channel: {ch:?}");
-                                (channels.insert_channel(ch.clone()).unwrap(), true)
-                            }),
-                    )
-                })
-                .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
-            router
-                .update_station_info(
-                    name_to_id_mappings
-                        .values()
-                        .filter(|(_, is_new)| *is_new)
-                        .map(|(ch_id, _)| {
-                            let ch = channels.get_channel(&ch_id).expect("unreachable");
-                            StationInfoUpdate::NewChannel {
-                                id: *ch_id,
-                                ch: ch.clone(),
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .as_slice(),
-                )
-                .await?;
-            let name_to_id_mappings = name_to_id_mappings
-                .into_iter()
-                .map(|(k, (v, _))| (k, v))
-                .collect::<HashMap<ChannelName, ChannelID>>();
-            if let Some(_) = stations.get_info(&pkt_data.station_id) {
-                info!(
-                    "connecting to known station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                    pkt_data.station_id,
-                    ip,
-                    pkt_data.station_build_rev,
-                    pkt_data.station_build_date
-                );
-                stations.map_info(&pkt_data.station_id, |_id, info| {
-                    info.supports_channels = name_to_id_mappings.values().copied().collect()
-                });
-            } else {
-                info!(
-                    "connected to new station [{}] at IP {:?}\n    hayselnut rev {}\n    built on {}",
-                    pkt_data.station_id,
-                    ip,
-                    pkt_data.station_build_rev,
-                    pkt_data.station_build_date
-                );
-                stations
-                    .insert_station(
-                        pkt_data.station_id,
-                        StationInfo {
-                            supports_channels: name_to_id_mappings.values().copied().collect(),
-                        },
-                    )
-                    .unwrap();
-                let mut updates = name_to_id_mappings
-                    .values()
-                    .copied()
-                    .map(|id| StationInfoUpdate::StationNewChannel {
-                        station: pkt_data.station_id,
-                        channel: id,
-                    })
-                    .collect::<Vec<_>>();
-                updates.push(StationInfoUpdate::NewStation {
-                    id: pkt_data.station_id,
-                });
-                router.update_station_info(&updates).await?;
-            }
-            let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
-                map: name_to_id_mappings,
-            }))
-            .unwrap();
-            let client = clients.get_mut(&ip).unwrap();
-            client.queue(resp);
-            // client.access_metadata().uuid = Some(pkt_data.station_id);
-        }
-        PacketKind::Data(pkt_data) => {
-            let received_at = chrono::Utc::now();
-            let mut buf = String::new();
-            for (chid, dat) in pkt_data.per_channel.clone() {
-                if let Some(ch) = channels.get_channel(&chid) {
-                    //TODO: verify that types match
-                    let _ = writeln!(
-                        buf,
-                        "Channel {chid} ({}) => {:?}",
-                        <ChannelName as Into<String>>::into(ch.name.clone()),
-                        dat
-                    );
-                } else {
-                    warn!("Data contains channel id {chid} (={dat:?}) which is not known to this server");
-                    let _ = writeln!(buf, "Chanenl {chid} (<unknown>) => {:?}", dat);
-                }
-            }
-            info!("Received data:\n{buf}");
-            // router
-            //     .process(consumer::Record {
-            //         recorded_at: received_at,
-            //         recorded_by: clients
-            //             .get_mut(&ip)
-            //             .unwrap()
-            //             .access_metadata()
-            //             .uuid
-            //             .unwrap(),
-            //         data: pkt_data.per_channel,
-            //     })
-            //     .await?;
-        }
-        _ => warn!("received unexpected packet, ignoring"),
-    }
-    Ok(())
 }
