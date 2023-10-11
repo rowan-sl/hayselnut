@@ -6,7 +6,7 @@ use std::any::{type_name, Any};
 ///
 /// ## Pitfalls
 /// make shure that you are only calling this on the type `&dyn Any` and **NO OTHER TYPE!!!!!**.
-/// if called on Box<dyn Any>, it will return `std::box::Box<std::any::Any>` (or something similar)
+/// if called on `Box<dyn Any>`, it will return `std::box::Box<std::any::Any>` (or something similar)
 /// instead of the type you want!
 pub trait TypeNamed {
     /// gets the type name of Self
