@@ -2,7 +2,7 @@ use std::mem::size_of;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use static_assertions::const_assert_eq;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 pub mod client;
 pub mod server;
@@ -33,7 +33,7 @@ impl UidGenerator {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct Frame {
     pub packet: u32,
@@ -65,7 +65,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, AsBytes)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct Cmd {
     pub packet: u32,

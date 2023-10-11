@@ -7,7 +7,7 @@ use std::any::Any;
 ///
 /// ```rust
 /// use std::any::Any;
-/// use dabus::extras::AsAny;
+/// use roundtable::dyn_var::AsAny;
 ///
 /// // you have this struct
 /// struct Foo;
