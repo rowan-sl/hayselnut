@@ -22,10 +22,13 @@ use nix::{
     sys::signal::{kill, Signal},
     unistd::{daemon, Pid},
 };
+use roundtable::{
+    common::{EV_SHUTDOWN, HDL_EXTERNAL},
+    msg, Bus,
+};
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 use tokio::{net::UdpSocket, runtime};
 
-mod bus;
 mod core;
 mod dispatch;
 mod ipc;
@@ -47,7 +50,6 @@ use tsdb2::{
 };
 
 use crate::{
-    bus::{msg, Bus},
     registry::Registry,
     tsdb2::alloc::store::{
         disk::DiskMode,
@@ -272,7 +274,7 @@ async fn async_main(
         let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
         let (stations, channels) = bus
             .dispatch_as(
-                bus::common::HDL_EXTERNAL,
+                HDL_EXTERNAL,
                 msg::Target::Instance(registry.clone()),
                 registry::EV_REGISTRY_QUERY_ALL,
                 (),
@@ -302,13 +304,8 @@ async fn async_main(
 
     shutdown.handle().wait_for_shutdown().await;
 
-    bus.dispatch_as(
-        bus::common::HDL_EXTERNAL,
-        msg::Target::Any,
-        bus::common::EV_SHUTDOWN,
-        (),
-    )
-    .await?;
+    bus.dispatch_as(HDL_EXTERNAL, msg::Target::Any, EV_SHUTDOWN, ())
+        .await?;
 
     trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
     shutdown.wait_for_completion().await;

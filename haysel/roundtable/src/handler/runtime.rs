@@ -6,21 +6,19 @@ use tokio::{select, sync::broadcast, task::JoinSet};
 use uuid::Uuid;
 
 use crate::{
-    bus::{
-        dyn_var::DynVar,
-        handler::{
-            decl::MethodRaw,
-            interface::{local::LocalInterface, Interface},
-            register::MethodRegister,
-            HandlerInit,
-        },
-        id::Uid,
-        msg::{self, HandlerInstance, Msg, Str},
+    dyn_var::DynVar,
+    flag::Flag,
+    handler::{
+        decl::MethodRaw,
+        interface::{local::LocalInterface, Interface},
+        register::MethodRegister,
+        HandlerInit,
     },
-    misc::Flag,
+    id::Uid,
+    msg::{self, HandlerInstance, Msg, Str},
 };
 
-pub(in crate::bus) struct HandlerTaskRt<H: HandlerInit> {
+pub(crate) struct HandlerTaskRt<H: HandlerInit> {
     inter: LocalInterface,
     bg_spawner_recv: flume::Receiver<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
     hdl: DynVar,

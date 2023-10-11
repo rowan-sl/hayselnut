@@ -14,10 +14,10 @@ impl Uid {
     /// generates a new Unique identifer by taking the current value in `source` and incrementing
     /// it by 1. this will generate unique ids, as long as they are only compared to values coming
     /// from the same source.
-    pub(in crate::bus) fn gen_with(source: &AtomicU64) -> Self {
+    pub(crate) fn gen_with(source: &AtomicU64) -> Self {
         Self(source.fetch_add(1, atomic::Ordering::Relaxed))
     }
-    pub(in crate::bus) const fn nill() -> Self {
+    pub(crate) const fn nill() -> Self {
         Self(0)
     }
 }

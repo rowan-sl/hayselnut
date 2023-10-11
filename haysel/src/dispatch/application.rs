@@ -7,15 +7,14 @@ use mycelium::station::{
     capabilities::{ChannelData, ChannelID, ChannelName},
     identity::StationID,
 };
+use roundtable::{
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl,
+    msg::{self, HandlerInstance, Str},
+};
 use squirrel::api::{ChannelMappings, OnConnect, PacketKind, SomeData};
 
-use crate::{
-    bus::{
-        handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
-        msg::{self, HandlerInstance, Str},
-    },
-    registry,
-};
+use crate::registry;
 
 use super::{EV_TRANS_CLI_DATA_RECVD, EV_TRANS_CLI_QUEUE_DATA};
 
@@ -44,7 +43,7 @@ pub struct Record {
 
 #[async_trait]
 impl HandlerInit for AppClient {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Owned(format!(

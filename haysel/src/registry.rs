@@ -7,12 +7,12 @@ use mycelium::station::{
     capabilities::{Channel, ChannelID, ChannelName, KnownChannels},
     identity::{KnownStations, StationID, StationInfo},
 };
-use squirrel::api::OnConnect;
-
-use crate::bus::{
-    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
-    msg::Str,
+use roundtable::{
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl,
+    msg::{self, Str},
 };
+use squirrel::api::OnConnect;
 
 pub struct Registry {
     stations: JsonLoader<KnownStations>,
@@ -36,7 +36,7 @@ method_decl!(
 
 #[async_trait]
 impl HandlerInit for Registry {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Borrowed("Registry interface")
@@ -80,13 +80,9 @@ impl Registry {
             .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
         for (ch_id, _) in name_to_id_mappings.values().filter(|(_, is_new)| *is_new) {
             let ch = self.channels.get_channel(&ch_id).unwrap();
-            int.dispatch(
-                crate::bus::msg::Target::Any,
-                EV_META_NEW_CHANNEL,
-                (*ch_id, ch.clone()),
-            )
-            .await
-            .unwrap();
+            int.dispatch(msg::Target::Any, EV_META_NEW_CHANNEL, (*ch_id, ch.clone()))
+                .await
+                .unwrap();
         }
         let name_to_id_mappings = name_to_id_mappings
             .into_iter()
@@ -106,7 +102,7 @@ impl Registry {
             {
                 let ch = self.channels.get_channel(new_channel).unwrap();
                 int.dispatch(
-                    crate::bus::msg::Target::Any,
+                    msg::Target::Any,
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),
                 )
@@ -129,17 +125,13 @@ impl Registry {
                     },
                 )
                 .unwrap();
-            int.dispatch(
-                crate::bus::msg::Target::Any,
-                EV_META_NEW_STATION,
-                data.station_id,
-            )
-            .await
-            .unwrap();
+            int.dispatch(msg::Target::Any, EV_META_NEW_STATION, data.station_id)
+                .await
+                .unwrap();
             for new_channel in name_to_id_mappings.values() {
                 let ch = self.channels.get_channel(new_channel).unwrap();
                 int.dispatch(
-                    crate::bus::msg::Target::Any,
+                    msg::Target::Any,
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),
                 )

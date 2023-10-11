@@ -5,8 +5,9 @@ use squirrel::transport::{
     Packet,
 };
 
-use crate::bus::{
-    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
+use roundtable::{
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl,
     msg::{self, HandlerInstance, Str},
 };
 
@@ -41,7 +42,7 @@ method_decl!(EV_TRANS_CLI_IDENT_APP, HandlerInstance, ());
 
 #[async_trait]
 impl HandlerInit for TransportClient {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Owned(format!(

@@ -6,11 +6,10 @@ pub mod macros;
 pub mod register;
 pub mod runtime;
 
-use crate::bus::msg::{self, Str};
+use crate::msg::{self, Str};
 
 pub use decl::MethodDecl;
 pub use interface::{local::LocalInterface, Interface};
-pub(crate) use macros::{handler_decl_t, method_decl, method_decl_owned};
 pub use register::MethodRegister;
 
 #[async_trait]

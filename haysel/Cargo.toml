@@ -36,7 +36,6 @@ config = { version = "0.13.3", features = ["preserve_order"] }
 nix = { version = "0.27.1", features = ["signal", "process"] }
 #dabus = { version = "0.5.1" }
 tracing-log = "0.1.3"
-const-random = "0.1.15"
 #rmp-serde = "1.1.1"
 #blake3 = "1.3.3"
 #num_enum = "0.6.0"
@@ -44,10 +43,6 @@ const-random = "0.1.15"
 [profile.release]
 lto = true
 codegen-units = 1
-
-[features]
-default = ["bus_dbg"]
-bus_dbg = []
 
 [dependencies.squirrel]
 path = "squirrel"
@@ -59,9 +54,13 @@ path = "mycelium"
 [dependencies.haysel_macro]
 path = "haysel_macro"
 
+[dependencies.roundtable]
+path = "roundtable"
+
 [workspace]
 members = [
-    "squirrel",
-    "mycelium",
-    "haysel_macro",
+  "squirrel",
+  "mycelium",
+  "haysel_macro",
+  "roundtable",
 ]

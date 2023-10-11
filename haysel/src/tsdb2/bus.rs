@@ -6,14 +6,15 @@ use mycelium::station::{
     capabilities::{Channel, ChannelData, ChannelType, KnownChannels},
     identity::KnownStations,
 };
+use roundtable::{
+    common::EV_SHUTDOWN,
+    handler::{HandlerInit, LocalInterface},
+    handler_decl_t, method_decl,
+    msg::{HandlerType, Str},
+};
 use uuid::Uuid;
 
 use crate::{
-    bus::{
-        common::EV_SHUTDOWN,
-        handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface},
-        msg::{HandlerType, Str},
-    },
     dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
     misc::Take,
     registry::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
@@ -108,7 +109,7 @@ impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
     fn describe(&self) -> Str {
         Str::Borrowed("Instance of TSDB2 Bus Integration")
     }
-    fn methods(&self, r: &mut crate::bus::handler::MethodRegister<Self>) {
+    fn methods(&self, r: &mut roundtable::handler::MethodRegister<Self>) {
         r.register(Self::close, EV_SHUTDOWN);
         r.register(Self::query, EV_DB_QUERY);
         r.register(Self::new_station, EV_META_NEW_STATION);

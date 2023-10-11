@@ -8,10 +8,9 @@ use tokio::{io, net::UdpSocket};
 pub mod application;
 pub mod transport;
 
-use crate::bus::{
-    handler::{
-        handler_decl_t, method_decl, method_decl_owned, HandlerInit, LocalInterface, MethodRegister,
-    },
+use roundtable::{
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl, method_decl_owned,
     msg::{self, HandlerInstance, Str},
 };
 
@@ -19,7 +18,8 @@ pub use transport::{
     TransportClient, EV_TRANS_CLI_DATA_RECVD, EV_TRANS_CLI_QUEUE_DATA, EV_TRANS_CLI_REQ_SEND_PKT,
 };
 
-use self::{application::AppClient, transport::EV_TRANS_CLI_IDENT_APP};
+use application::AppClient;
+use transport::EV_TRANS_CLI_IDENT_APP;
 
 pub struct Controller {
     sock: Arc<UdpSocket>,
@@ -41,7 +41,7 @@ method_decl_owned!(
 
 #[async_trait]
 impl HandlerInit for Controller {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
     async fn init(&mut self, int: &LocalInterface) {
         let sock = self.sock.clone();
         int.bg_spawn(EV_PRIV_CONTROLLER_RECEIVED, async move {

@@ -9,6 +9,12 @@ use mycelium::{
     },
     IPCError, IPCMsg,
 };
+use roundtable::{
+    common::EV_SHUTDOWN,
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl_owned,
+    msg::{self, HandlerInstance, Str},
+};
 use tokio::{
     io,
     net::{
@@ -18,11 +24,6 @@ use tokio::{
 };
 
 use crate::{
-    bus::{
-        common::EV_SHUTDOWN,
-        handler::{handler_decl_t, method_decl_owned, HandlerInit, LocalInterface, MethodRegister},
-        msg::{self, HandlerInstance, Str},
-    },
     dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
     misc::Take,
     registry::{self, EV_META_NEW_CHANNEL, EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
@@ -82,7 +83,7 @@ impl IPCNewConnections {
 
 #[async_trait]
 impl HandlerInit for IPCNewConnections {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC New Connection Handler");
+    const DECL: msg::HandlerType = handler_decl_t!("IPC New Connection Handler");
     async fn init(&mut self, int: &LocalInterface) {
         debug!("Launching IPC client listener");
         self.bg_handle_new_client(int);
@@ -207,7 +208,7 @@ impl IPCConnection {
 
 #[async_trait]
 impl HandlerInit for IPCConnection {
-    const DECL: crate::bus::msg::HandlerType = handler_decl_t!("IPC Connection Handler");
+    const DECL: msg::HandlerType = handler_decl_t!("IPC Connection Handler");
 
     async fn init(&mut self, int: &LocalInterface) {
         let read = self.read.take();

@@ -10,7 +10,8 @@ use tracing_test::traced_test;
 
 use super::{
     common::HDL_EXTERNAL,
-    handler::{handler_decl_t, method_decl, HandlerInit, LocalInterface, MethodRegister},
+    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler_decl_t, method_decl,
     msg::{self, HandlerType, Str},
     Bus,
 };

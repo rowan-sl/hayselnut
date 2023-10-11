@@ -3,19 +3,17 @@ use futures::{future::BoxFuture, Future};
 use uuid::Uuid;
 
 use crate::{
-    bus::{
-        dyn_var::DynVar,
-        handler::{decl::MethodDecl, interface::Interface},
-        msg::{self, HandlerInstance},
-    },
-    misc::Flag,
+    dyn_var::DynVar,
+    flag::Flag,
+    handler::{decl::MethodDecl, interface::Interface},
+    msg::{self, HandlerInstance},
 };
 
 pub struct LocalInterface {
     pub nonlocal: Interface,
-    pub(in crate::bus) bg_spawner: flume::Sender<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
-    pub(in crate::bus) update_metadata: Flag,
-    pub(in crate::bus) instance: HandlerInstance,
+    pub(crate) bg_spawner: flume::Sender<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
+    pub(crate) update_metadata: Flag,
+    pub(crate) instance: HandlerInstance,
 }
 
 impl LocalInterface {

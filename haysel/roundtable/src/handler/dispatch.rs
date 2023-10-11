@@ -4,17 +4,15 @@ use anyhow::Result;
 use tokio::time::timeout;
 
 use crate::{
-    bus::{
-        atomic_cell::AtomicCell,
-        dyn_var::DynVar,
-        handler::interface::Interface,
-        id::Uid,
-        msg::{self, HandlerInstance},
-    },
-    misc::Flag,
+    atomic_cell::AtomicCell,
+    dyn_var::DynVar,
+    flag::Flag,
+    handler::interface::Interface,
+    id::Uid,
+    msg::{self, HandlerInstance},
 };
 
-pub(in crate::bus) async fn bus_dispatch_event(
+pub(crate) async fn bus_dispatch_event(
     int: Interface,
     source: HandlerInstance,
     target: msg::Target,

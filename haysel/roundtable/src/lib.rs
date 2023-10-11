@@ -1,4 +1,16 @@
 //! Bussin
+
+#![allow(incomplete_features)]
+#![feature(specialization)]
+#![feature(downcast_unchecked)]
+
+#[macro_use]
+extern crate tracing;
+#[macro_use]
+extern crate anyhow;
+#[macro_use]
+extern crate async_trait;
+
 use std::{
     ops::Deref,
     sync::{atomic::AtomicU64, Arc},
@@ -9,6 +21,7 @@ use tokio::sync::broadcast;
 pub mod atomic_cell;
 pub mod common;
 pub mod dyn_var;
+mod flag;
 pub mod handler;
 pub mod id;
 pub mod msg;

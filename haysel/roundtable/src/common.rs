@@ -1,6 +1,7 @@
 use super::{
-    handler::{handler_decl_t, method_decl},
+    handler_decl_t,
     id::Uid,
+    method_decl,
     msg::{HandlerInstance, Str},
 };
 

@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use tokio::sync::broadcast;
 
-use crate::bus::{
+use crate::{
     dyn_var::DynVar,
     handler::{
         decl::MethodDecl, dispatch::bus_dispatch_event, runtime::HandlerTaskRt, HandlerInit,
@@ -20,12 +20,12 @@ pub mod local;
 pub struct Interface {
     /// source for generating uids (faster than Uuid::new_v4, since it only requires a single
     /// fetch_add instruction)
-    pub(in crate::bus) uid_src: Arc<AtomicU64>,
+    pub(crate) uid_src: Arc<AtomicU64>,
     /// Queue that is used for ALL inter-handler/task communication. ALL of it.
     ///
     /// Arc is used to avoid cloning a (large) Msg value that will never need writing to
     /// TODO: arena allocate Msg?
-    pub(in crate::bus) comm: broadcast::Sender<Arc<Msg>>,
+    pub(crate) comm: broadcast::Sender<Arc<Msg>>,
 }
 
 impl Interface {

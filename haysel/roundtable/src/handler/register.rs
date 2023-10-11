@@ -2,7 +2,7 @@ use std::{collections::HashMap, marker::PhantomData};
 
 use uuid::Uuid;
 
-use crate::bus::{
+use crate::{
     handler::{
         async_fn_ptr::{AsyncFnPtr, HandlerFn, HandlerFnOwnArgs},
         decl::{MethodDecl, MethodRaw},
@@ -17,7 +17,7 @@ pub struct MethodRegister<H: HandlerInit + ?Sized> {
 }
 
 impl<H: HandlerInit> MethodRegister<H> {
-    pub(in crate::bus) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             methods: HashMap::new(),
             _ph: PhantomData,
@@ -60,7 +60,7 @@ impl<H: HandlerInit> MethodRegister<H> {
         );
     }
 
-    pub(in crate::bus) fn finalize(self) -> HashMap<Uuid, MethodRaw> {
+    pub(crate) fn finalize(self) -> HashMap<Uuid, MethodRaw> {
         self.methods
     }
 }
