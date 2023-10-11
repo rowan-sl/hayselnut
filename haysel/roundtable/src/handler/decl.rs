@@ -30,7 +30,7 @@ impl<const OWN: bool, At: 'static, Rt: 'static> MethodDecl<OWN, At, Rt> {
 }
 
 /// Describes the (non-ID portion) of a method, incl its handler function
-pub(crate) struct MethodRaw {
+pub struct MethodRaw {
     pub handler_func: Box<(dyn HandlerCallableErased + Sync + Send)>,
     #[cfg(feature = "bus_dbg")]
     pub handler_desc: Str,

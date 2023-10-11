@@ -9,7 +9,7 @@ use crate::flag::Flag;
 use super::id::Uid;
 
 #[derive(Debug)]
-pub struct Msg {
+pub(crate) struct Msg {
     /// UID - generated at message send time
     pub id: Uid,
     /// content of the message
@@ -17,7 +17,7 @@ pub struct Msg {
 }
 
 #[derive(Debug)]
-pub enum MsgKind {
+pub(crate) enum MsgKind {
     /// A request of one or more handlers
     Request {
         /// the handler instance that is sending this request
@@ -76,7 +76,7 @@ pub struct HandlerInstance {
 
 /// a channel used for sending a single response to a query.
 #[derive(Debug)]
-pub struct Responder {
+pub(crate) struct Responder {
     /// the response value. when a handler wants to set this value, it must first box the value,
     /// then use compare_exchange(current = null, new = Box::into_raw, Relaxed, Relaxed).
     /// if this fails, than it is made aware of the fact that some other handler has (erronously,

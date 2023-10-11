@@ -17,12 +17,13 @@ impl Uid {
     pub(crate) fn gen_with(source: &AtomicU64) -> Self {
         Self(source.fetch_add(1, atomic::Ordering::Relaxed))
     }
-    pub(crate) const fn nill() -> Self {
+    pub(crate) const fn nil() -> Self {
         Self(0)
     }
 }
 
 /// Generates a random Uuid at compile time
+#[doc(hidden)]
 pub const fn const_uuid_v4() -> Uuid {
     uuid::Builder::from_u128(const_random!(u128)).into_uuid()
 }

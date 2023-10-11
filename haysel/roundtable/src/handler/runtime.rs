@@ -18,7 +18,7 @@ use crate::{
     msg::{self, HandlerInstance, Msg, Str},
 };
 
-pub(crate) struct HandlerTaskRt<H: HandlerInit> {
+pub struct HandlerTaskRt<H: HandlerInit> {
     inter: LocalInterface,
     bg_spawner_recv: flume::Receiver<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
     hdl: DynVar,

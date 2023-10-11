@@ -1,10 +1,10 @@
-pub mod async_fn_ptr;
-pub mod decl;
-pub mod dispatch;
-pub mod interface;
-pub mod macros;
-pub mod register;
-pub mod runtime;
+mod async_fn_ptr;
+mod decl;
+mod dispatch;
+mod interface;
+mod macros;
+mod register;
+mod runtime;
 
 use crate::msg::{self, Str};
 

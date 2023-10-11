@@ -12,7 +12,7 @@ use crate::{
     msg::{self, HandlerInstance},
 };
 
-pub(crate) async fn bus_dispatch_event(
+pub async fn bus_dispatch_event(
     int: Interface,
     source: HandlerInstance,
     target: msg::Target,

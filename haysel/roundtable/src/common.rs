@@ -8,7 +8,7 @@ use super::{
 /// the external handler (used as the sender ID for sending messages from outside a handler)
 pub const HDL_EXTERNAL: HandlerInstance = HandlerInstance {
     typ: handler_decl_t!("External event dispatcher"),
-    discriminant: Uid::nill(),
+    discriminant: Uid::nil(),
     discriminant_desc: Str::Borrowed("External event dispatcher"),
 };
 
