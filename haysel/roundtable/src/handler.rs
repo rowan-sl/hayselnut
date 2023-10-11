@@ -12,17 +12,25 @@ pub use decl::MethodDecl;
 pub use interface::{local::LocalInterface, Interface};
 pub use register::MethodRegister;
 
+/// Trait that describes a handlers functionality.
+///
+/// All handlers must implement this trait
+///
+/// Please note that this is an `#[async_trait]`
 #[async_trait]
 pub trait HandlerInit: Send + Sync + 'static {
+    /// handler declaration (the unique ID for this handler type)
+    ///
+    /// generated using [handler_decl_t][crate::handler_decl_t]
     const DECL: msg::HandlerType;
-    // type BgGenerated: Sync + Send + 'static;
-    // const BG_RUN: bool = false;
-    // /// NOTE: This function MUST be cancel safe.
-    // async fn bg_generate(&mut self) -> Self::BgGenerated { unimplemented!() }
-    // async fn bg_consume(&mut self, _args: Self::BgGenerated, _int: LocalInterface) { unimplemented!() }
+    /// function run by the handler task runtime on start
+    ///
+    /// used for dispatching startup events, starting background tasks, etc
     async fn init(&mut self, _int: &LocalInterface) {}
-    // description of this handler instance
+    /// provide a description of this handler instance
     fn describe(&self) -> Str;
-    // methods of this handler instance
+    /// the methods of this handler instance
+    ///
+    /// to register a method, use [`register.register()`][MethodRegister::register]
     fn methods(&self, register: &mut MethodRegister<Self>);
 }
