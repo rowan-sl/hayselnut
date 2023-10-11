@@ -2,14 +2,13 @@ use std::{collections::HashMap, marker::PhantomData};
 
 use uuid::Uuid;
 
-use crate::{
-    handler::{
-        async_fn_ptr::{AsyncFnPtr, HandlerFn, HandlerFnOwnArgs},
-        decl::{MethodDecl, MethodRaw},
-        HandlerInit,
-    },
-    msg::Str,
+use crate::handler::{
+    async_fn_ptr::{AsyncFnPtr, HandlerFn, HandlerFnOwnArgs},
+    decl::{MethodDecl, MethodRaw},
+    HandlerInit,
 };
+#[cfg(feature = "bus_dbg")]
+use crate::msg::Str;
 
 /// Interface for registering methods on a handler.
 ///
@@ -44,6 +43,7 @@ impl<H: HandlerInit> MethodRegister<H> {
             decl.id,
             MethodRaw {
                 handler_func: Box::new(HandlerFn::new(func)),
+                #[cfg(feature = "bus_dbg")]
                 handler_desc: Str::Borrowed(decl.desc),
             },
         );
@@ -69,6 +69,7 @@ impl<H: HandlerInit> MethodRegister<H> {
             decl.id,
             MethodRaw {
                 handler_func: Box::new(HandlerFnOwnArgs::new(func)),
+                #[cfg(feature = "bus_dbg")]
                 handler_desc: Str::Borrowed(decl.desc),
             },
         );

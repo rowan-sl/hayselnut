@@ -5,6 +5,8 @@ use futures::future::BoxFuture;
 use tokio::{select, sync::broadcast, task::JoinSet};
 use uuid::Uuid;
 
+#[cfg(feature = "bus_dbg")]
+use crate::msg::Str;
 use crate::{
     dyn_var::DynVar,
     flag::Flag,
@@ -15,7 +17,7 @@ use crate::{
         HandlerInit,
     },
     id::Uid,
-    msg::{self, HandlerInstance, Msg, Str},
+    msg::{self, HandlerInstance, Msg},
 };
 
 pub struct HandlerTaskRt<H: HandlerInit> {
@@ -37,6 +39,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         let inst = HandlerInstance {
             typ: H::DECL,
             discriminant,
+            #[cfg(feature = "bus_dbg")]
             discriminant_desc: Str::Owned(String::new()),
         };
         let inst2 = inst.clone();
@@ -89,9 +92,12 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
         let instance = self.hdl.as_ref::<H>().unwrap();
         let mut register = MethodRegister::new();
         instance.methods(&mut register);
-        let discriminant_desc = instance.describe();
         self.methods = register.finalize();
-        self.inst.discriminant_desc = discriminant_desc;
+        #[cfg(feature = "bus_dbg")]
+        {
+            let discriminant_desc = instance.describe();
+            self.inst.discriminant_desc = discriminant_desc;
+        }
     }
 
     pub fn id(&self) -> HandlerInstance {
@@ -114,7 +120,8 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 }
                 // if None, it will be ignored (good)
                 Some(result) = background.join_next() => {
-                    let Ok((result, method_id, method_desc)) = result else {
+                    #[allow(unused)]
+                    let Ok((result, method_id,  method_desc)) = result else {
                         error!("Background task panicked! - ignoring would-be return value");
                         continue
                     };
@@ -122,6 +129,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                         warn!("Background task would have called method on return that was not registered - its return value will be ignored");
                         continue
                     };
+                    #[cfg(feature = "bus_dbg")]
                     if method_val.handler_desc != method_desc {
                         warn!(
                             "method description [registered] vs [called] do not match: ({:?} vs {:?})",
@@ -175,6 +183,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
 
     fn msg_method_validate(&self, method: &msg::MethodID) -> bool {
         let method_val = self.methods.get(&method.id);
+        #[allow(unused)]
         method_val.is_some_and(|val| {
             #[cfg(feature = "bus_dbg")]
             {

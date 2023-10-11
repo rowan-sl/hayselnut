@@ -2,7 +2,9 @@ use std::marker::PhantomData;
 
 use uuid::Uuid;
 
-use crate::{handler::async_fn_ptr::HandlerCallableErased, id::const_uuid_v4, msg::Str};
+#[cfg(feature = "bus_dbg")]
+use crate::msg::Str;
+use crate::{handler::async_fn_ptr::HandlerCallableErased, id::const_uuid_v4};
 
 pub struct MethodDecl<const OWN: bool, At: 'static, Rt: 'static> {
     pub(crate) id: Uuid,

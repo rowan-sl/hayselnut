@@ -6,12 +6,14 @@ use std::{
 use anyhow::Result;
 use tokio::sync::broadcast;
 
+#[cfg(feature = "bus_dbg")]
+use crate::msg::Str;
 use crate::{
     dyn_var::DynVar,
     handler::{
         decl::MethodDecl, dispatch::bus_dispatch_event, runtime::HandlerTaskRt, HandlerInit,
     },
-    msg::{self, HandlerInstance, Msg, Str},
+    msg::{self, HandlerInstance, Msg},
 };
 
 pub mod local;
@@ -55,6 +57,7 @@ impl Interface {
             target,
             msg::MethodID {
                 id: method.id,
+                #[cfg(feature = "bus_dbg")]
                 id_desc: Str::Borrowed(method.desc),
             },
             DynVar::new(args),

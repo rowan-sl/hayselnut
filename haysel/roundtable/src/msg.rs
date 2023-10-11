@@ -11,6 +11,7 @@ use super::id::Uid;
 #[derive(Debug)]
 pub(crate) struct Msg {
     /// UID - generated at message send time
+    #[allow(unused)]
     pub id: Uid,
     /// content of the message
     pub kind: MsgKind,
