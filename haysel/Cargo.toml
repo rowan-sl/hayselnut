@@ -1,7 +1,12 @@
 [package]
 name = "haysel"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
+license = "GPLv3"
+readme = "README.md"
+authors = ["Rowan S-L <rowan@fawkes.io>"]
+description = "Haysel - datalogging and distrobution for the hayselnut project"
+repository = "https://git.fawkes.io/mtnash/hayselnut/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
