@@ -238,21 +238,21 @@ fn main() {
             flag
         };
 
-        wifictl::util::fix_networking().unwrap();
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                println!("running");
-                loop {
-                    println!("{}", direction_reader(&mut adc1));
-                    sleep(Duration::from_millis(100)).await;
-                    // rainfall_flag.clone().await;
-                    // rainfall_flag.reset();
-                    // println!("tick");
-                }
-            });
+        // wifictl::util::fix_networking().unwrap();
+        // tokio::runtime::Builder::new_current_thread()
+        //     .enable_all()
+        //     .build()
+        //     .unwrap()
+        //     .block_on(async {
+        //         println!("running");
+        //         loop {
+        //             println!("{}", direction_reader(&mut adc1));
+        //             sleep(Duration::from_millis(100)).await;
+        //             // rainfall_flag.clone().await;
+        //             // rainfall_flag.reset();
+        //             // println!("tick");
+        //         }
+        //     });
     }
 
     // temp/humidity/pressure
