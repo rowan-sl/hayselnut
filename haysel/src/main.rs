@@ -64,8 +64,19 @@ fn main() -> anyhow::Result<()> {
     let run_args;
     match args {
         ArgsParser {
-            cmd: args::Cmd::Run { args },
-        } => run_args = args,
+            cmd: args::Cmd::Run { mut args },
+        } => {
+            if args.no_safeguards {
+                warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
+                if args.daemonize {
+                    error!("--no-safeguards and --daemonize are incompatable!");
+                    bail!("Invalid Arguments");
+                }
+                warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
+                args.overwrite_reinit = true;
+            }
+            run_args = args
+        }
         ArgsParser {
             cmd: args::Cmd::Kill { config },
         } => {
@@ -119,9 +130,13 @@ fn main() -> anyhow::Result<()> {
 
     let pid_file = run_dir.path("daemon.lock");
     if pid_file.try_exists()? {
-        error!("A server is already running, refusing to start!");
-        info!("If this is incorrect, remove the `daemon.lock` file and try again");
-        bail!("Server already started");
+        if run_args.no_safeguards {
+            warn!("A PID file exists, continueing anyway (--no-safeguards mode)");
+        } else {
+            error!("A server is already running, refusing to start!");
+            info!("If this is incorrect, remove the `daemon.lock` file and try again");
+            bail!("Server already started");
+        }
     }
 
     if run_args.daemonize {
@@ -129,9 +144,12 @@ fn main() -> anyhow::Result<()> {
         daemon(true, true)?;
         info!("[daemon] - copying logs ")
     }
-    debug!("Writing PID file {:?}", pid_file);
-    let pid = process::id();
-    std::fs::write(&pid_file, format!("{pid}").as_bytes())?;
+    if !run_args.no_safeguards {
+        debug!("Writing PID file {:?}", pid_file);
+        let pid = process::id();
+        std::fs::write(&pid_file, format!("{pid}").as_bytes())?;
+    }
+    let no_safeguards = run_args.no_safeguards;
 
     debug!("Launching async runtime");
     let result = std::panic::catch_unwind(move || {
@@ -148,8 +166,10 @@ fn main() -> anyhow::Result<()> {
             result
         })
     });
-    debug!("Deleting PID file {:?}", pid_file);
-    std::fs::remove_file(&pid_file)?;
+    if !no_safeguards {
+        debug!("Deleting PID file {:?}", pid_file);
+        std::fs::remove_file(&pid_file)?;
+    }
     match result {
         Ok(inner) => inner,
         Err(err) => {
@@ -166,8 +186,10 @@ async fn async_main(
     records_dir: RecordsPath,
     run_dir: RecordsPath,
 ) -> anyhow::Result<()> {
-    // trap the ctrl+csignal, will only start listening later in the main loop
-    trap_ctrl_c(shutdown.handle()).await;
+    if !args.no_safeguards {
+        // trap the ctrl+csignal, will only start listening later in the main loop
+        trap_ctrl_c(shutdown.handle()).await;
+    }
 
     let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
     let bus = Bus::new().await;

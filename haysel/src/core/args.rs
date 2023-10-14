@@ -64,4 +64,9 @@ pub struct RunArgs {
         help = "Start and then immedietally fork, running in the background untill killed with `haysel kill`"
     )]
     pub daemonize: bool,
+    #[arg(
+        long,
+        help = "do not write a PID file, do not check for a PID file, do not trap ctrl+c, imply --overwrite-reinit (incompatable with --daemonize)"
+    )]
+    pub no_safeguards: bool,
 }
