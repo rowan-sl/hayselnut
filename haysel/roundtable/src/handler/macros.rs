@@ -2,7 +2,7 @@
 macro_rules! method_decl {
     ($name:ident, $arg:ty, $ret:ty) => {
         pub const $name: $crate::handler::MethodDecl<false, $arg, $ret> =
-            $crate::handler::MethodDecl::new(concat!(stringify!($name)));
+            $crate::handler::MethodDecl::new(concat!(stringify!($name)), $crate::const_uuid_v4!());
     };
 }
 
@@ -10,7 +10,7 @@ macro_rules! method_decl {
 macro_rules! method_decl_owned {
     ($name:ident, $arg:ty, $ret:ty) => {
         pub const $name: $crate::handler::MethodDecl<true, $arg, $ret> =
-            $crate::handler::MethodDecl::new(concat!(stringify!($name)));
+            $crate::handler::MethodDecl::new(concat!(stringify!($name)), $crate::const_uuid_v4!());
     };
 }
 
@@ -19,7 +19,7 @@ macro_rules! method_decl_owned {
 macro_rules! handler_decl_t {
     ($desc:literal) => {
         $crate::msg::HandlerType {
-            id: $crate::id::const_uuid_v4(),
+            id: $crate::const_uuid_v4!(),
             id_desc: $crate::msg::Str::Borrowed($desc),
         }
     };
@@ -30,7 +30,7 @@ macro_rules! handler_decl_t {
 macro_rules! handler_decl_t {
     ($desc:literal) => {
         $crate::msg::HandlerType {
-            id: $crate::id::const_uuid_v4(),
+            id: $crate::const_uuid_v4!(),
         }
     };
 }

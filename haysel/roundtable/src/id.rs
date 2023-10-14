@@ -1,8 +1,5 @@
 use std::sync::atomic::{self, AtomicU64};
 
-use const_random::const_random;
-use uuid::Uuid;
-
 /// NON UNIVERSALLY unique identifier
 ///
 /// all Uids that are compared with each other must come from the same `source`
@@ -24,6 +21,9 @@ impl Uid {
 
 /// Generates a random Uuid at compile time
 #[doc(hidden)]
-pub const fn const_uuid_v4() -> Uuid {
-    uuid::Builder::from_u128(const_random!(u128)).into_uuid()
+#[macro_export]
+macro_rules! const_uuid_v4 {
+    () => {
+        $crate::uuid::Builder::from_u128($crate::const_random::const_random!(u128)).into_uuid()
+    };
 }

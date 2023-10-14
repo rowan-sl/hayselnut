@@ -10,6 +10,10 @@ extern crate tracing;
 extern crate anyhow;
 #[macro_use]
 extern crate async_trait;
+#[doc(hidden)]
+pub extern crate const_random;
+#[doc(hidden)]
+pub extern crate uuid;
 
 use std::{
     ops::Deref,

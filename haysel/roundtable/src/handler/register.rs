@@ -39,14 +39,17 @@ impl<H: HandlerInit> MethodRegister<H> {
         func: Fn,
         decl: MethodDecl<false, At, Rt>,
     ) {
-        self.methods.insert(
-            decl.id,
-            MethodRaw {
-                handler_func: Box::new(HandlerFn::new(func)),
-                #[cfg(feature = "bus_dbg")]
-                handler_desc: Str::Borrowed(decl.desc),
-            },
-        );
+        debug_assert!(self
+            .methods
+            .insert(
+                decl.id,
+                MethodRaw {
+                    handler_func: Box::new(HandlerFn::new(func)),
+                    #[cfg(feature = "bus_dbg")]
+                    handler_desc: Str::Borrowed(decl.desc),
+                },
+            )
+            .is_none());
     }
 
     /// Registers that this handler implements the given [`decl`][MethodDecl] with the handler function `func`

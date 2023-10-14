@@ -1,10 +1,10 @@
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 use uuid::Uuid;
 
+use crate::handler::async_fn_ptr::HandlerCallableErased;
 #[cfg(feature = "bus_dbg")]
 use crate::msg::Str;
-use crate::{handler::async_fn_ptr::HandlerCallableErased, id::const_uuid_v4};
 
 pub struct MethodDecl<const OWN: bool, At: 'static, Rt: 'static> {
     pub(crate) id: Uuid,
@@ -22,9 +22,9 @@ impl<const OWN: bool, At: 'static, Rt: 'static> Copy for MethodDecl<OWN, At, Rt>
 
 impl<const OWN: bool, At: 'static, Rt: 'static> MethodDecl<OWN, At, Rt> {
     #[doc(hidden)]
-    pub const fn new(desc: &'static str) -> Self {
+    pub const fn new(desc: &'static str, id: Uuid) -> Self {
         Self {
-            id: const_uuid_v4(),
+            id,
             desc,
             _ph: PhantomData,
         }
@@ -36,4 +36,12 @@ pub struct MethodRaw {
     pub handler_func: Box<(dyn HandlerCallableErased + Sync + Send)>,
     #[cfg(feature = "bus_dbg")]
     pub handler_desc: Str,
+}
+
+impl Debug for MethodRaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MethodRaw")
+            .field("handler_desc", &self.handler_desc)
+            .finish_non_exhaustive()
+    }
 }
