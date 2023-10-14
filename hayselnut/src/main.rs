@@ -578,7 +578,7 @@ fn on_reset() {
                 // sleep forever
                 *DEEP_SLEEP_CAUSE.get() = SleepCause::Panic;
 
-                sleep(Duration::from_secs(10 * 60));
+                std::thread::sleep(Duration::from_secs(10 * 60));
 
                 esp_sleep_disable_wakeup_source(
                     esp_idf_sys::esp_sleep_source_t_ESP_SLEEP_WAKEUP_ALL,
@@ -611,7 +611,7 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
             break chosen;
         } else {
             error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
-            sleep(NO_WIFI_RETRY_INTERVAL);
+            sleep(NO_WIFI_RETRY_INTERVAL).await;
         }
     };
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
