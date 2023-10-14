@@ -4,15 +4,17 @@ with pkgs;
 
 mkShell {
   name = "rust";
-  nativeBuildInputs = with xorg; [
+  nativeBuildInputs = [
     pkg-config
   ];
   buildInputs = [
     clang
     lld
     mold
+    # needed for cargo-espflash
+    systemd
   ];
-  # fixes libstdc++ issues and libgl.so issues 
+  # fixes libstdc++ issues and libgl.so issues
   LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib/:/run/opengl-driver/lib/";
   # fixes other stuff
   LIBCLANG_PATH = "${pkgs.llvmPackages_11.libclang.lib}/lib";
