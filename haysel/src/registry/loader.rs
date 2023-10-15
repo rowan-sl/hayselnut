@@ -12,10 +12,13 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::core::shutdown::{async_drop::AsyncDrop, ShutdownHandle};
+use crate::{
+    core::shutdown::{async_drop::AsyncDrop, ShutdownHandle},
+    misc::Take,
+};
 
 pub struct JsonLoader<R: Serialize + DeserializeOwned> {
-    file: Option<File>,
+    file: Take<File>,
     value: R,
     drop: AsyncDrop,
 }
@@ -50,10 +53,19 @@ impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
             }
         };
         Ok(Self {
-            file: Some(file),
+            file: Take::new(file),
             value,
             drop: AsyncDrop::new(sh_handle).await,
         })
+    }
+
+    #[instrument(skip(self))]
+    pub async fn sync(&mut self) -> Result<()> {
+        let serialized = serde_json::to_string_pretty(&self.value)?;
+        self.file.set_len(0).await?;
+        self.file.seek(std::io::SeekFrom::Start(0)).await?;
+        self.file.write_all(serialized.as_bytes()).await?;
+        Ok(())
     }
 }
 
@@ -76,7 +88,7 @@ impl<R: Serialize + DeserializeOwned> Drop for JsonLoader<R> {
             error!("JsonLoader sync failed - could not serialize");
             return;
         };
-        let mut file: File = self.file.take().unwrap();
+        let mut file: File = self.file.take();
         self.drop.run(async move {
             if let Err(e) = file.set_len(0).await {
                 error!("JsonLoader sync failed - could not truncate: {e:#?}");
