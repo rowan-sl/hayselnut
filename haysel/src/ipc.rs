@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use chrono::{DateTime, Utc};
 use mycelium::{
     station::{
         capabilities::{Channel, ChannelID, KnownChannels},
@@ -26,18 +27,25 @@ use crate::{
     dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
     misc::Take,
     registry::{self, EV_META_NEW_CHANNEL, EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
+    tsdb2::{bus::EV_DB_QUERY, query::builder::QueryBuilder},
 };
 
 pub struct IPCNewConnections {
     listener: Arc<UnixListener>,
     registry: HandlerInstance,
+    database: HandlerInstance,
 }
 
 impl IPCNewConnections {
-    pub async fn new(path: PathBuf, registry: HandlerInstance) -> io::Result<Self> {
+    pub async fn new(
+        path: PathBuf,
+        registry: HandlerInstance,
+        database: HandlerInstance,
+    ) -> io::Result<Self> {
         Ok(Self {
             listener: Arc::new(UnixListener::bind(path)?),
             registry,
+            database,
         })
     }
 
@@ -59,6 +67,7 @@ impl IPCNewConnections {
                     read: Take::new(read),
                     addr,
                     init_known: Take::new((stations, channels)),
+                    database: self.database.clone(),
                 };
                 int.nonlocal.spawn(conn);
                 self.bg_handle_new_client(int);
@@ -103,6 +112,7 @@ pub struct IPCConnection {
     read: Take<OwnedReadHalf>,
     addr: SocketAddr,
     init_known: Take<(KnownStations, KnownChannels)>,
+    database: HandlerInstance,
 }
 
 impl IPCConnection {
@@ -130,6 +140,28 @@ impl IPCConnection {
                                 kind: mycelium::IPCMsgKind::Bye,
                             })
                             .await;
+                    }
+                    mycelium::IPCMsgKind::QueryLastHourOf { station, channel } => {
+                        let data = int
+                            .query(
+                                self.database.clone(),
+                                EV_DB_QUERY,
+                                QueryBuilder::new_nodb()
+                                    .with_station(station)
+                                    .with_channel(channel)
+                                    .with_after(Utc::now() - chrono::Duration::minutes(60))
+                                    .verify()
+                                    .unwrap(),
+                            )
+                            .await
+                            .expect("Failed to query database handler")
+                            .expect("Database errored executing query");
+                        self.send(&IPCMsg {
+                            kind: mycelium::IPCMsgKind::QueryLastHourResponse { data },
+                        })
+                        .await
+                        .expect("Failed to send response");
+                        self.bg_read(read, int);
                     }
                     _other => self.bg_read(read, int),
                 }

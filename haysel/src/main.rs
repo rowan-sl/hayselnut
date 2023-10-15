@@ -224,7 +224,7 @@ async fn async_main(
 
     debug!("Loading database");
     warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
-    {
+    let db = {
         let store: Box<(dyn IsDynStorage<Error = raid::DynStorageError> + 'static)> = match cfg
             .database
             .storage
@@ -301,7 +301,7 @@ async fn async_main(
             )
             .await?;
         db_stop.ensure_exists(&(stations, channels)).await?;
-        bus.spawn(db_stop);
+        bus.spawn(db_stop)
     };
     info!("Database loaded");
 
@@ -310,7 +310,7 @@ async fn async_main(
     if tokio::fs::try_exists(&ipc_path).await? {
         tokio::fs::remove_file(&ipc_path).await?;
     }
-    let ipc_stop = ipc::IPCNewConnections::new(ipc_path, registry.clone()).await?;
+    let ipc_stop = ipc::IPCNewConnections::new(ipc_path, registry.clone(), db.clone()).await?;
     bus.spawn(ipc_stop);
     info!("IPC configured");
 

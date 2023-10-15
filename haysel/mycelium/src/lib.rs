@@ -119,6 +119,14 @@ pub enum IPCMsgKind {
         station: StationID,
         channel: ChannelID,
     },
+    // response to QueryLastHourOf
+    QueryLastHourResponse {
+        data: Vec<(DateTime<Utc>, f32)>,
+    },
     /// -- client to server --
     ClientDisconnect,
+    QueryLastHourOf {
+        station: StationID,
+        channel: ChannelID,
+    },
 }
