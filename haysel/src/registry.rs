@@ -8,6 +8,7 @@ use mycelium::station::{
     identity::{KnownStations, StationID, StationInfo},
 };
 use roundtable::{
+    common::EV_BUILTIN_AUTOSAVE,
     handler::{HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl,
     msg::{self, Str},
@@ -46,6 +47,7 @@ impl HandlerInit for Registry {
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register(Self::query_all, EV_REGISTRY_QUERY_ALL);
         reg.register(Self::process_connect, EV_REGISTRY_PROCESS_CONNECT);
+        reg.register(Self::sync, EV_BUILTIN_AUTOSAVE);
     }
 }
 
@@ -55,6 +57,12 @@ impl Registry {
             stations: Take::new(stations),
             channels: Take::new(channels),
         }
+    }
+
+    #[instrument(skip(self, _int))]
+    async fn sync(&mut self, _: &(), _int: &LocalInterface) {
+        self.stations.sync().await.expect("Failed to sync stations");
+        self.channels.sync().await.expect("Failed to sync channels");
     }
 
     async fn query_all(&mut self, _: &(), _int: &LocalInterface) -> (KnownStations, KnownChannels) {
