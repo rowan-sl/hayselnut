@@ -802,6 +802,7 @@ dependencies = [
  "squirrel",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -118,7 +118,7 @@ pub struct IPCConnection {
 impl IPCConnection {
     fn bg_read(&mut self, mut read: OwnedReadHalf, int: &LocalInterface) {
         int.bg_spawn(EV_PRIV_READ, async move {
-            let res = mycelium::ipc_recv(&mut read).await;
+            let res = mycelium::ipc_recv::<IPCMsg>(&mut read).await;
             (read, res)
         })
     }
