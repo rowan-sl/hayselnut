@@ -46,6 +46,7 @@ impl HandlerInit for Registry {
     }
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register(Self::query_all, EV_REGISTRY_QUERY_ALL);
+        reg.register(Self::query_channel, EV_REGISTRY_QUERY_CHANNEL);
         reg.register(Self::process_connect, EV_REGISTRY_PROCESS_CONNECT);
         reg.register(Self::sync, EV_BUILTIN_AUTOSAVE);
     }
@@ -67,6 +68,10 @@ impl Registry {
 
     async fn query_all(&mut self, _: &(), _int: &LocalInterface) -> (KnownStations, KnownChannels) {
         (self.stations.clone(), self.channels.clone())
+    }
+
+    async fn query_channel(&mut self, id: &ChannelID, _int: &LocalInterface) -> Option<Channel> {
+        self.channels.get_channel(id).cloned()
     }
 
     async fn process_connect(

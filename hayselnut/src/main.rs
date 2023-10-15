@@ -675,7 +675,11 @@ pub struct MeasureTimers {
 impl MeasureTimers {
     pub fn with_config(cfg: &MeasureConfig) -> Self {
         Self {
-            read_timer: interval(cfg.read_interval),
+            read_timer: {
+                let mut i = interval(cfg.read_interval);
+                i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                i
+            },
         }
     }
 
