@@ -42,7 +42,7 @@ use futures::{select_biased, FutureExt};
 use serde::{Deserialize, Serialize};
 use tokio::{
     net::{lookup_host as resolve, UdpSocket},
-    time::{interval, sleep, Interval},
+    time::{interval, Interval},
 };
 
 use squirrel::{
@@ -195,66 +195,66 @@ fn main() {
     // };
 
     // wind{speed,direction}, rainfall quantity
-    {
-        let speed = pins.gpio6;
-        let direction = pins.gpio4;
-        let rainfall = pins.gpio7;
-
-        let speed_flag = unsafe {
-            let flag = Flag::new();
-            let flag2 = flag.clone();
-            let driver = Box::leak(Box::new(PinDriver::input(speed).unwrap()));
-            driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
-            driver
-                .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
-                .unwrap();
-            driver
-                .subscribe(move || flag2.signal())
-                .unwrap_hwerr("failed to set interrupt");
-            driver.enable_interrupt().unwrap();
-            flag
-        };
-
-        let mut direction_reader = {
-            let mut driver = AdcChannelDriver::<'_, _, adc::Atten11dB<_>>::new(direction)
-                .unwrap_hwerr("failed to init adc channel");
-            move |adc1: &mut AdcDriver<'_, adc::ADC1>| {
-                adc1.read(&mut driver).unwrap_hwerr("failed to read adc")
-            }
-        };
-
-        let rainfall_flag = unsafe {
-            let flag = Flag::new();
-            let flag2 = flag.clone();
-            let driver = Box::leak(Box::new(PinDriver::input(rainfall).unwrap()));
-            driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
-            driver
-                .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
-                .unwrap();
-            driver
-                .subscribe(move || flag2.signal())
-                .unwrap_hwerr("failed to set interrupt");
-            driver.enable_interrupt().unwrap();
-            flag
-        };
-
-        // wifictl::util::fix_networking().unwrap();
-        // tokio::runtime::Builder::new_current_thread()
-        //     .enable_all()
-        //     .build()
-        //     .unwrap()
-        //     .block_on(async {
-        //         println!("running");
-        //         loop {
-        //             println!("{}", direction_reader(&mut adc1));
-        //             sleep(Duration::from_millis(100)).await;
-        //             // rainfall_flag.clone().await;
-        //             // rainfall_flag.reset();
-        //             // println!("tick");
-        //         }
-        //     });
-    }
-
+    // {
+    //     let speed = pins.gpio6;
+    //     let direction = pins.gpio4;
+    //     let rainfall = pins.gpio7;
+    //
+    //     let speed_flag = unsafe {
+    //         let flag = Flag::new();
+    //         let flag2 = flag.clone();
+    //         let driver = Box::leak(Box::new(PinDriver::input(speed).unwrap()));
+    //         driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
+    //         driver
+    //             .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
+    //             .unwrap();
+    //         driver
+    //             .subscribe(move || flag2.signal())
+    //             .unwrap_hwerr("failed to set interrupt");
+    //         driver.enable_interrupt().unwrap();
+    //         flag
+    //     };
+    //
+    //     let mut direction_reader = {
+    //         let mut driver = AdcChannelDriver::<'_, _, adc::Atten11dB<_>>::new(direction)
+    //             .unwrap_hwerr("failed to init adc channel");
+    //         move |adc1: &mut AdcDriver<'_, adc::ADC1>| {
+    //             adc1.read(&mut driver).unwrap_hwerr("failed to read adc")
+    //         }
+    //     };
+    //
+    //     let rainfall_flag = unsafe {
+    //         let flag = Flag::new();
+    //         let flag2 = flag.clone();
+    //         let driver = Box::leak(Box::new(PinDriver::input(rainfall).unwrap()));
+    //         driver.set_pull(esp_idf_hal::gpio::Pull::Down).unwrap();
+    //         driver
+    //             .set_interrupt_type(esp_idf_hal::gpio::InterruptType::PosEdge)
+    //             .unwrap();
+    //         driver
+    //             .subscribe(move || flag2.signal())
+    //             .unwrap_hwerr("failed to set interrupt");
+    //         driver.enable_interrupt().unwrap();
+    //         flag
+    //     };
+    //
+    //     wifictl::util::fix_networking().unwrap();
+    //     tokio::runtime::Builder::new_current_thread()
+    //         .enable_all()
+    //         .build()
+    //         .unwrap()
+    //         .block_on(async {
+    //             println!("running");
+    //             loop {
+    //                 println!("{}", direction_reader(&mut adc1));
+    //                 sleep(Duration::from_millis(100)).await;
+    //                 // rainfall_flag.clone().await;
+    //                 // rainfall_flag.reset();
+    //                 // println!("tick");
+    //             }
+    //         });
+    // }
+    //
     // temp/humidity/pressure
     // if this call ever fails (no error, just waiting forever) check the connection with the sensor
     warn!("connecting to BME sensor - if it is disconnected this will hang here");
@@ -457,7 +457,7 @@ fn main() {
 
                     loop {
                         select_biased! {
-                            res = wifi.wifi_wait(|| wifi.is_up().map(|x| !x), None).fuse() => {
+                            res = wifi.wifi_wait(|| wifi.is_up(), None).fuse() => {
                                 res.unwrap_hwerr("failed to check wifi status");
                                 info!("WIFI disconnected");
                                 continue 'retry_wifi
@@ -593,6 +593,13 @@ fn on_reset() {
 
 async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
     info!("Connecting to WIFI");
+    assert!(wifi
+        .is_started()
+        .unwrap_hwerr("Failed to query wifi status"));
+    assert!(!wifi
+        .is_connected()
+        .unwrap_hwerr("Failed to query wifi status"));
+    assert!(!wifi.is_up().unwrap_hwerr("Failed to query wifi status"));
     // // clear the disconnect queue
     // while let Ok(wifictl::WifiStatusUpdate::Disconnected) = wifi_status_recv.try_recv() {}
     // // -- connecting to wifi --
@@ -611,9 +618,10 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
             break chosen;
         } else {
             error!("scan returned no available networks, retrying in {NO_WIFI_RETRY_INTERVAL:?}");
-            sleep(NO_WIFI_RETRY_INTERVAL).await;
+            std::thread::sleep(NO_WIFI_RETRY_INTERVAL);
         }
     };
+    info!("Connecting to: {}", chosen.0.ssid);
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
         ssid: chosen.0.ssid,
         password: chosen.1.unwrap_or_default().into(),
@@ -621,13 +629,22 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
         ..Default::default()
     }))
     .unwrap_hwerr("failed to set wifi config");
-    wifi.connect()
-        .await
-        .unwrap_hwerr("failed to connect to wifi");
+    for i in 1..=5 {
+        info!("Connecting (attempt {i} / 5)");
+        if let Err(e) = wifi.connect().await {
+            warn!("Attempt {i}/5 failed");
+            if i == 5 {
+                _panic_hwerr(e, "Failed to connect to wifi (attempt 5 errored)");
+            }
+        } else {
+            break;
+        }
+    }
     info!("waiting for association");
     wifi.ip_wait_while(|| wifi.is_up().map(|x| !x), None)
         .await
         .unwrap_hwerr("ip_wait_while failed");
+    assert!(wifi.is_up().unwrap_hwerr("Failed to query wifi status"));
     info!("Connected to wifi in {:?}", before.elapsed());
     let ip_info = wifi.wifi()
         .sta_netif()

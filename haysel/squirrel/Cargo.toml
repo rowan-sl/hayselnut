@@ -17,7 +17,7 @@ static_assertions = "1.1"
 zerocopy = { version = "0.7", features = ["derive"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }
 log = { version = "0.4", optional = true }
-tokio = { version = "1.33", features = ["net", "time"] }
+tokio = { version = "1", features = ["net", "time"] }
 tracing = { version = "0.1" }
 futures = "0.3"
 flume = "0.11"
