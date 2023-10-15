@@ -142,6 +142,7 @@ impl IPCConnection {
                             .await;
                     }
                     mycelium::IPCMsgKind::QueryLastHourOf { station, channel } => {
+                        let from_time = Utc::now();
                         let data = int
                             .query(
                                 self.database.clone(),
@@ -149,7 +150,7 @@ impl IPCConnection {
                                 QueryBuilder::new_nodb()
                                     .with_station(station)
                                     .with_channel(channel)
-                                    .with_after(Utc::now() - chrono::Duration::minutes(60))
+                                    .with_after(from_time - chrono::Duration::minutes(60))
                                     .verify()
                                     .unwrap(),
                             )
@@ -157,7 +158,7 @@ impl IPCConnection {
                             .expect("Failed to query database handler")
                             .expect("Database errored executing query");
                         self.send(&IPCMsg {
-                            kind: mycelium::IPCMsgKind::QueryLastHourResponse { data },
+                            kind: mycelium::IPCMsgKind::QueryLastHourResponse { data, from_time },
                         })
                         .await
                         .expect("Failed to send response");

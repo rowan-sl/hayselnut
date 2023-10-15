@@ -122,6 +122,7 @@ pub enum IPCMsgKind {
     // response to QueryLastHourOf
     QueryLastHourResponse {
         data: Vec<(DateTime<Utc>, f32)>,
+        from_time: DateTime<Utc>,
     },
     /// -- client to server --
     ClientDisconnect,
