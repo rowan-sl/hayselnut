@@ -1,4 +1,5 @@
-use super::{handler_decl_t, id::Uid, method_decl, msg::HandlerInstance};
+use super::{handler_decl_t, id::Uid, msg::HandlerInstance};
+use crate::method_decl;
 #[cfg(feature = "bus_dbg")]
 use crate::msg::Str;
 
@@ -10,4 +11,4 @@ pub const HDL_EXTERNAL: HandlerInstance = HandlerInstance {
     discriminant_desc: Str::Borrowed("External event dispatcher"),
 };
 
-method_decl!(EV_SHUTDOWN, (), ());
+method_decl!(EV_BUILTIN_AUTOSAVE, (), ());

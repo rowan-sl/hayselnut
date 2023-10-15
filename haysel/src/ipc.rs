@@ -10,7 +10,6 @@ use mycelium::{
     IPCError, IPCMsg,
 };
 use roundtable::{
-    common::EV_SHUTDOWN,
     handler::{HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl_owned,
     msg::{self, HandlerInstance, Str},
@@ -226,7 +225,6 @@ impl HandlerInit for IPCConnection {
         reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
         reg.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
         reg.register(Self::send_data, EV_WEATHER_DATA_RECEIVED);
-        reg.register(Self::close, EV_SHUTDOWN);
     }
 }
 

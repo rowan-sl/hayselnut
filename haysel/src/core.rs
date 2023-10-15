@@ -7,11 +7,13 @@ use trust_dns_resolver::config as resolveconf;
 use trust_dns_resolver::TokioAsyncResolver;
 
 pub mod args;
+pub mod autosave;
 pub mod commands;
 pub mod config;
 pub mod log;
 pub mod shutdown;
 
+pub use autosave::AutosaveDispatch;
 pub use log::init_logging;
 
 /// it is necessary to bind the server to the real external ip address,

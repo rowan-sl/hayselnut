@@ -7,7 +7,6 @@ use mycelium::station::{
     identity::KnownStations,
 };
 use roundtable::{
-    common::EV_SHUTDOWN,
     handler::{HandlerInit, LocalInterface},
     handler_decl_t, method_decl,
     msg::{HandlerType, Str},
@@ -110,7 +109,6 @@ impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
         Str::Borrowed("Instance of TSDB2 Bus Integration")
     }
     fn methods(&self, r: &mut roundtable::handler::MethodRegister<Self>) {
-        r.register(Self::close, EV_SHUTDOWN);
         r.register(Self::query, EV_DB_QUERY);
         r.register(Self::new_station, EV_META_NEW_STATION);
         r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);

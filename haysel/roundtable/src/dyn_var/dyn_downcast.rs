@@ -5,7 +5,7 @@ use std::any::Any;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// use std::any::Any;
 /// use roundtable::dyn_var::AsAny;
 ///

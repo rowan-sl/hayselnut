@@ -22,10 +22,7 @@ use nix::{
     sys::signal::{kill, Signal},
     unistd::{daemon, Pid},
 };
-use roundtable::{
-    common::{EV_SHUTDOWN, HDL_EXTERNAL},
-    msg, Bus,
-};
+use roundtable::{common::HDL_EXTERNAL, msg, Bus};
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 use tokio::{net::UdpSocket, runtime};
 
@@ -50,6 +47,7 @@ use tsdb2::{
 };
 
 use crate::{
+    core::AutosaveDispatch,
     registry::Registry,
     tsdb2::alloc::store::{
         disk::DiskMode,
@@ -316,6 +314,10 @@ async fn async_main(
     bus.spawn(ipc_stop);
     info!("IPC configured");
 
+    let autosave_interval = Duration::from_secs(30);
+    info!("Autosaves will be triggered every {autosave_interval:?}");
+    bus.spawn(AutosaveDispatch::new(autosave_interval));
+
     info!("running -- press ctrl+c to exit");
     let sock = UdpSocket::bind(addrs.as_slice()).await?;
     let max_transaction_time = Duration::from_secs(30);
@@ -325,8 +327,8 @@ async fn async_main(
 
     shutdown.handle().wait_for_shutdown().await;
 
-    bus.announce_as(HDL_EXTERNAL, msg::Target::Any, EV_SHUTDOWN, ())
-        .await?;
+    // bus.announce_as(HDL_EXTERNAL, msg::Target::Any, EV_SHUTDOWN, ())
+    //     .await?;
 
     trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");
     shutdown.wait_for_completion().await;
