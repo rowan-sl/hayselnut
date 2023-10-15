@@ -368,11 +368,12 @@ impl<Store: Storage + Send> Database<Store> {
                 ) => {
                     match gtype {
                         repr::DataGroupType::Periodic => {
+                            debug!("inserting data into existing periodic group");
                             let mut data =
                                 Object::new_read(&mut self.alloc, unsafe { index.group.periodic })
                                     .await?;
                             let entry_dt = (time - index.after) as u64;
-                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
+                            trace!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
                             // FIXME: slo cod
 
                             // instead of calculating the change to avg_dt and then the entry's
@@ -416,7 +417,7 @@ impl<Store: Storage + Send> Database<Store> {
                             // store the data
                             data.avg_dt = avg_dt;
                             data.dt[0..index.used as _].copy_from_slice(&rel_dt);
-                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} final={:?}", line!(), index.after, &*data);
+                            trace!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} final={:?}", line!(), index.after, &*data);
                             data.dispose_sync(&mut self.alloc).await?;
                         }
                         repr::DataGroupType::Sporadic => {
@@ -465,6 +466,7 @@ impl<Store: Storage + Send> Database<Store> {
                 ) => {
                     match gtype {
                         repr::DataGroupType::Periodic => {
+                            debug!("Inserting data into new periodic group");
                             // this is validated by the match statement, but just in case.
                             // - means that ALL entries in `data.dt` and `data.data` are currently in use.
                             // - this means we DO NOT have to do `data.field[0..index.used]` like in other cases
@@ -473,7 +475,7 @@ impl<Store: Storage + Send> Database<Store> {
                                 Object::new_read(&mut self.alloc, unsafe { index.group.periodic })
                                     .await?;
                             let entry_dt = (time - index.after) as u64;
-                            debug!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
+                            trace!("(Periodic, branch {}) - t={time} after={}, entry_dt={entry_dt} reading={reading} initial={:?}", line!(), index.after, &*data);
                             // FIXME: slo cod
 
                             // instead of calculating the change to avg_dt and then the entry's
@@ -541,7 +543,7 @@ impl<Store: Storage + Send> Database<Store> {
                                         data: [0.0; tuning!(DATA_GROUP_PERIODIC_SIZE) - 1],
                                     };
                                     new_data.data[0..data_move.len()].copy_from_slice(&data_move);
-                                    debug!("(Periodic, branch {}) - t={time} after(keep)={}, after(move)={} entry_dt={entry_dt} reading={reading} final (keep)={:?} final (move)={:?}", line!(), index.after, index.after + abs_dt_move[0] as i64, &*data, new_data);
+                                    trace!("(Periodic, branch {}) - t={time} after(keep)={}, after(move)={} entry_dt={entry_dt} reading={reading} final (keep)={:?} final (move)={:?}", line!(), index.after, index.after + abs_dt_move[0] as i64, &*data, new_data);
                                     let pointer = Object::new_alloc(&mut self.alloc, new_data)
                                         .await?
                                         .dispose_sync(&mut self.alloc)
@@ -666,217 +668,6 @@ impl<Store: Storage + Send> Database<Store> {
                     todo!()
                 }
             }
-
-            // let r = ..chunk.used as usize;
-            //     // the first time this is true should be the most recent chunk that works with this data.
-            //     if entry.after < time {
-            //         // ^ the new data belongs in this chunk
-            //         // (`time` is after the start time of data in `entry`)
-            //         if entry.used < gtype_size {
-            //             // ^ the new data fits in this chunk
-            //             match gtype {
-            //                 repr::DataGroupType::Periodic => {
-            //                     let mut data = Object::new_read(&mut self.alloc, unsafe {
-            //                         entry.group.periodic
-            //                     })
-            //                     .await?;
-            //                     let entry_dt = u64::try_from(time - entry.after)
-            //                         .expect("unreachable: delta-time negative");
-            //                     // FIXME: slo cod
-            //
-            //                     // instead of calculating the change to avg_dt and then the entry's
-            //                     // relative dt, which is hard, we simply recalculate it for all
-            //                     // entries, which is easy, but slower
-            //                     //
-            //                     // here we reverse the relative delta calculation, arriving at a
-            //                     // individual offset from `entry.after` for each entry in `data`
-            //                     let mut abs_dt = data
-            //                         .dt
-            //                         .iter()
-            //                         .enumerate()
-            //                         .map(|(i, dt)| {
-            //                             (i as u64 * data.avg_dt as u64)
-            //                                 .checked_add_signed(*dt as i64)
-            //                                 .unwrap()
-            //                         })
-            //                         .collect::<Vec<u64>>();
-            //
-            //                     // make sure that the delta times are in order (to make sure the
-            //                     // rel -> abs isnt completely wrong, and to make sure the
-            //                     // `binary_search` used next works right)
-            //                     debug_assert!(abs_dt.is_sorted());
-            //
-            //                     // insert the new entry
-            //                     let ins_idx =
-            //                         abs_dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-            //                     let src = ins_idx..entry.used as usize;
-            //                     let dest = ins_idx + 1;
-            //                     abs_dt.copy_within(
-            //                         src.clone(), /* why does Range not impl Copy */
-            //                         dest,
-            //                     );
-            //                     data.data.copy_within(src, dest);
-            //                     abs_dt[ins_idx] = entry_dt;
-            //                     data.data[ins_idx] = reading;
-            //                     // increment `used`
-            //                     entry.used += 1;
-            //                     // make sure that we didnt screw up the ordering
-            //                     debug_assert!(data.dt.is_sorted());
-            //
-            //                     // then calculate the average dt
-            //                     let avg_dt = u32::try_from(
-            //                         iter::once(0u64)
-            //                             .chain(abs_dt.iter().copied())
-            //                             .zip(abs_dt.iter().copied())
-            //                             .map(|(last, next)| (next - last) as u128)
-            //                             .sum::<u128>()
-            //                             / abs_dt.len() as u128,
-            //                     )
-            //                     .expect("average delta-time too large");
-            //
-            //                     // then calculate individual offsets (delta from average)
-            //                     let rel_dt = abs_dt
-            //                         .iter()
-            //                         .enumerate()
-            //                         .map(|(i, abs_dt)| {
-            //                             i16::try_from(
-            //                                 *abs_dt as i64 - (avg_dt as u64 * i as u64) as i64,
-            //                             )
-            //                             .expect("relative delta-time too large")
-            //                         })
-            //                         .collect::<Vec<i16>>();
-            //
-            //                     data.avg_dt = avg_dt;
-            //                     data.dt = rel_dt.try_into().unwrap();
-            //                     data.dispose_sync(&mut self.alloc).await?;
-            //                 }
-            //                 repr::DataGroupType::Sporadic => {
-            //                     let mut data = Object::new_read(&mut self.alloc, unsafe {
-            //                         entry.group.sporadic
-            //                     })
-            //                     .await?;
-            //                     let entry_dt = u32::try_from(time - entry.after)
-            //                         .expect("delta-time out of range");
-            //                     // just make sure that binary_search wont produce garbage
-            //                     debug_assert!(data.dt.is_sorted());
-            //                     let ins_idx =
-            //                         data.dt.binary_search(&entry_dt).map_or_else(|x| x, |x| x);
-            //                     let src = ins_idx..entry.used as usize;
-            //                     let dest = ins_idx + 1;
-            //                     data.dt.copy_within(
-            //                         src.clone(), /* why does Range not impl Copy */
-            //                         dest,
-            //                     );
-            //                     data.data.copy_within(src, dest);
-            //                     data.dt[ins_idx] = entry_dt;
-            //                     data.data[ins_idx] = reading;
-            //                     // increment `used`
-            //                     entry.used += 1;
-            //                     // make sure that we didnt screw up the ordering
-            //                     debug_assert!(data.dt.is_sorted());
-            //                     data.dispose_sync(&mut self.alloc).await?;
-            //                 }
-            //             }
-            //         } else {
-            //             // ^ the new data does not fit in this index, a new one must be created
-            //             // after this one, and the data in the old one split around this entry,
-            //             // the more recent part moved to the new chunk
-            //
-            //             if chunk.used < tuning::DATA_INDEX_CHUNK_SIZE as u64 {
-            //                 todo!("the data within each final chunk needs to be split at the appropreate time");
-            //                 // ^ there is enough space in this chunk for the new index to go
-            //                 let used = chunk.used;
-            //                 // move this entry, and all the ones (after in list, before in time) it back
-            //                 // by 1 to make room for the new entry
-            //                 chunk
-            //                     .data
-            //                     .copy_within(entry_idx..used as usize, entry_idx + 1);
-            //                 chunk.used += 1;
-            //                 // insert the new entry
-            //                 // FIXME: the `after` field is set to the reading time, meaning there is a gap
-            //                 // between the end of the last entry, and the start of this one. if something
-            //                 // is inserted in that gap, then a new index will be unnecessarily created.
-            //                 // this could be fixed in the insertion, or in the vacuum impl. (in insertion
-            //                 // would be better tho)
-            //                 let new_entry = repr::DataGroupIndex {
-            //                     after: time,
-            //                     used: 1,
-            //                     group: match gtype {
-            //                         repr::DataGroupType::Periodic => {
-            //                             let mut data = repr::DataGroupPeriodic {
-            //                                 // only one entry
-            //                                 avg_dt: 0,
-            //                                 _pad: 0,
-            //                                 dt: [0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
-            //                                 data: [0.0; tuning::DATA_GROUP_PERIODIC_SIZE - 1],
-            //                             };
-            //                             data.data[0] = reading;
-            //                             let pointer = Object::new_alloc(&mut self.alloc, data)
-            //                                 .await?
-            //                                 .dispose_sync(&mut self.alloc)
-            //                                 .await?;
-            //                             repr::DataGroup { periodic: pointer }
-            //                         }
-            //                         repr::DataGroupType::Sporadic => {
-            //                             let mut data = repr::DataGroupSporadic {
-            //                                 dt: [0; tuning::DATA_GROUP_SPORADIC_SIZE],
-            //                                 data: [0.0; tuning::DATA_GROUP_SPORADIC_SIZE],
-            //                             };
-            //                             data.data[0] = reading;
-            //                             let pointer = Object::new_alloc(&mut self.alloc, data)
-            //                                 .await?
-            //                                 .dispose_sync(&mut self.alloc)
-            //                                 .await?;
-            //                             repr::DataGroup { sporadic: pointer }
-            //                         }
-            //                     },
-            //                 };
-            //                 chunk.data[entry_idx] = new_entry;
-            //             } else {
-            //                 // ^ we need to create a new entry in the index list
-            //                 todo!("unfinished + the data must be split at the appropreate time (see above)");
-            //
-            //                 // the new entry is farther back in the list, and so will contain older entries
-            //                 let mut new_index = Object::new_alloc(
-            //                     &mut self.alloc,
-            //                     ChunkedLinkedList {
-            //                         next: chunk.next,
-            //                         used: 0,
-            //                         data: <_ as FromBytes>::new_zeroed(),
-            //                     },
-            //                 )
-            //                 .await?;
-            //                 chunk.next = new_index.pointer();
-            //                 // move all entries older than the new one into the new index
-            //                 new_index
-            //                     .data
-            //                     .get_mut(..(chunk.data[entry_idx..].len()))
-            //                     .unwrap()
-            //                     .copy_from_slice(&chunk.data[entry_idx..]);
-            //                 // insert the new entry into the current chunk
-            //             }
-            //         }
-            //         // the data is inserted
-            //         break 'find_chunk;
-            //     } else {
-            //         // ^ we need to go back to find the right place.
-            //         continue 'find_entry;
-            //     }
-            // if !chunk.next.is_null() {
-            //     // go to the next newest chunk
-            //     let next = Object::new_read(&mut self.alloc, chunk.next).await?;
-            //     chunk.dispose_sync(&mut self.alloc).await?;
-            //     chunk = next;
-            // } else {
-            //     // there is no index old enough ????
-            //     if chunk.used < tuning::DATA_INDEX_CHUNK_SIZE as u64 {
-            //         // ^ there is enough space in this chunk for the new index to go
-            //         todo!()
-            //     } else {
-            //         // ^ we need to create a new entry in the index list
-            //         todo!()
-            //     }
-            // }
         }
         if let Some(prev) = prev {
             prev.dispose_immutated();
