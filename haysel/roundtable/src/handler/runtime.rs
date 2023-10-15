@@ -40,10 +40,12 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             typ: H::DECL,
             discriminant,
             #[cfg(feature = "bus_dbg")]
-            discriminant_desc: Str::Owned(String::new()),
+            discriminant_desc: Str::Owned(String::from("[initial value]")),
         };
-        let inst2 = inst.clone();
+        let mut inst2 = inst.clone();
         tokio::spawn(async move {
+            inst2.discriminant_desc = Str::Owned(String::from("[initial value - filter task]"));
+            let inst2 = inst2;
             let name = type_name::<H>();
             loop {
                 let recvd = match comm.recv().await {
@@ -76,6 +78,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 bg_spawner,
                 update_metadata: Flag::new(),
                 instance: inst.clone(),
+                message_source: None,
             },
             bg_spawner_recv,
             hdl: DynVar::new(instance),
@@ -98,6 +101,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
             let discriminant_desc = instance.describe();
             self.inst.discriminant_desc = discriminant_desc;
         }
+        self.inter.instance = self.inst.clone();
     }
 
     pub fn id(&self) -> HandlerInstance {
@@ -113,7 +117,6 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 _ = &self.inter.update_metadata => self.update_metadata(),
                 // Err is unreachable
                 (future, method_id, method_desc) = async { self.bg_spawner_recv.recv_async().await.unwrap() } => {
-                    warn!("TODO: Re-implement as a seperate task (like HandlerTaskRt) that sends a normal `comm` message (also consider if the performance vs code size is worth it.)");
                     background.spawn(async move {
                         (future.await, method_id, method_desc)
                     });
@@ -137,10 +140,15 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                             method_desc,
                         );
                     }
+                    // -- init event ctx --
+                    // sent by self (so that events dispatched from within are sent correctly)
+                    self.inter.message_source = Some(self.id());
                     // TODO: pass result by-value?
-                    let _output = method_val.handler_func.call(&mut self.hdl, &result, &self.inter)
+                    let _output = method_val.handler_func.call_owned(&mut self.hdl, result, &self.inter)
                         .expect("unreachable: handler method type mismatch")
                         .await;
+                    // de-init event ctx
+                    self.inter.message_source = None;
                 }
             }
         }
@@ -151,7 +159,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
     async fn handle_message(&mut self, message: Arc<Msg>) -> Result<()> {
         match &message.kind {
             msg::MsgKind::Request {
-                source: _source,
+                source,
                 target,
                 method,
                 arguments,
@@ -160,20 +168,30 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 if !self.msg_method_validate(method) {
                     return Ok(());
                 }
+                if let msg::Responder::Verify { waker } = response {
+                    waker.signal();
+                }
                 let method_val = self.methods.get(&method.id).unwrap();
+                // -- init event ctx --
+                self.inter.message_source = Some(source.clone());
+                // call
                 let result = method_val
                     .handler_func
                     .call(&mut self.hdl, arguments, &self.inter)
                     .expect("unreachable: handler method type mismatch")
                     .await;
+                // de-init event ctx
+                self.inter.message_source = None;
                 // if a response is desired, it is sent back.
                 // if not, it is dropped
-                if let (msg::Target::Instance(..), Some(responder)) = (target, response) {
-                    if let Some(..) = responder.value.put(result) {
-                        warn!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
+                if let (msg::Target::Instance(..), msg::Responder::Respond { value, waker }) =
+                    (target, response)
+                {
+                    if let Some(..) = value.put(result) {
+                        error!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
                     } else {
                         // wake the receiving task
-                        responder.waker.signal();
+                        waker.signal();
                     }
                 }
             }

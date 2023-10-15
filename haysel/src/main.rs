@@ -295,14 +295,13 @@ async fn async_main(
         let database = Database::new(store, args.overwrite_reinit).await?;
         let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
         let (stations, channels) = bus
-            .dispatch_as(
+            .query_as(
                 HDL_EXTERNAL,
-                msg::Target::Instance(registry.clone()),
+                registry.clone(),
                 registry::EV_REGISTRY_QUERY_ALL,
                 (),
             )
-            .await?
-            .ok_or(anyhow!("Did not get a reply from the registry"))?;
+            .await?;
         db_stop.ensure_exists(&(stations, channels)).await?;
         bus.spawn(db_stop);
     };
@@ -326,7 +325,7 @@ async fn async_main(
 
     shutdown.handle().wait_for_shutdown().await;
 
-    bus.dispatch_as(HDL_EXTERNAL, msg::Target::Any, EV_SHUTDOWN, ())
+    bus.announce_as(HDL_EXTERNAL, msg::Target::Any, EV_SHUTDOWN, ())
         .await?;
 
     trace!("Shutting down - if a deadlock occurs here, it is likely because a shutdown handle was created in the main function and not dropped before this call");

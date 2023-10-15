@@ -14,6 +14,7 @@ pub struct LocalInterface {
     pub(crate) bg_spawner: flume::Sender<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
     pub(crate) update_metadata: Flag,
     pub(crate) instance: HandlerInstance,
+    pub(crate) message_source: Option<HandlerInstance>,
 }
 
 impl LocalInterface {
@@ -43,14 +44,42 @@ impl LocalInterface {
         self.instance.clone()
     }
 
+    pub fn event_source(&self) -> HandlerInstance {
+        self.message_source
+            .clone()
+            .expect("event_source called in a non-event context")
+    }
+
+    pub async fn query<At: Sync + Send + 'static, Rt: 'static>(
+        &self,
+        target: HandlerInstance,
+        method: MethodDecl<false, At, Rt>,
+        args: At,
+    ) -> Result<Rt> {
+        self.nonlocal
+            .query_as(self.whoami(), target, method, args)
+            .await
+    }
+
     pub async fn dispatch<At: Sync + Send + 'static, Rt: 'static>(
+        &self,
+        target: HandlerInstance,
+        method: MethodDecl<false, At, Rt>,
+        args: At,
+    ) -> Result<()> {
+        self.nonlocal
+            .dispatch_as(self.whoami(), target, method, args)
+            .await
+    }
+
+    pub async fn announce<At: Sync + Send + 'static, Rt: 'static>(
         &self,
         target: msg::Target,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<Option<Rt>> {
+    ) -> Result<()> {
         self.nonlocal
-            .dispatch_as(self.whoami(), target, method, args)
+            .announce_as(self.whoami(), target, method, args)
             .await
     }
 }

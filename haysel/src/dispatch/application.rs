@@ -43,7 +43,7 @@ pub struct Record {
 
 #[async_trait]
 impl HandlerInit for AppClient {
-    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface [application]");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Owned(format!(
@@ -95,26 +95,20 @@ impl AppClient {
 
     async fn on_connect(&mut self, data: OnConnect, int: &LocalInterface) {
         let name_to_id_mappings = int
-            .dispatch(
-                msg::Target::Instance(self.registry.clone()),
+            .query(
+                self.registry.clone(),
                 registry::EV_REGISTRY_PROCESS_CONNECT,
                 (self.addr, data.clone()),
             )
             .await
-            .unwrap()
-            .expect("Failed to query registry - no reply");
+            .expect("Failed to query registry");
         let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
             map: name_to_id_mappings,
         }))
         .unwrap();
-        int.dispatch(
-            msg::Target::Instance(self.transport.clone()),
-            EV_TRANS_CLI_QUEUE_DATA,
-            resp,
-        )
-        .await
-        .unwrap()
-        .expect("Failed to send packet back to station");
+        int.dispatch(self.transport.clone(), EV_TRANS_CLI_QUEUE_DATA, resp)
+            .await
+            .unwrap();
         self.meta_station_id = Some(data.station_id);
         self.meta_station_build_rev = Some(data.station_build_rev);
         self.meta_station_build_date = Some(data.station_build_date);
@@ -125,13 +119,12 @@ impl AppClient {
         let mut buf = String::new();
         for (chid, dat) in data.per_channel.clone() {
             if let Some(ch) = int
-                .dispatch(
-                    msg::Target::Instance(self.registry.clone()),
+                .query(
+                    self.registry.clone(),
                     registry::EV_REGISTRY_QUERY_CHANNEL,
                     chid,
                 )
                 .await
-                .unwrap()
                 .expect("Failed to query registry")
             {
                 //TODO: verify that types match
@@ -149,7 +142,7 @@ impl AppClient {
             }
         }
         info!("Received data:\n{buf}");
-        int.dispatch(
+        int.announce(
             msg::Target::Any,
             EV_WEATHER_DATA_RECEIVED,
             Record {

@@ -33,9 +33,9 @@ pub(crate) enum MsgKind {
         method: MethodID,
         /// arguments of the request.
         arguments: DynVar,
-        /// the response channel (if None, no response is desired)
-        /// this *must* be None when using Target::(Type | Any)
-        response: Option<Responder>,
+        /// the response channel (if NoVerify, no response or verification is desired)
+        /// this *must* be NoVerify when using Target::(Type | Any)
+        response: Responder,
     },
 }
 
@@ -77,18 +77,25 @@ pub struct HandlerInstance {
 
 /// a channel used for sending a single response to a query.
 #[derive(Debug)]
-pub(crate) struct Responder {
-    /// the response value. when a handler wants to set this value, it must first box the value,
-    /// then use compare_exchange(current = null, new = Box::into_raw, Relaxed, Relaxed).
-    /// if this fails, than it is made aware of the fact that some other handler has (erronously,
-    /// given that `from` and `discriminant` are specified and can raise an error accordingly)
-    /// NOTE: AtomicCell now does this for us
-    ///
-    /// After this is done (if successfull) the `response_waker` should be woke
-    /// to trigger the requesting task to check for this value
-    pub value: AtomicCell<DynVar>,
-    /// see `value`
-    pub waker: Flag,
+pub(crate) enum Responder {
+    NoVerify,
+    Verify {
+        /// woke once a handler has decided to handle the response, not necessarily meaning it has succeeded
+        waker: Flag,
+    },
+    Respond {
+        /// the response value. when a handler wants to set this value, it must first box the value,
+        /// then use compare_exchange(current = null, new = Box::into_raw, Relaxed, Relaxed).
+        /// if this fails, than it is made aware of the fact that some other handler has (erronously,
+        /// given that `from` and `discriminant` are specified and can raise an error accordingly)
+        /// NOTE: AtomicCell now does this for us
+        ///
+        /// After this is done (if successfull) the `response_waker` should be woke
+        /// to trigger the requesting task to check for this value
+        value: AtomicCell<DynVar>,
+        /// see `value`
+        waker: Flag,
+    },
 }
 
 /// the target for a request message (instance, any type, or any)

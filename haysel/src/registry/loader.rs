@@ -43,7 +43,11 @@ impl<R: Serialize + DeserializeOwned> JsonLoader<R> {
         } else {
             let mut buf = String::new();
             file.read_to_string(&mut buf).await?;
-            serde_json::from_str(&buf)?
+            if buf.trim().is_empty() {
+                R::default()
+            } else {
+                serde_json::from_str(&buf)?
+            }
         };
         Ok(Self {
             file: Some(file),

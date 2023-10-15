@@ -42,7 +42,7 @@ method_decl!(EV_TRANS_CLI_IDENT_APP, HandlerInstance, ());
 
 #[async_trait]
 impl HandlerInit for TransportClient {
-    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface [transport]");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Owned(format!(
@@ -75,13 +75,9 @@ impl TransportClient {
         );
         self.ext = Some(app.clone());
         for pkt in self.missed_events.drain(..) {
-            int.dispatch(
-                msg::Target::Instance(app.clone()),
-                EV_TRANS_CLI_DATA_RECVD,
-                pkt,
-            )
-            .await
-            .unwrap();
+            int.dispatch(app.clone(), EV_TRANS_CLI_DATA_RECVD, pkt)
+                .await
+                .unwrap();
         }
     }
 
@@ -96,17 +92,13 @@ impl TransportClient {
                     warn!("Connection to weather station at {:?} timed out", self.addr,);
                 }
                 DispatchEvent::Send(pkt) => {
-                    int.dispatch(
-                        msg::Target::Instance(self.ctrl.clone()),
-                        EV_TRANS_CLI_REQ_SEND_PKT,
-                        pkt,
-                    )
-                    .await
-                    .unwrap();
+                    int.dispatch(self.ctrl.clone(), EV_TRANS_CLI_REQ_SEND_PKT, pkt)
+                        .await
+                        .unwrap();
                 }
                 DispatchEvent::Received(pkt) => {
                     if let Some(ext) = self.ext.clone() {
-                        int.dispatch(msg::Target::Instance(ext), EV_TRANS_CLI_DATA_RECVD, pkt)
+                        int.dispatch(ext, EV_TRANS_CLI_DATA_RECVD, pkt)
                             .await
                             .unwrap();
                     } else {

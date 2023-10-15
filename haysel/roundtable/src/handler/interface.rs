@@ -44,14 +44,15 @@ impl Interface {
         inst
     }
 
-    pub async fn dispatch_as<At: Sync + Send + 'static, Rt: 'static>(
+    /// Dispatch, no verification, no response
+    pub async fn announce_as<At: Sync + Send + 'static, Rt: 'static>(
         &self,
         source: HandlerInstance,
         target: msg::Target,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<Option<Rt>> {
-        if let Some(ret) = bus_dispatch_event(
+    ) -> Result<()> {
+        let _ = bus_dispatch_event(
             self.clone(),
             source,
             target,
@@ -61,22 +62,73 @@ impl Interface {
                 id_desc: Str::Borrowed(method.desc),
             },
             DynVar::new(args),
+            false,
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Dispatch, verifies that the event was handled, no response
+    pub async fn dispatch_as<At: Sync + Send + 'static, Rt: 'static>(
+        &self,
+        source: HandlerInstance,
+        target: HandlerInstance,
+        method: MethodDecl<false, At, Rt>,
+        args: At,
+    ) -> Result<()> {
+        let _ = bus_dispatch_event(
+            self.clone(),
+            source,
+            msg::Target::Instance(target),
+            msg::MethodID {
+                id: method.id,
+                #[cfg(feature = "bus_dbg")]
+                id_desc: Str::Borrowed(method.desc),
+            },
+            DynVar::new(args),
+            false,
+            true,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Dispatch, returns the response
+    pub async fn query_as<At: Sync + Send + 'static, Rt: 'static>(
+        &self,
+        source: HandlerInstance,
+        target: HandlerInstance,
+        method: MethodDecl<false, At, Rt>,
+        args: At,
+    ) -> Result<Rt> {
+        let Some(ret) = bus_dispatch_event(
+            self.clone(),
+            source,
+            msg::Target::Instance(target),
+            msg::MethodID {
+                id: method.id,
+                #[cfg(feature = "bus_dbg")]
+                id_desc: Str::Borrowed(method.desc),
+            },
+            DynVar::new(args),
+            true,
+            true,
         )
         .await?
-        {
-            match ret.try_to() {
-                Ok(ret) => Ok(Some(ret)),
-                Err(ret) => {
-                    error!(
-                        "Mismatched return type - expected {}, found {}",
-                        type_name::<Rt>(),
-                        ret.type_name()
-                    );
-                    bail!("Mismatched return type");
-                }
+        else {
+            bail!("Expected, but did not receive a response")
+        };
+        match ret.try_to() {
+            Ok(ret) => Ok(ret),
+            Err(ret) => {
+                error!(
+                    "Mismatched return type - expected {}, found {}",
+                    type_name::<Rt>(),
+                    ret.type_name()
+                );
+                bail!("Mismatched return type");
             }
-        } else {
-            Ok(None)
         }
     }
 }

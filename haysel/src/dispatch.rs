@@ -41,12 +41,9 @@ method_decl_owned!(
 
 #[async_trait]
 impl HandlerInit for Controller {
-    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface [controller]");
     async fn init(&mut self, int: &LocalInterface) {
-        let sock = self.sock.clone();
-        int.bg_spawn(EV_PRIV_CONTROLLER_RECEIVED, async move {
-            recv_next_packet(&sock).await
-        })
+        self.recv_next(int);
     }
     fn describe(&self) -> Str {
         Str::Owned(format!(
@@ -56,6 +53,7 @@ impl HandlerInit for Controller {
     }
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register_owned(Self::handle_receved, EV_PRIV_CONTROLLER_RECEIVED);
+        reg.register(Self::send_packet, EV_TRANS_CLI_REQ_SEND_PKT);
     }
 }
 
@@ -70,11 +68,35 @@ impl Controller {
         }
     }
 
+    #[instrument(skip(self, int))]
+    fn recv_next(&mut self, int: &LocalInterface) {
+        let sock = self.sock.clone();
+        int.bg_spawn(EV_PRIV_CONTROLLER_RECEIVED, async move {
+            let pkt = recv_next_packet(&sock).await;
+            trace!("controller: received [transport] packet");
+            pkt
+        })
+    }
+
+    #[instrument(skip(self, pkt, int))]
+    async fn send_packet(&mut self, pkt: &Packet, int: &LocalInterface) {
+        let Some(addr) = self.active_clients_inv.get(&int.event_source()) else {
+            error!("Controller::send_packet used by a handler that was not one of its clients - the event will be ignored");
+            return;
+        };
+        trace!("Sending packet {pkt:?} to {addr:?}");
+        self.sock
+            .send_to(pkt.as_bytes(), addr)
+            .await
+            .expect("Failed to send data");
+    }
+
     fn insert_active_client(&mut self, addr: SocketAddr, instance: HandlerInstance) {
         self.active_clients.insert(addr, instance.clone());
         self.active_clients_inv.insert(instance, addr);
     }
 
+    #[instrument(skip(self, res, int))]
     async fn handle_receved(
         &mut self,
         res: io::Result<Option<(SocketAddr, Packet)>>,
@@ -82,9 +104,11 @@ impl Controller {
     ) {
         match res {
             Ok(Some((addr, pkt))) => {
+                trace!("Received packet {pkt:?} from {addr:?}");
                 let target = if self.active_clients.contains_key(&addr) {
                     self.active_clients.get(&addr).unwrap().clone()
                 } else {
+                    debug!("New client interfaces created for {addr:?}");
                     let trans_cli = TransportClient::new(
                         addr,
                         self.max_trans_t,
@@ -99,16 +123,20 @@ impl Controller {
                     );
                     let appl_cli_inst = int.nonlocal.spawn(appl_cli);
                     int.dispatch(
-                        msg::Target::Instance(trans_cli_inst.clone()),
+                        trans_cli_inst.clone(),
                         EV_TRANS_CLI_IDENT_APP,
                         appl_cli_inst,
                     ).await.unwrap();
                     self.insert_active_client(addr, trans_cli_inst.clone());
                     trans_cli_inst
                 };
-                int.dispatch(msg::Target::Instance(target), EV_CONTROLLER_RECEIVED, pkt).await.unwrap();
+                int.dispatch(target, EV_CONTROLLER_RECEIVED, pkt).await.unwrap();
+                self.recv_next(int);
             }
-            Ok(None) => debug!("Received datagram, but it did not contain a packet"),
+            Ok(None) => {
+                debug!("Received datagram, but it did not contain a packet");
+                self.recv_next(int);
+            },
             Err(err) => error!("Failed to receive data from udp socket: {err:?} - no further attempts will be made to read data for ANY weather station"),
         }
     }

@@ -18,17 +18,23 @@ pub async fn bus_dispatch_event(
     target: msg::Target,
     method: msg::MethodID,
     arguments: DynVar,
+    want_response: bool,
+    want_verification: bool,
 ) -> Result<Option<DynVar>> {
     let message_id = Uid::gen_with(&int.uid_src);
-    let mut has_response = false;
     let response = if let msg::Target::Instance(..) = target {
-        has_response = true;
-        Some(msg::Responder {
-            value: AtomicCell::new(),
-            waker: Flag::new(),
-        })
+        if want_response {
+            msg::Responder::Respond {
+                value: AtomicCell::new(),
+                waker: Flag::new(),
+            }
+        } else if want_verification {
+            msg::Responder::Verify { waker: Flag::new() }
+        } else {
+            msg::Responder::NoVerify
+        }
     } else {
-        None
+        msg::Responder::NoVerify
     };
     let message = Arc::new(msg::Msg {
         id: message_id,
@@ -45,27 +51,36 @@ pub async fn bus_dispatch_event(
         trace!("Sent message, but no one is listening - silently failing");
         return Ok(None);
     }
-    if has_response {
-        let msg::MsgKind::Request {
-            response: Some(responder),
-            ..
-        } = &message.kind
-        else {
-            unreachable!()
-        };
-        if let Ok(..) = timeout(Duration::from_secs(60), &responder.waker).await {
-            let res = responder.value.take();
-            if res.is_none() {
-                error!("Responder waker was triggered, but no response was found");
-                bail!("Received null response");
-            } else {
-                Ok(res.map(|x| *x))
-            }
-        } else {
-            error!("Waiting for response timed out");
-            bail!("timeout waiting for response");
+    #[allow(irrefutable_let_patterns)]
+    let msg::MsgKind::Request {
+        response: responder,
+        ..
+    } = &message.kind
+    else {
+        unreachable!()
+    };
+
+    match responder {
+        msg::Responder::NoVerify => Ok(None),
+        msg::Responder::Verify { waker } => {
+            let Ok(..) = timeout(Duration::from_secs(15), waker).await else {
+                bail!("No handler handled the message within the given timeout");
+            };
+            Ok(None)
         }
-    } else {
-        Ok(None)
+        msg::Responder::Respond { value, waker } => {
+            if let Ok(..) = timeout(Duration::from_secs(15), waker).await {
+                let res = value.take();
+                if res.is_none() {
+                    error!("Responder waker was triggered, but no response was found");
+                    bail!("Received null response");
+                } else {
+                    Ok(res.map(|x| *x))
+                }
+            } else {
+                error!("Waiting for response timed out");
+                bail!("timeout waiting for response");
+            }
+        }
     }
 }

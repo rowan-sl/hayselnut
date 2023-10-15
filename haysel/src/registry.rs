@@ -14,9 +14,11 @@ use roundtable::{
 };
 use squirrel::api::OnConnect;
 
+use crate::misc::Take;
+
 pub struct Registry {
-    stations: JsonLoader<KnownStations>,
-    channels: JsonLoader<KnownChannels>,
+    stations: Take<JsonLoader<KnownStations>>,
+    channels: Take<JsonLoader<KnownChannels>>,
 }
 
 method_decl!(EV_REGISTRY_QUERY_ALL, (), (KnownStations, KnownChannels));
@@ -36,7 +38,7 @@ method_decl!(
 
 #[async_trait]
 impl HandlerInit for Registry {
-    const DECL: msg::HandlerType = handler_decl_t!("Weather station interface");
+    const DECL: msg::HandlerType = handler_decl_t!("Registry interface");
     async fn init(&mut self, _int: &LocalInterface) {}
     fn describe(&self) -> Str {
         Str::Borrowed("Registry interface")
@@ -49,7 +51,10 @@ impl HandlerInit for Registry {
 
 impl Registry {
     pub fn new(stations: JsonLoader<KnownStations>, channels: JsonLoader<KnownChannels>) -> Self {
-        Self { stations, channels }
+        Self {
+            stations: Take::new(stations),
+            channels: Take::new(channels),
+        }
     }
 
     async fn query_all(&mut self, _: &(), _int: &LocalInterface) -> (KnownStations, KnownChannels) {
@@ -80,7 +85,7 @@ impl Registry {
             .collect::<HashMap<ChannelName, (ChannelID, bool)>>();
         for (ch_id, _) in name_to_id_mappings.values().filter(|(_, is_new)| *is_new) {
             let ch = self.channels.get_channel(&ch_id).unwrap();
-            int.dispatch(msg::Target::Any, EV_META_NEW_CHANNEL, (*ch_id, ch.clone()))
+            int.announce(msg::Target::Any, EV_META_NEW_CHANNEL, (*ch_id, ch.clone()))
                 .await
                 .unwrap();
         }
@@ -101,7 +106,7 @@ impl Registry {
                 .filter(|&id| !pre_info.supports_channels.contains(id))
             {
                 let ch = self.channels.get_channel(new_channel).unwrap();
-                int.dispatch(
+                int.announce(
                     msg::Target::Any,
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),
@@ -125,12 +130,12 @@ impl Registry {
                     },
                 )
                 .unwrap();
-            int.dispatch(msg::Target::Any, EV_META_NEW_STATION, data.station_id)
+            int.announce(msg::Target::Any, EV_META_NEW_STATION, data.station_id)
                 .await
                 .unwrap();
             for new_channel in name_to_id_mappings.values() {
                 let ch = self.channels.get_channel(new_channel).unwrap();
-                int.dispatch(
+                int.announce(
                     msg::Target::Any,
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),

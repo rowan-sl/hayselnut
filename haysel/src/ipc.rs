@@ -52,14 +52,9 @@ impl IPCNewConnections {
                 debug!("New IPC client connected from {addr:?}");
                 let (read, write) = stream.into_split();
                 let (stations, channels) = int
-                    .dispatch(
-                        msg::Target::Instance(self.registry.clone()),
-                        registry::EV_REGISTRY_QUERY_ALL,
-                        (),
-                    )
+                    .query(self.registry.clone(), registry::EV_REGISTRY_QUERY_ALL, ())
                     .await
-                    .expect("Failed to dispatch")
-                    .expect("Received no reply from registry");
+                    .expect("Failed to query registry");
                 let conn = IPCConnection {
                     write,
                     read: Take::new(read),

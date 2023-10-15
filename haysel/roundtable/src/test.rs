@@ -12,7 +12,7 @@ use super::{
     common::HDL_EXTERNAL,
     handler::{HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl,
-    msg::{self, HandlerType, Str},
+    msg::{HandlerType, Str},
     Bus,
 };
 
@@ -48,14 +48,8 @@ async fn bus_send_message() {
 
     let flag = Arc::new(AtomicBool::new(false));
     bus.interface()
-        .dispatch_as(
-            HDL_EXTERNAL,
-            msg::Target::Instance(instance_id),
-            METHOD_1,
-            flag.clone(),
-        )
+        .query_as(HDL_EXTERNAL, instance_id, METHOD_1, flag.clone())
         .await
-        .unwrap()
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let value = flag.load(atomic::Ordering::Relaxed);

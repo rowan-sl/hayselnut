@@ -20,7 +20,7 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
-use tokio::sync::broadcast;
+use tokio::{spawn, sync::broadcast};
 
 mod atomic_cell;
 pub mod common;
@@ -48,6 +48,38 @@ impl Bus {
     #[instrument]
     pub async fn new() -> Self {
         let (comm, _) = broadcast::channel(COMM_QUEUE_CAP);
+        let mut recv = comm.subscribe();
+        spawn(async move {
+            loop {
+                let msg: Arc<msg::Msg> = recv.recv().await.unwrap();
+                match &msg.kind {
+                    msg::MsgKind::Request {
+                        source,
+                        target,
+                        method,
+                        arguments: _,
+                        response: _,
+                    } => {
+                        trace!(
+                            "bus event: request\n\tby: {} - {}\n\ttarget: {}{}\n\tmethod: {}",
+                            source.typ.id_desc,
+                            source.discriminant_desc,
+                            match target {
+                                msg::Target::Any => "".to_string(),
+                                msg::Target::Type(hdl_typ) => format!("{} - ", hdl_typ.id_desc),
+                                msg::Target::Instance(inst) => format!("{} - ", inst.typ.id_desc),
+                            },
+                            match target {
+                                msg::Target::Any => "[any]".to_string(),
+                                msg::Target::Type(hdl_typ) => hdl_typ.id_desc.to_string(),
+                                msg::Target::Instance(inst) => inst.discriminant_desc.to_string(),
+                            },
+                            method.id_desc,
+                        );
+                    }
+                }
+            }
+        });
         Self {
             int: Interface {
                 uid_src: Arc::new(AtomicU64::new(0)),
