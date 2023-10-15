@@ -43,6 +43,9 @@ impl UntypedStorage for TestStore {
     async fn close(self) -> Result<(), Self::Error> {
         Ok(())
     }
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
     async fn size(&mut self) -> Result<u64, Self::Error> {
         Ok(self.backing.len() as _)
     }

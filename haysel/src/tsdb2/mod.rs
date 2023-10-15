@@ -908,4 +908,10 @@ impl<Store: Storage + Send> Database<Store> {
         self.alloc.close().await?;
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    pub async fn sync(&mut self) -> Result<(), DBError<<Store as UntypedStorage>::Error>> {
+        self.alloc.sync().await?;
+        Ok(())
+    }
 }

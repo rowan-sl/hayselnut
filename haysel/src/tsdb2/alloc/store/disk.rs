@@ -105,6 +105,12 @@ impl UntypedStorage for DiskStore {
     }
 
     #[instrument(skip(self))]
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        self.file.sync_all().await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
     async fn size(&mut self) -> Result<u64, Self::Error> {
         let guess = self.file.metadata().await?.len();
         if guess != 0 {

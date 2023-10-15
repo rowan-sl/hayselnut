@@ -29,6 +29,9 @@ impl UntypedStorage for VoidStorage {
     async fn close(self) -> Result<(), Self::Error> {
         unreachable!()
     }
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        unreachable!()
+    }
     async fn size(&mut self) -> Result<u64, Self::Error> {
         unreachable!()
     }

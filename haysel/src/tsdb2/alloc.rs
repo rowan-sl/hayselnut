@@ -390,4 +390,10 @@ impl<S: Storage + Send> Allocator<S> {
         self.store.close().await?;
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    pub async fn sync(&mut self) -> Result<(), AllocError<<S as UntypedStorage>::Error>> {
+        self.store.sync().await?;
+        Ok(())
+    }
 }

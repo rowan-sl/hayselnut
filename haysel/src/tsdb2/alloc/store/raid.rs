@@ -105,6 +105,11 @@ impl<E: Error + Sync + Send + 'static> UntypedStorage for Box<dyn IsDynStorage<E
     async fn close(self) -> Result<(), Self::Error> {
         self.close_boxed().await
     }
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        let deref: &mut dyn IsDynStorage<Error = E> =
+            <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
+        deref.sync().await
+    }
     async fn size(&mut self) -> Result<u64, Self::Error> {
         let deref: &mut dyn IsDynStorage<Error = E> =
             <Box<dyn IsDynStorage<Error = E>> as DerefMut>::deref_mut(self);
@@ -152,6 +157,12 @@ impl<T: UntypedStorage<Error = E> + Sync + Send + 'static, E: Error + Sync + Sen
     async fn close(self) -> Result<(), Self::Error> {
         self.0
             .close()
+            .await
+            .map_err(|e| DynStorageError(type_name::<T>(), type_name::<E>(), Box::new(e)))
+    }
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        self.0
+            .sync()
             .await
             .map_err(|e| DynStorageError(type_name::<T>(), type_name::<E>(), Box::new(e)))
     }
@@ -572,6 +583,19 @@ impl UntypedStorage for ArrayR0 {
         let mut errors = vec![];
         for elem in self.elements {
             if let Err(e) = elem.store.close_boxed().await {
+                errors.push(e);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(RaidError::MultiError(errors))
+        }
+    }
+    async fn sync(&mut self) -> Result<(), Self::Error> {
+        let mut errors = vec![];
+        for elem in &mut self.elements {
+            if let Err(e) = elem.store.sync().await {
                 errors.push(e);
             }
         }

@@ -23,6 +23,7 @@ pub trait UntypedStorage: Send + 'static {
     async fn write_buf(&mut self, at: Ptr<Void>, amnt: u64, from: &[u8])
         -> Result<(), Self::Error>;
     async fn close(self) -> Result<(), Self::Error>;
+    async fn sync(&mut self) -> Result<(), Self::Error>;
     async fn size(&mut self) -> Result<u64, Self::Error>;
     async fn expand_by(&mut self, amnt: u64) -> Result<(), Self::Error>;
     /// is resizing this store permitted.

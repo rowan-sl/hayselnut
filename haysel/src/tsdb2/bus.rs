@@ -7,6 +7,7 @@ use mycelium::station::{
     identity::KnownStations,
 };
 use roundtable::{
+    common::EV_BUILTIN_AUTOSAVE,
     handler::{HandlerInit, LocalInterface},
     handler_decl_t, method_decl,
     msg::{HandlerType, Str},
@@ -34,6 +35,12 @@ impl<S: Storage> TStopDBus2<S> {
     async fn close(&mut self, _args: &(), _: &LocalInterface) {
         if let Err(e) = self.db.take().close().await {
             error!("Failed to close db: {e:?}")
+        }
+    }
+
+    async fn sync(&mut self, _: &(), _: &LocalInterface) {
+        if let Err(e) = self.db.sync().await {
+            error!("DB Sync failed: {e:?}");
         }
     }
 
@@ -113,6 +120,7 @@ impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
         r.register(Self::new_station, EV_META_NEW_STATION);
         r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
         r.register(Self::record_data, EV_WEATHER_DATA_RECEIVED);
+        r.register(Self::sync, EV_BUILTIN_AUTOSAVE);
     }
 }
 
