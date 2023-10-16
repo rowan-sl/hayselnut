@@ -22,9 +22,9 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 pub enum IPCError {
     #[error("IO Operation failed {0}")]
     IO(#[from] io::Error),
-    #[error("Deserialize failed {0}")]
+    #[error("Deserialize failed {0:?}")]
     Deserialize(#[from] rmp_serde::decode::Error),
-    #[error("Serialization failed {0}")]
+    #[error("Serialization failed {0:?}")]
     Serialize(#[from] rmp_serde::encode::Error),
     #[error("Reader reached EOF")]
     EOF,
