@@ -13,7 +13,7 @@ repository = "https://git.fawkes.io/mtnash/hayselnut/"
 [dependencies]
 serde = "1.0"
 tokio = { version = "1.33", features = ["io-util"] }
-serde_json = "1.0"
+rmp-serde = "1.1"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"

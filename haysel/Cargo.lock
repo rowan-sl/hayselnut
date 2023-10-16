@@ -797,8 +797,8 @@ name = "mycelium"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "rmp-serde",
  "serde",
- "serde_json",
  "squirrel",
  "thiserror",
  "tokio",
