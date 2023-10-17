@@ -22,7 +22,7 @@ use nix::{
     sys::signal::{kill, Signal},
     unistd::{daemon, Pid},
 };
-use roundtable::{common::HDL_EXTERNAL, msg, Bus};
+use roundtable::{common::HDL_EXTERNAL, Bus};
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
 use tokio::{net::UdpSocket, runtime};
 
@@ -39,23 +39,10 @@ use core::{
     commands,
     shutdown::{util::trap_ctrl_c, Shutdown},
 };
-use core::{log, lookup_server_ip};
 use misc::RecordsPath;
 use registry::JsonLoader;
-use tsdb2::{
-    alloc::store::{disk::DiskStore, raid::ArrayR0 as RaidArray},
-    Database,
-};
 
-use crate::{
-    core::AutosaveDispatch,
-    registry::Registry,
-    tsdb2::alloc::store::{
-        disk::DiskMode,
-        raid::{self, DynStorage, IsDynStorage},
-    },
-    tsdbmock::TStopDBus2Mock,
-};
+use crate::{core::AutosaveDispatch, registry::Registry, tsdbmock::TStopDBus2Mock};
 
 fn main() -> anyhow::Result<()> {
     let args = ArgsParser::parse();
@@ -67,7 +54,7 @@ fn main() -> anyhow::Result<()> {
         ArgsParser {
             cmd: args::Cmd::Kill { config },
         } => {
-            core::init_logging_no_file()?;
+            let _guard = core::init_logging_no_file()?;
             info!("Reading configuration from {:?}", config);
             if !config.exists() {
                 error!("Configuration file does not exist!");
@@ -95,7 +82,7 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         other => {
-            core::init_logging_no_file()?;
+            let _guard = core::init_logging_no_file()?;
             let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
             return runtime.block_on(commands::delegate(other));
         }
@@ -195,7 +182,7 @@ async fn async_main(
         trap_ctrl_c(shutdown.handle()).await;
     }
 
-    let addrs = lookup_server_ip(cfg.server.url, cfg.server.port).await?;
+    let addrs = core::lookup_server_ip(cfg.server.url, cfg.server.port).await?;
     let bus = Bus::new().await;
 
     info!("Loading info for known stations");
