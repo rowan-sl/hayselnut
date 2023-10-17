@@ -14,7 +14,7 @@ pub mod log;
 pub mod shutdown;
 
 pub use autosave::AutosaveDispatch;
-pub use log::init_logging;
+pub use log::{init_logging_no_file, init_logging_with_file};
 
 /// it is necessary to bind the server to the real external ip address,
 /// or risk confusing issues (forgot what, but it's bad)

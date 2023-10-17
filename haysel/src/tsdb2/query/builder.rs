@@ -67,6 +67,24 @@ impl QueryParamsNoDB {
             before_time: self.before_time,
         }
     }
+
+    pub(crate) fn to_raw_for_mock_only(
+        self,
+    ) -> (
+        StationID,
+        ChannelID,
+        Option<usize>,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    ) {
+        (
+            self.station.unwrap(),
+            self.channel.unwrap(),
+            self.max_results,
+            self.after_time,
+            self.before_time,
+        )
+    }
 }
 
 impl QueryBuilder<'static, VoidStorage, INITIAL> {

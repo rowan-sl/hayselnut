@@ -57,7 +57,13 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                     }
                 };
                 if match &recvd.kind {
-                    msg::MsgKind::Request { target, .. } => Self::msg_target_match(&inst2, target),
+                    msg::MsgKind::Request { target, method, .. } => {
+                        trace!(
+                            "filter task for handler {inst2:?} received event {:?}",
+                            method.id_desc
+                        );
+                        Self::msg_target_match(&inst2, target)
+                    }
                 } {
                     match cf_send.try_send(recvd) {
                         Ok(()) => {}
@@ -166,8 +172,18 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 response,
             } => {
                 if !self.msg_method_validate(method) {
+                    trace!(
+                        "handler {:?} failed method validation for event {:?}",
+                        self.id(),
+                        method.id_desc
+                    );
                     return Ok(());
                 }
+                trace!(
+                    "handler {:?} succeeded validation for event {:?}",
+                    self.id(),
+                    method.id_desc
+                );
                 if let msg::Responder::Verify { waker } = response {
                     waker.signal();
                 }

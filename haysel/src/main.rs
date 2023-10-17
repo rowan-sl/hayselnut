@@ -32,13 +32,14 @@ mod ipc;
 mod misc;
 mod registry;
 pub mod tsdb2;
+mod tsdbmock;
 
-use core::lookup_server_ip;
 use core::{
     args::{self, ArgsParser, RunArgs},
     commands,
     shutdown::{util::trap_ctrl_c, Shutdown},
 };
+use core::{log, lookup_server_ip};
 use misc::RecordsPath;
 use registry::JsonLoader;
 use tsdb2::{
@@ -53,31 +54,20 @@ use crate::{
         disk::DiskMode,
         raid::{self, DynStorage, IsDynStorage},
     },
+    tsdbmock::TStopDBus2Mock,
 };
 
 fn main() -> anyhow::Result<()> {
     let args = ArgsParser::parse();
-    core::init_logging()?;
 
-    let run_args;
-    match args {
+    let mut run_args = match args {
         ArgsParser {
-            cmd: args::Cmd::Run { mut args },
-        } => {
-            if args.no_safeguards {
-                warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
-                if args.daemonize {
-                    error!("--no-safeguards and --daemonize are incompatable!");
-                    bail!("Invalid Arguments");
-                }
-                warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
-                args.overwrite_reinit = true;
-            }
-            run_args = args
-        }
+            cmd: args::Cmd::Run { args },
+        } => args,
         ArgsParser {
             cmd: args::Cmd::Kill { config },
         } => {
+            core::init_logging_no_file()?;
             info!("Reading configuration from {:?}", config);
             if !config.exists() {
                 error!("Configuration file does not exist!");
@@ -105,14 +95,18 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         other => {
+            core::init_logging_no_file()?;
             let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
             return runtime.block_on(commands::delegate(other));
         }
     };
 
-    info!("Reading configuration from {:?}", run_args.config);
+    if run_args.daemonize && run_args.no_safeguards {
+        eprintln!("ERROR: --no-safeguards and --daemonize are incompatable!");
+        bail!("Invalid Arguments");
+    }
+    println!("Reading configuration from {:?}", run_args.config);
     if !run_args.config.exists() {
-        error!("Configuration file does not exist!");
         bail!("Configuration file does not exist!");
     }
 
@@ -125,6 +119,15 @@ fn main() -> anyhow::Result<()> {
     records_dir.ensure_exists_blocking()?;
     let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
     run_dir.ensure_exists_blocking()?;
+    let log_dir = misc::RecordsPath::new(run_dir.path("log"));
+    log_dir.ensure_exists_blocking()?;
+    let guard = core::init_logging_with_file(run_dir.path("log"))?;
+
+    if run_args.no_safeguards {
+        warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
+        warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
+        run_args.overwrite_reinit = true;
+    }
 
     let pid_file = run_dir.path("daemon.lock");
     if pid_file.try_exists()? {
@@ -169,7 +172,10 @@ fn main() -> anyhow::Result<()> {
         std::fs::remove_file(&pid_file)?;
     }
     match result {
-        Ok(inner) => inner,
+        Ok(inner) => {
+            drop(guard);
+            inner
+        }
         Err(err) => {
             error!("Main thread panic! - stuff is likely messed up: {err:?}");
             bail!("Main thread panic!");
@@ -222,76 +228,91 @@ async fn async_main(
 
     let registry = bus.spawn(Registry::new(stations, channels));
 
-    debug!("Loading database");
-    warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
+    // debug!("Loading database");
+    // warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
+    // let db = {
+    //     let store: Box<(dyn IsDynStorage<Error = raid::DynStorageError> + 'static)> = match cfg
+    //         .database
+    //         .storage
+    //     {
+    //         core::config::StorageMode::default => {
+    //             let path = records_dir.path("data.tsdb2");
+    //             Box::new(DynStorage(
+    //                 DiskStore::new(&path, false, DiskMode::Dynamic).await?,
+    //             ))
+    //         }
+    //         core::config::StorageMode::file => {
+    //             if cfg.database.files.len() != 1 {
+    //                 if cfg.database.files.is_empty() {
+    //                     error!("Failed to create database storage: file mode is requested, but no file is provided");
+    //                 } else {
+    //                     error!("Failed to create database storage: file mode is requested, but more than one file is proveded (did you mean to enable RAID?)");
+    //                 }
+    //                 bail!("Failed to create database store");
+    //             }
+    //             let core::config::File { path, blockdevice } = cfg.database.files[0].clone();
+    //             Box::new(DynStorage(
+    //                 DiskStore::new(
+    //                     &path,
+    //                     false,
+    //                     if blockdevice {
+    //                         DiskMode::BlockDevice
+    //                     } else {
+    //                         DiskMode::Dynamic
+    //                     },
+    //                 )
+    //                 .await?,
+    //             ))
+    //         }
+    //         core::config::StorageMode::raid => {
+    //             if cfg.database.files.is_empty() {
+    //                 error!("Failed to create database storage: RAID mode is requested, but no file(s) are provided");
+    //                 bail!("Failed to create database store");
+    //             }
+    //             if cfg.database.files.len() == 1 {
+    //                 warn!("RAID mode is requested, but only one backing file is specified. this will cause unnecessary overhead, and it is recommended to switch to using single file mode");
+    //             }
+    //             let mut array = RaidArray::new();
+    //             for core::config::File { path, blockdevice } in cfg.database.files {
+    //                 let store = DiskStore::new(
+    //                     &path,
+    //                     false,
+    //                     if blockdevice {
+    //                         DiskMode::BlockDevice
+    //                     } else {
+    //                         DiskMode::Dynamic
+    //                     },
+    //                 )
+    //                 .await?;
+    //                 array.add_element(store).await?;
+    //             }
+    //             if args.overwrite_reinit {
+    //                 warn!("Deleting and Re-Initializing the RAID storage");
+    //                 array.wipe_all_your_data_away().await?;
+    //             }
+    //             debug!("Building array...");
+    //             array.build().await?;
+    //             array.print_info().await?;
+    //             Box::new(DynStorage(array))
+    //         }
+    //     };
+    //     let database = Database::new(store, args.overwrite_reinit).await?;
+    //     let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
+    //     let (stations, channels) = bus
+    //         .query_as(
+    //             HDL_EXTERNAL,
+    //             registry.clone(),
+    //             registry::EV_REGISTRY_QUERY_ALL,
+    //             (),
+    //         )
+    //         .await?;
+    //     db_stop.ensure_exists(&(stations, channels)).await?;
+    //     bus.spawn(db_stop)
+    // };
+    // info!("Database loaded");
+    info!("Creating database *mock* - it will store recent data in-memory for testing");
     let db = {
-        let store: Box<(dyn IsDynStorage<Error = raid::DynStorageError> + 'static)> = match cfg
-            .database
-            .storage
-        {
-            core::config::StorageMode::default => {
-                let path = records_dir.path("data.tsdb2");
-                Box::new(DynStorage(
-                    DiskStore::new(&path, false, DiskMode::Dynamic).await?,
-                ))
-            }
-            core::config::StorageMode::file => {
-                if cfg.database.files.len() != 1 {
-                    if cfg.database.files.is_empty() {
-                        error!("Failed to create database storage: file mode is requested, but no file is provided");
-                    } else {
-                        error!("Failed to create database storage: file mode is requested, but more than one file is proveded (did you mean to enable RAID?)");
-                    }
-                    bail!("Failed to create database store");
-                }
-                let core::config::File { path, blockdevice } = cfg.database.files[0].clone();
-                Box::new(DynStorage(
-                    DiskStore::new(
-                        &path,
-                        false,
-                        if blockdevice {
-                            DiskMode::BlockDevice
-                        } else {
-                            DiskMode::Dynamic
-                        },
-                    )
-                    .await?,
-                ))
-            }
-            core::config::StorageMode::raid => {
-                if cfg.database.files.is_empty() {
-                    error!("Failed to create database storage: RAID mode is requested, but no file(s) are provided");
-                    bail!("Failed to create database store");
-                }
-                if cfg.database.files.len() == 1 {
-                    warn!("RAID mode is requested, but only one backing file is specified. this will cause unnecessary overhead, and it is recommended to switch to using single file mode");
-                }
-                let mut array = RaidArray::new();
-                for core::config::File { path, blockdevice } in cfg.database.files {
-                    let store = DiskStore::new(
-                        &path,
-                        false,
-                        if blockdevice {
-                            DiskMode::BlockDevice
-                        } else {
-                            DiskMode::Dynamic
-                        },
-                    )
-                    .await?;
-                    array.add_element(store).await?;
-                }
-                if args.overwrite_reinit {
-                    warn!("Deleting and Re-Initializing the RAID storage");
-                    array.wipe_all_your_data_away().await?;
-                }
-                debug!("Building array...");
-                array.build().await?;
-                array.print_info().await?;
-                Box::new(DynStorage(array))
-            }
-        };
-        let database = Database::new(store, args.overwrite_reinit).await?;
-        let mut db_stop = tsdb2::bus::TStopDBus2::new(database).await;
+        let mut db = TStopDBus2Mock::new().await;
         let (stations, channels) = bus
             .query_as(
                 HDL_EXTERNAL,
@@ -300,10 +321,9 @@ async fn async_main(
                 (),
             )
             .await?;
-        db_stop.ensure_exists(&(stations, channels)).await?;
-        bus.spawn(db_stop)
+        db.ensure_exists(&(stations, channels)).await?;
+        bus.spawn(db)
     };
-    info!("Database loaded");
 
     let ipc_path = run_dir.path("ipc.sock");
     debug!("Setting up IPC at {:?}", ipc_path);

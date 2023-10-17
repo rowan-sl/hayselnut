@@ -142,16 +142,18 @@ impl AppClient {
             }
         }
         info!("Received data:\n{buf}");
-        int.announce(
-            msg::Target::Any,
-            EV_WEATHER_DATA_RECEIVED,
-            Record {
-                recorded_at: received_at,
-                recorded_by: self.meta_station_id.unwrap(),
-                data: data.per_channel,
-            },
-        )
-        .await
-        .unwrap();
+        if let Some(recorded_by) = self.meta_station_id.clone() {
+            int.announce(
+                msg::Target::Any,
+                EV_WEATHER_DATA_RECEIVED,
+                Record {
+                    recorded_at: received_at,
+                    recorded_by,
+                    data: data.per_channel,
+                },
+            )
+            .await
+            .unwrap();
+        }
     }
 }
