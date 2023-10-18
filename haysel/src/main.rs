@@ -15,16 +15,11 @@ extern crate tracing;
 #[macro_use]
 extern crate anyhow;
 
-use std::{process, time::Duration};
+use std::time::Duration;
 
-use clap::Parser;
-use nix::{
-    sys::signal::{kill, Signal},
-    unistd::{daemon, Pid},
-};
 use roundtable::{common::HDL_EXTERNAL, Bus};
 use squirrel::api::station::{capabilities::KnownChannels, identity::KnownStations};
-use tokio::{net::UdpSocket, runtime};
+use tokio::net::UdpSocket;
 
 mod core;
 mod dispatch;
@@ -35,8 +30,7 @@ pub mod tsdb2;
 mod tsdbmock;
 
 use core::{
-    args::{self, ArgsParser, RunArgs},
-    commands,
+    args::RunArgs,
     shutdown::{util::trap_ctrl_c, Shutdown},
 };
 use misc::RecordsPath;
@@ -45,129 +39,7 @@ use registry::JsonLoader;
 use crate::{core::AutosaveDispatch, registry::Registry, tsdbmock::TStopDBus2Mock};
 
 fn main() -> anyhow::Result<()> {
-    let args = ArgsParser::parse();
-
-    let mut run_args = match args {
-        ArgsParser {
-            cmd: args::Cmd::Run { args },
-        } => args,
-        ArgsParser {
-            cmd: args::Cmd::Kill { config },
-        } => {
-            let _guard = core::init_logging_no_file()?;
-            info!("Reading configuration from {:?}", config);
-            if !config.exists() {
-                error!("Configuration file does not exist!");
-                bail!("Configuration file does not exist!");
-            }
-
-            let cfg = {
-                let buf = std::fs::read_to_string(&config)?;
-                core::config::from_str(&buf)?
-            };
-
-            let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
-            run_dir.ensure_exists_blocking()?;
-            let pid_file = run_dir.path("daemon.lock");
-            if !pid_file.try_exists()? {
-                warn!("No known haysel daemon is currently running, exiting with no-op");
-                return Ok(());
-            }
-            let pid_txt = std::fs::read_to_string(pid_file)?;
-            let pid = pid_txt
-                .parse::<u32>()
-                .map_err(|e| anyhow!("failed to parse PID: {e:?}"))?;
-            info!("Killing process {pid} - sending SIGINT (ctrl+c) to allow for gracefull shutdown\nThe PID file will only be removed when the server has exited");
-            kill(Pid::from_raw(pid.try_into()?), Some(Signal::SIGINT))?;
-            return Ok(());
-        }
-        other => {
-            let _guard = core::init_logging_no_file()?;
-            let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
-            return runtime.block_on(commands::delegate(other));
-        }
-    };
-
-    if run_args.daemonize && run_args.no_safeguards {
-        eprintln!("ERROR: --no-safeguards and --daemonize are incompatable!");
-        bail!("Invalid Arguments");
-    }
-    println!("Reading configuration from {:?}", run_args.config);
-    if !run_args.config.exists() {
-        bail!("Configuration file does not exist!");
-    }
-
-    let cfg = {
-        let buf = std::fs::read_to_string(&run_args.config)?;
-        core::config::from_str(&buf)?
-    };
-
-    let records_dir = misc::RecordsPath::new(cfg.directory.data.clone());
-    records_dir.ensure_exists_blocking()?;
-    let run_dir = misc::RecordsPath::new(cfg.directory.run.clone());
-    run_dir.ensure_exists_blocking()?;
-    let log_dir = misc::RecordsPath::new(run_dir.path("log"));
-    log_dir.ensure_exists_blocking()?;
-    let guard = core::init_logging_with_file(run_dir.path("log"))?;
-
-    if run_args.no_safeguards {
-        warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
-        warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
-        run_args.overwrite_reinit = true;
-    }
-
-    let pid_file = run_dir.path("daemon.lock");
-    if pid_file.try_exists()? {
-        if run_args.no_safeguards {
-            warn!("A PID file exists, continueing anyway (--no-safeguards mode)");
-        } else {
-            error!("A server is already running, refusing to start!");
-            info!("If this is incorrect, remove the `daemon.lock` file and try again");
-            bail!("Server already started");
-        }
-    }
-
-    if run_args.daemonize {
-        debug!("Forking!");
-        daemon(true, true)?;
-        info!("[daemon] - copying logs ")
-    }
-    if !run_args.no_safeguards {
-        debug!("Writing PID file {:?}", pid_file);
-        let pid = process::id();
-        std::fs::write(&pid_file, format!("{pid}").as_bytes())?;
-    }
-    let no_safeguards = run_args.no_safeguards;
-
-    debug!("Launching async runtime");
-    let result = std::panic::catch_unwind(move || {
-        let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
-        let mut shutdown = Shutdown::new();
-        runtime.block_on(async {
-            let result = async_main(cfg, run_args, &mut shutdown, records_dir, run_dir).await;
-            if let Err(e) = &result {
-                error!("Main task exited with error: {e:?}");
-            }
-            shutdown.trigger_shutdown();
-            info!("shut down - waiting for tasks to stop");
-            shutdown.wait_for_completion().await;
-            result
-        })
-    });
-    if !no_safeguards {
-        debug!("Deleting PID file {:?}", pid_file);
-        std::fs::remove_file(&pid_file)?;
-    }
-    match result {
-        Ok(inner) => {
-            drop(guard);
-            inner
-        }
-        Err(err) => {
-            error!("Main thread panic! - stuff is likely messed up: {err:?}");
-            bail!("Main thread panic!");
-        }
-    }
+    core::rt::stage0_delegate()
 }
 
 async fn async_main(

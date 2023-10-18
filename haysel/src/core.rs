@@ -11,6 +11,7 @@ pub mod autosave;
 pub mod commands;
 pub mod config;
 pub mod log;
+pub mod rt;
 pub mod shutdown;
 
 pub use autosave::AutosaveDispatch;
