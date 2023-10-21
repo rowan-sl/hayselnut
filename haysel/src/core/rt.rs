@@ -83,30 +83,32 @@ pub fn stage1_daemon(mut args: RunArgs) -> Result<()> {
     run_dir.ensure_exists_blocking()?;
     let log_dir = misc::RecordsPath::new(run_dir.path("log"));
     log_dir.ensure_exists_blocking()?;
-    let guard = core::init_logging_with_file(run_dir.path("log"))?;
-
-    if args.no_safeguards {
-        warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
-        warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
-        args.overwrite_reinit = true;
-    }
 
     let pid_file = run_dir.path("daemon.lock");
     if pid_file.try_exists()? {
-        if args.no_safeguards {
-            warn!("A PID file exists, continueing anyway (--no-safeguards mode)");
-        } else {
-            error!("A server is already running, refusing to start!");
-            info!("If this is incorrect, remove the `daemon.lock` file and try again");
+        if !args.no_safeguards {
+            println!("ERROR: A server is already running, refusing to start!");
+            println!("     | If this is incorrect, remove the `daemon.lock` file and try again");
             bail!("Server already started");
         }
     }
 
     if args.daemonize {
-        debug!("Forking!");
+        println!("Forking!");
         daemon(true, true)?;
-        info!("[daemon] - copying logs ")
     }
+
+    println!("Init logging");
+    let guard = core::init_logging_with_file(run_dir.path("log"))?;
+    if args.no_safeguards {
+        warn!("Running in no-safeguard testing mode: this is NOT what you want for production use");
+        warn!("--overwrite-reinit is implied by --no-safeguards: if this leads to loss of data, please consider the name of the argument and that you may have wanted to RTFM first");
+        args.overwrite_reinit = true;
+    }
+    if args.no_safeguards && pid_file.try_exists()? {
+        warn!("A PID file exists, continuing anyway (--no-safeguards mode)");
+    }
+
     if !args.no_safeguards {
         debug!("Writing PID file {:?}", pid_file);
         let pid = process::id();
