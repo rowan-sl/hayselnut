@@ -44,11 +44,12 @@
       bin = craneLib.buildPackage ({ inherit src buildInputs nativeBuildInputs cargoArtifacts; });
     in
     {
-      packages.${system} = {
-        # so bin can be spacifically built, or just by default
-        inherit bin;
-        default = bin;
-      };
+      # removed becuase a builder for this doesn't really make sense
+      # packages.${system} = {
+      #   # so bin can be spacifically built, or just by default
+      #   inherit bin;
+      #   default = bin;
+      # };
       devShells.${system}.default = pkgs.mkShell {
         inherit buildInputs;
         nativeBuildInputs = [
