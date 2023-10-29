@@ -54,12 +54,14 @@
         inherit buildInputs;
         nativeBuildInputs = [
           pkgs.cargo-espflash          
+          pkgs.rust-analyzer-unwrapped
         ] ++ nativeBuildInputs;
         # fixes libstdc++ issues 
         LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib/";
         # fixes other stuff
         LIBCLANG_PATH = "${pkgs.llvmPackages_11.libclang.lib}/lib";
         TMPDIR="/tmp";
+        RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
       };
     };
 }

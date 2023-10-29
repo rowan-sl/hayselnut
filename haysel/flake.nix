@@ -32,16 +32,18 @@
       # runtime
       buildInputs = with pkgs; [ ]; # needed system libraries
       cargoArtifacts = craneLib.buildDepsOnly { inherit src buildInputs nativeBuildInputs; };
-      bin = craneLib.buildPackage ({ inherit src buildInputs nativeBuildInputs cargoArtifacts; });
+      haysel-bin = craneLib.buildPackage ({ inherit src buildInputs nativeBuildInputs cargoArtifacts; });
     in
     {
       packages.${system} = {
         # so bin can be spacifically built, or just by default
-        inherit bin;
-        default = bin;
+        inherit haysel-bin;
+        default = haysel-bin;
       };
       devShells.${system}.default = pkgs.mkShell {
-        inherit buildInputs nativeBuildInputs;
+        inherit buildInputs;
+        nativeBuildInputs = [ pkgs.rust-analyzer-unwrapped ] ++ nativeBuildInputs;
+        RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
       };
     };
 }
