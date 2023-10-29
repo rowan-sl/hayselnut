@@ -3,6 +3,8 @@
 /hayselnut/.embuild
 **/target
 **/*.rs.bk
+/hayselnut/result
+/haysel/result
 /hayselnut/src/conf.rs
 /hayselnut/hardware
 /haysel/tools
