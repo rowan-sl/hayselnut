@@ -9,8 +9,18 @@ use crate::{
     flag::Flag,
     handler::interface::Interface,
     id::Uid,
-    msg::{self, HandlerInstance},
+    msg::{self, HandlerInstance, ResponseErr},
 };
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum DispatchErr {
+    #[error("No handlers handled the message: {0}")]
+    NoResponse(&'static str),
+    #[error("A response was indicated, but it contained no value")]
+    NullResponse,
+    #[error("An error occured while handling request: {0:#}")]
+    HandlerError(#[from] ResponseErr),
+}
 
 pub async fn bus_dispatch_event(
     int: Interface,
@@ -20,7 +30,7 @@ pub async fn bus_dispatch_event(
     arguments: DynVar,
     want_response: bool,
     want_verification: bool,
-) -> Result<Option<DynVar>> {
+) -> Result<Option<DynVar>, DispatchErr> {
     let message_id = Uid::gen_with(&int.uid_src);
     let response = if let msg::Target::Instance(..) = target {
         if want_response {
@@ -48,8 +58,9 @@ pub async fn bus_dispatch_event(
     });
     // avoid erroring when no tasks are watching the channel
     if let Err(..) = int.comm.send(message.clone()) {
-        trace!("Sent message, but no one is listening - silently failing");
-        return Ok(None);
+        if want_response || want_verification {
+            return Err(DispatchErr::NoResponse("no active handlers"));
+        }
     }
     #[allow(irrefutable_let_patterns)]
     let msg::MsgKind::Request {
@@ -64,7 +75,7 @@ pub async fn bus_dispatch_event(
         msg::Responder::NoVerify => Ok(None),
         msg::Responder::Verify { waker } => {
             let Ok(..) = timeout(Duration::from_secs(15), waker).await else {
-                bail!("No handler handled the message within the given timeout");
+                return Err(DispatchErr::NoResponse("timed out"));
             };
             Ok(None)
         }
@@ -73,13 +84,20 @@ pub async fn bus_dispatch_event(
                 let res = value.take();
                 if res.is_none() {
                     error!("Responder waker was triggered, but no response was found");
-                    bail!("Received null response");
+                    return Err(DispatchErr::NullResponse);
                 } else {
-                    Ok(res.map(|x| *x))
+                    match res.map(|x| *x) {
+                        Some(Ok(ret)) => Ok(Some(ret)),
+                        Some(Err(e)) => Err(e)?,
+                        None => Ok(None),
+                    }
                 }
             } else {
                 error!("Waiting for response timed out");
-                bail!("timeout waiting for response");
+                if value.take().is_some() {
+                    error!("BUG: Response waker was not woken, but a response was given!");
+                }
+                return Err(DispatchErr::NoResponse("timed out"));
             }
         }
     }

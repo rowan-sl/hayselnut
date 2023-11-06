@@ -9,7 +9,7 @@ use mycelium::station::{
 };
 use roundtable::{
     common::EV_BUILTIN_AUTOSAVE,
-    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler::{DispatchErr, HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl,
     msg::{self, Str},
 };
@@ -40,7 +40,10 @@ method_decl!(
 #[async_trait]
 impl HandlerInit for Registry {
     const DECL: msg::HandlerType = handler_decl_t!("Registry interface");
-    async fn init(&mut self, _int: &LocalInterface) {}
+    type Error = DispatchErr;
+    async fn init(&mut self, _int: &LocalInterface) -> Result<(), DispatchErr> {
+        Ok(())
+    }
     fn describe(&self) -> Str {
         Str::Borrowed("Registry interface")
     }
@@ -49,6 +52,15 @@ impl HandlerInit for Registry {
         reg.register(Self::query_channel, EV_REGISTRY_QUERY_CHANNEL);
         reg.register(Self::process_connect, EV_REGISTRY_PROCESS_CONNECT);
         reg.register(Self::sync, EV_BUILTIN_AUTOSAVE);
+    }
+    async fn on_error(&mut self, error: Self::Error, int: &LocalInterface) {
+        error!(
+            "Registry {} experienced an error: {error:#?} [the handler will now shutdown]",
+            self.describe()
+        );
+        self.stations.sync().await;
+        self.channels.sync().await;
+        int.shutdown().await;
     }
 }
 
@@ -61,24 +73,33 @@ impl Registry {
     }
 
     #[instrument(skip(self, _int))]
-    async fn sync(&mut self, _: &(), _int: &LocalInterface) {
+    async fn sync(&mut self, _: &(), _int: &LocalInterface) -> Result<(), DispatchErr> {
         self.stations.sync().await.expect("Failed to sync stations");
         self.channels.sync().await.expect("Failed to sync channels");
+        Ok(())
     }
 
-    async fn query_all(&mut self, _: &(), _int: &LocalInterface) -> (KnownStations, KnownChannels) {
-        (self.stations.clone(), self.channels.clone())
+    async fn query_all(
+        &mut self,
+        _: &(),
+        _int: &LocalInterface,
+    ) -> Result<(KnownStations, KnownChannels), DispatchErr> {
+        Ok((self.stations.clone(), self.channels.clone()))
     }
 
-    async fn query_channel(&mut self, id: &ChannelID, _int: &LocalInterface) -> Option<Channel> {
-        self.channels.get_channel(id).cloned()
+    async fn query_channel(
+        &mut self,
+        id: &ChannelID,
+        _int: &LocalInterface,
+    ) -> Result<Option<Channel>, DispatchErr> {
+        Ok(self.channels.get_channel(id).cloned())
     }
 
     async fn process_connect(
         &mut self,
         (ip, data): &(SocketAddr, OnConnect),
         int: &LocalInterface,
-    ) -> HashMap<ChannelName, ChannelID> {
+    ) -> Result<HashMap<ChannelName, ChannelID>, DispatchErr> {
         let (ip, data) = (ip.clone(), data.clone());
         let name_to_id_mappings = data
             .channels
@@ -99,8 +120,7 @@ impl Registry {
         for (ch_id, _) in name_to_id_mappings.values().filter(|(_, is_new)| *is_new) {
             let ch = self.channels.get_channel(&ch_id).unwrap();
             int.announce(msg::Target::Any, EV_META_NEW_CHANNEL, (*ch_id, ch.clone()))
-                .await
-                .unwrap();
+                .await?;
         }
         let name_to_id_mappings = name_to_id_mappings
             .into_iter()
@@ -124,8 +144,7 @@ impl Registry {
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),
                 )
-                .await
-                .unwrap();
+                .await?;
             }
             self.stations.map_info(&data.station_id, |_id, info| {
                 info.supports_channels = name_to_id_mappings.values().copied().collect()
@@ -144,8 +163,7 @@ impl Registry {
                 )
                 .unwrap();
             int.announce(msg::Target::Any, EV_META_NEW_STATION, data.station_id)
-                .await
-                .unwrap();
+                .await?;
             for new_channel in name_to_id_mappings.values() {
                 let ch = self.channels.get_channel(new_channel).unwrap();
                 int.announce(
@@ -153,10 +171,9 @@ impl Registry {
                     EV_META_STATION_ASSOC_CHANNEL,
                     (data.station_id, *new_channel, ch.clone()),
                 )
-                .await
-                .unwrap();
+                .await?;
             }
         }
-        name_to_id_mappings
+        Ok(name_to_id_mappings)
     }
 }

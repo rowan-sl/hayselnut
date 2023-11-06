@@ -1,6 +1,9 @@
 //! bus integration for TSBD2
 
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    convert::Infallible,
+};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -37,25 +40,28 @@ impl TStopDBus2Mock {
         &mut self,
         args: &QueryParamsNoDB,
         _int: &LocalInterface,
-    ) -> Result<Vec<(DateTime<Utc>, f32)>> {
-        debug!("DB Mock query");
-        let (station, channel, max_results, after_time, before_time) =
-            args.clone().to_raw_for_mock_only();
-        let data = self
-            .map
-            .get(&station)
-            .ok_or(anyhow!("Query failed: no such station"))?
-            .get(&channel)
-            .ok_or(anyhow!("Query failed: no such channel"))?;
-        let response = data
-            .iter()
-            .filter(|(time, _)| after_time.as_ref().map(|af_t| time > af_t).unwrap_or(true))
-            .filter(|(time, _)| before_time.as_ref().map(|bf_t| time < bf_t).unwrap_or(true))
-            .take(max_results.unwrap_or(usize::MAX))
-            .cloned()
-            .collect::<Vec<_>>();
-        debug!("DB query finished");
-        Ok(response)
+    ) -> Result<Result<Vec<(DateTime<Utc>, f32)>>, Infallible> {
+        Ok(async move {
+            debug!("DB Mock query");
+            let (station, channel, max_results, after_time, before_time) =
+                args.clone().to_raw_for_mock_only();
+            let data = self
+                .map
+                .get(&station)
+                .ok_or(anyhow!("Query failed: no such station"))?
+                .get(&channel)
+                .ok_or(anyhow!("Query failed: no such channel"))?;
+            let response = data
+                .iter()
+                .filter(|(time, _)| after_time.as_ref().map(|af_t| time > af_t).unwrap_or(true))
+                .filter(|(time, _)| before_time.as_ref().map(|bf_t| time < bf_t).unwrap_or(true))
+                .take(max_results.unwrap_or(usize::MAX))
+                .cloned()
+                .collect::<Vec<_>>();
+            debug!("DB query finished");
+            Ok(response)
+        }
+        .await)
     }
 
     pub async fn ensure_exists(
@@ -74,22 +80,28 @@ impl TStopDBus2Mock {
         Ok(())
     }
 
-    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) {
+    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) -> Result<(), Infallible> {
         self.map.insert(id, HashMap::new());
+        Ok(())
     }
 
     async fn station_new_channel(
         &mut self,
         (station, channel, _channel_info): &(Uuid, Uuid, Channel),
         _int: &LocalInterface,
-    ) {
+    ) -> Result<(), Infallible> {
         self.map
             .get_mut(station)
             .expect("StationNewChannel: no such station")
             .insert(*channel, VecDeque::new());
+        Ok(())
     }
 
-    async fn record_data(&mut self, data: &Record, _int: &LocalInterface) {
+    async fn record_data(
+        &mut self,
+        data: &Record,
+        _int: &LocalInterface,
+    ) -> Result<(), Infallible> {
         for (channel, reading) in &data.data {
             let ChannelData::Float(reading) = reading else {
                 todo!("Event type data is not supported")
@@ -105,11 +117,13 @@ impl TStopDBus2Mock {
                 let _ = records.pop_back();
             }
         }
+        Ok(())
     }
 }
 
 impl HandlerInit for TStopDBus2Mock {
     const DECL: HandlerType = handler_decl_t!("TSDB2 Mock Bus Integration");
+    type Error = Infallible;
     fn describe(&self) -> Str {
         Str::Borrowed("TSDB2 Mock")
     }

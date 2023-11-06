@@ -83,6 +83,7 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 nonlocal: inter,
                 bg_spawner,
                 update_metadata: Flag::new(),
+                shutdown: Flag::new(),
                 instance: inst.clone(),
                 message_source: None,
             },
@@ -115,7 +116,31 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
     }
 
     pub async fn run(mut self) -> Result<()> {
-        self.hdl.as_mut::<H>().unwrap().init(&self.inter).await;
+        {
+            let mut flag_err = false;
+            let fut = async {
+                if let Err(e) = self.hdl.as_mut::<H>().unwrap().init(&self.inter).await {
+                    warn!("Error occured during initialization (it will be handled, but the runtime task will abort)");
+                    self.hdl
+                        .as_mut::<H>()
+                        .unwrap()
+                        .on_error(e, &self.inter)
+                        .await;
+                    flag_err = true;
+                }
+            };
+            select! {
+                _ = fut => {
+                    if flag_err {
+                        return Ok(());
+                    }
+                }
+                _ = &self.inter.shutdown => {
+                    warn!("Runtime task exited [during init process]");
+                    return Ok(());
+                }
+            };
+        }
         let mut background = JoinSet::<(DynVar, Uuid, &'static str)>::new();
         loop {
             select! {
@@ -150,9 +175,31 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                     // sent by self (so that events dispatched from within are sent correctly)
                     self.inter.message_source = Some(self.id());
                     // TODO: pass result by-value?
-                    let _output = method_val.handler_func.call_owned(&mut self.hdl, result, &self.inter)
-                        .expect("unreachable: handler method type mismatch")
-                        .await;
+                    let mut flag_err = false;
+                    let fut = async {
+                        if let Err(e) = method_val.handler_func.call_owned(&mut self.hdl, result, &self.inter)
+                            .expect("unreachable: handler method type mismatch")
+                            .await {
+                                //NOTE: this still has message_source set (on self.inter)
+                                debug!("An error occured handling request, handling error");
+                                self.hdl
+                                    .as_mut::<H>()
+                                    .unwrap()
+                                    .on_error(e.try_to().unwrap(), &self.inter)
+                                    .await;
+                                flag_err = true;
+                        }
+                    };
+                    select! {
+                        _ = fut => {
+                            if flag_err {
+                                return Ok(());
+                            }
+                        }
+                        _ = &self.inter.shutdown => {
+                            return Ok(());
+                        }
+                    };
                     // de-init event ctx
                     self.inter.message_source = None;
                 }
@@ -191,11 +238,38 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 // -- init event ctx --
                 self.inter.message_source = Some(source.clone());
                 // call
-                let result = method_val
-                    .handler_func
-                    .call(&mut self.hdl, arguments, &self.inter)
-                    .expect("unreachable: handler method type mismatch")
-                    .await;
+                let mut flag_err = false;
+                let fut = async {
+                    let result = method_val
+                        .handler_func
+                        .call(&mut self.hdl, arguments, &self.inter)
+                        .expect("unreachable: handler method type mismatch")
+                        .await;
+                    match result {
+                        Ok(resp) => Ok(resp),
+                        Err(err) => {
+                            let err: H::Error = err.try_to().unwrap();
+                            debug!("An error occured handling request, handling error");
+                            self.hdl
+                                .as_mut::<H>()
+                                .unwrap()
+                                .on_error(err, &self.inter)
+                                .await;
+                            flag_err = true;
+                            Err(msg::ResponseErr)
+                        }
+                    }
+                };
+                let resp;
+                select! {
+                    x = fut => {
+                        resp = x;
+                    }
+                    _ = &self.inter.shutdown => {
+                        flag_err = true;
+                        resp = Err(msg::ResponseErr);
+                    }
+                };
                 // de-init event ctx
                 self.inter.message_source = None;
                 // if a response is desired, it is sent back.
@@ -203,12 +277,15 @@ impl<H: HandlerInit> HandlerTaskRt<H> {
                 if let (msg::Target::Instance(..), msg::Responder::Respond { value, waker }) =
                     (target, response)
                 {
-                    if let Some(..) = value.put(result) {
+                    if let Some(..) = value.put(resp) {
                         error!("Spacific instance was targeted, but multiple instances accepted (response already contains a value)");
                     } else {
                         // wake the receiving task
                         waker.signal();
                     }
+                }
+                if flag_err {
+                    return Ok(());
                 }
             }
         }

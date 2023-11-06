@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     sync::{
         atomic::{self, AtomicBool},
         Arc,
@@ -31,12 +32,18 @@ async fn bus_send_message() {
     method_decl!(METHOD_1, Arc<AtomicBool>, ());
     struct Handler;
     impl Handler {
-        async fn function_1(&mut self, args: &Arc<AtomicBool>, _: &LocalInterface) -> () {
+        async fn function_1(
+            &mut self,
+            args: &Arc<AtomicBool>,
+            _: &LocalInterface,
+        ) -> Result<(), <Self as HandlerInit>::Error> {
             args.store(true, atomic::Ordering::Relaxed);
+            Ok(())
         }
     }
     impl HandlerInit for Handler {
         const DECL: HandlerType = handler_decl_t!("Test handler");
+        type Error = Infallible;
         fn describe(&self) -> Str {
             Str::Borrowed("Test handler instance")
         }

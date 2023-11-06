@@ -3,7 +3,6 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
-use anyhow::Result;
 use tokio::sync::broadcast;
 
 #[cfg(feature = "bus_dbg")]
@@ -15,6 +14,8 @@ use crate::{
     },
     msg::{self, HandlerInstance, Msg},
 };
+
+use super::dispatch::DispatchErr;
 
 pub mod local;
 
@@ -39,6 +40,8 @@ impl Interface {
             let res = rt.run().await;
             if let Err(e) = res {
                 error!("Runtime task exited with error: {e:#}");
+            } else {
+                trace!("Runtime task exited");
             }
         });
         inst
@@ -51,7 +54,7 @@ impl Interface {
         target: msg::Target,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<()> {
+    ) -> Result<(), DispatchErr> {
         let _ = bus_dispatch_event(
             self.clone(),
             source,
@@ -76,7 +79,7 @@ impl Interface {
         target: HandlerInstance,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<()> {
+    ) -> Result<(), DispatchErr> {
         let _ = bus_dispatch_event(
             self.clone(),
             source,
@@ -101,7 +104,7 @@ impl Interface {
         target: HandlerInstance,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<Rt> {
+    ) -> Result<Rt, DispatchErr> {
         let Some(ret) = bus_dispatch_event(
             self.clone(),
             source,
@@ -117,7 +120,7 @@ impl Interface {
         )
         .await?
         else {
-            bail!("Expected, but did not receive a response")
+            unreachable!("Expected, but did not receive a response")
         };
         match ret.try_to() {
             Ok(ret) => Ok(ret),
@@ -127,7 +130,7 @@ impl Interface {
                     type_name::<Rt>(),
                     ret.type_name()
                 );
-                bail!("Mismatched return type");
+                unreachable!("Mismatched return type");
             }
         }
     }

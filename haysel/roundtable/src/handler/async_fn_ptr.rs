@@ -8,7 +8,7 @@
 //!
 //! (copied from dabus, modified to fit this better)
 
-use super::super::dyn_var::DynVar;
+use super::{super::dyn_var::DynVar, HandlerInit};
 
 use core::marker::PhantomData;
 use std::any::type_name;
@@ -17,18 +17,19 @@ use futures::future::{BoxFuture, Future};
 
 use super::LocalInterface;
 
-pub trait AsyncFnPtr<'a, H: 'a, At: 'a, Rt> {
-    type Fut: Future<Output = Rt> + Send + 'a;
+pub trait AsyncFnPtr<'a, H: HandlerInit + 'a, At: 'a, Rt> {
+    type Fut: Future<Output = Result<Rt, H::Error>> + Send + 'a;
     fn call(self, h: &'a mut H, a: At, i: &'a LocalInterface) -> Self::Fut;
 }
 
 impl<
         'a,
-        H: 'a,
+        H: HandlerInit + 'a,
         At: 'a,
-        Fut: Future + Send + 'a,
+        Rt,
+        Fut: Future<Output = Result<Rt, H::Error>> + Send + 'a,
         F: FnOnce(&'a mut H, At, &'a LocalInterface) -> Fut,
-    > AsyncFnPtr<'a, H, At, Fut::Output> for F
+    > AsyncFnPtr<'a, H, At, Rt> for F
 {
     type Fut = Fut;
     fn call(self, h: &'a mut H, a: At, i: &'a LocalInterface) -> Self::Fut {
@@ -37,7 +38,7 @@ impl<
 }
 
 #[derive(Clone)]
-pub struct HandlerFn<H: 'static, At: 'static, Rt: 'static, P>
+pub struct HandlerFn<H: HandlerInit + 'static, At: 'static, Rt: 'static, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, &'a At, Rt> + Copy,
 {
@@ -45,7 +46,8 @@ where
     _t: PhantomData<&'static (H, At, Rt)>,
 }
 
-impl<H: Send + 'static, At: Sync + Send + 'static, Rt: 'static, P> HandlerFn<H, At, Rt, P>
+impl<H: HandlerInit + Send + 'static, At: Sync + Send + 'static, Rt: 'static, P>
+    HandlerFn<H, At, Rt, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, &'a At, Rt> + Send + Copy + 'static,
 {
@@ -59,14 +61,14 @@ where
         h: &'a mut H,
         a: &'a At,
         i: &'a LocalInterface,
-    ) -> BoxFuture<'a, Rt> {
+    ) -> BoxFuture<'a, Result<Rt, H::Error>> {
         let f = self.f;
         Box::pin(async move { f.call(h, a, i).await })
     }
 }
 
 #[derive(Clone)]
-pub struct HandlerFnOwnArgs<H: 'static, At: 'static, Rt: 'static, P>
+pub struct HandlerFnOwnArgs<H: HandlerInit + 'static, At: 'static, Rt: 'static, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, At, Rt> + Copy,
 {
@@ -74,7 +76,8 @@ where
     _t: PhantomData<&'static (H, At, Rt)>,
 }
 
-impl<H: Send + 'static, At: Sync + Send + 'static, Rt: 'static, P> HandlerFnOwnArgs<H, At, Rt, P>
+impl<H: HandlerInit + Send + 'static, At: Sync + Send + 'static, Rt: 'static, P>
+    HandlerFnOwnArgs<H, At, Rt, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, At, Rt> + Send + Copy + 'static,
 {
@@ -83,7 +86,12 @@ where
         Self { f, _t: PhantomData }
     }
 
-    pub fn call<'a, 'b>(&'b self, h: &'a mut H, a: At, i: &'a LocalInterface) -> BoxFuture<'a, Rt> {
+    pub fn call<'a, 'b>(
+        &'b self,
+        h: &'a mut H,
+        a: At,
+        i: &'a LocalInterface,
+    ) -> BoxFuture<'a, Result<Rt, H::Error>> {
         let f = self.f;
         Box::pin(async move { f.call(h, a, i).await })
     }
@@ -95,19 +103,19 @@ pub trait HandlerCallableErased {
         h: &'a mut DynVar,
         a: &'a DynVar,
         i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError>;
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError>;
     fn call_owned<'a>(
         &'a self,
         h: &'a mut DynVar,
         a: DynVar,
         i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError>;
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError>;
 }
 
 impl<H, At, Rt, P> HandlerCallableErased for HandlerFn<H, At, Rt, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, &'a At, Rt> + Send + Sync + Copy + 'static,
-    H: Send + Sync + 'static,
+    H: HandlerInit + Send + Sync + 'static,
     At: Send + Sync + 'static,
     Rt: Send + Sync + 'static,
 {
@@ -116,7 +124,7 @@ where
         h: &'a mut DynVar,
         a: &'a DynVar,
         i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError> {
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError> {
         let h_name = h.type_name();
         let a_name = h.type_name();
         let h = h
@@ -127,7 +135,7 @@ where
             .ok_or(CallError::MismatchArgs(type_name::<At>(), a_name))?;
         Ok(Box::pin(async move {
             let r = self.call(h, a, i).await;
-            DynVar::new(r)
+            r.map(|ok| DynVar::new(ok)).map_err(|err| DynVar::new(err))
         }))
     }
     fn call_owned<'a>(
@@ -135,7 +143,7 @@ where
         _h: &'a mut DynVar,
         _a: DynVar,
         _i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError> {
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError> {
         Err(CallError::BorrowInconsistancy)
     }
 }
@@ -143,7 +151,7 @@ where
 impl<H, At, Rt, P> HandlerCallableErased for HandlerFnOwnArgs<H, At, Rt, P>
 where
     P: for<'a> AsyncFnPtr<'a, H, At, Rt> + Send + Sync + Copy + 'static,
-    H: Send + Sync + 'static,
+    H: HandlerInit + Send + Sync + 'static,
     At: Send + Sync + 'static,
     Rt: Send + Sync + 'static,
 {
@@ -152,7 +160,7 @@ where
         _h: &'a mut DynVar,
         _a: &'a DynVar,
         _i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError> {
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError> {
         Err(CallError::BorrowInconsistancy)
     }
     fn call_owned<'a>(
@@ -160,7 +168,7 @@ where
         h: &'a mut DynVar,
         a: DynVar,
         i: &'a LocalInterface,
-    ) -> Result<BoxFuture<'a, DynVar>, CallError> {
+    ) -> Result<BoxFuture<'a, Result<DynVar, DynVar>>, CallError> {
         let h_name = h.type_name();
         let a_name = h.type_name();
         let h = h
@@ -171,7 +179,7 @@ where
             .map_err(|_| CallError::MismatchArgs(type_name::<At>(), a_name))?;
         Ok(Box::pin(async move {
             let r = self.call(h, a, i).await;
-            DynVar::new(r)
+            r.map(|ok| DynVar::new(ok)).map_err(|err| DynVar::new(err))
         }))
     }
 }

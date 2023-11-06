@@ -1,8 +1,8 @@
 //! IPC Bus integration
 
-use std::{path::PathBuf, sync::Arc};
+use std::{convert::Infallible, path::PathBuf, rc::Rc, sync::Arc};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use mycelium::{
     station::{
         capabilities::{Channel, ChannelID, KnownChannels},
@@ -11,7 +11,7 @@ use mycelium::{
     IPCError, IPCMsg,
 };
 use roundtable::{
-    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler::{DispatchErr, HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl_owned,
     msg::{self, HandlerInstance, Str},
 };
@@ -53,15 +53,21 @@ impl IPCNewConnections {
         &mut self,
         cli: io::Result<(UnixStream, SocketAddr)>,
         int: &LocalInterface,
-    ) {
+    ) -> Result<(), Infallible> {
         match cli {
             Ok((stream, addr)) => {
                 debug!("New IPC client connected from {addr:?}");
                 let (read, write) = stream.into_split();
-                let (stations, channels) = int
+                let (stations, channels) = match int
                     .query(self.registry.clone(), registry::EV_REGISTRY_QUERY_ALL, ())
                     .await
-                    .expect("Failed to query registry");
+                {
+                    Ok(x) => x,
+                    Err(e) => {
+                        error!("Failed to query registry ({e:#}) - ipc task will now exit");
+                        return int.shutdown().await;
+                    }
+                };
                 let conn = IPCConnection {
                     write,
                     read: Take::new(read),
@@ -73,9 +79,11 @@ impl IPCNewConnections {
                 self.bg_handle_new_client(int);
             }
             Err(io_err) => {
-                error!("Listening for connections failed: {io_err:#}: new client connections will not continue to be accepted");
+                error!("Listening for connections failed: {io_err:#}: ipc task will now exit");
+                return int.shutdown().await;
             }
         }
+        Ok(())
     }
 
     fn bg_handle_new_client(&mut self, int: &LocalInterface) {
@@ -87,9 +95,11 @@ impl IPCNewConnections {
 #[async_trait]
 impl HandlerInit for IPCNewConnections {
     const DECL: msg::HandlerType = handler_decl_t!("IPC New Connection Handler");
-    async fn init(&mut self, int: &LocalInterface) {
+    type Error = Infallible;
+    async fn init(&mut self, int: &LocalInterface) -> Result<(), Infallible> {
         debug!("Launching IPC client listener");
         self.bg_handle_new_client(int);
+        Ok(())
     }
     // description of this handler instance
     fn describe(&self) -> Str {
@@ -106,6 +116,16 @@ method_decl_owned!(
     io::Result<(UnixStream, SocketAddr)>,
     ()
 );
+
+#[derive(Debug, thiserror::Error)]
+pub enum IPCConnectionErr {
+    #[error("IPC comm error: {0:#}")]
+    IPC(#[from] IPCError),
+    #[error("Dispatch error: {0:#}")]
+    Dispatch(#[from] DispatchErr),
+    #[error("Failed to query database: {0:#}")]
+    DBQuery(anyhow::Error),
+}
 
 pub struct IPCConnection {
     write: OwnedWriteHalf,
@@ -127,89 +147,94 @@ impl IPCConnection {
         &mut self,
         (read, res): (OwnedReadHalf, Result<IPCMsg, IPCError>),
         int: &LocalInterface,
-    ) {
-        match res {
-            Ok(msg) => {
-                trace!("IPC: Received {msg:?}");
-                match msg.kind {
-                    mycelium::IPCMsgKind::ClientDisconnect => {
-                        debug!("IPC Client {:?} disconnected", self.addr);
-                        warn!("IPC Client disconnected, but the task will not close (TODO/unimplemented)");
-                        let _ = self
-                            .send(&IPCMsg {
-                                kind: mycelium::IPCMsgKind::Bye,
-                            })
-                            .await;
-                    }
-                    mycelium::IPCMsgKind::QueryLastHourOf { station, channel } => {
-                        let from_time = Utc::now();
-                        let data = int
-                            .query(
-                                self.database.clone(),
-                                EV_DB_QUERY,
-                                QueryBuilder::new_nodb()
-                                    .with_station(station)
-                                    .with_channel(channel)
-                                    .with_after(from_time - chrono::Duration::minutes(60))
-                                    .verify()
-                                    .unwrap(),
-                            )
-                            .await
-                            .expect("Failed to query database handler")
-                            .expect("Database errored executing query");
-                        self.send(&IPCMsg {
-                            kind: mycelium::IPCMsgKind::QueryLastHourResponse { data, from_time },
-                        })
-                        .await
-                        .expect("Failed to send response");
-                        self.bg_read(read, int);
-                    }
-                    _other => self.bg_read(read, int),
-                }
+    ) -> Result<(), IPCConnectionErr> {
+        self.read.put(read);
+        let msg = res?;
+        trace!("IPC: Received {msg:?}");
+        match msg.kind {
+            mycelium::IPCMsgKind::ClientDisconnect => {
+                debug!("IPC Client {:?} disconnected", self.addr);
+                warn!("IPC Client disconnected, but the task will not close (TODO/unimplemented)");
+                let _ = self
+                    .send(&IPCMsg {
+                        kind: mycelium::IPCMsgKind::Bye,
+                    })
+                    .await;
             }
-            Err(e) => {
-                error!("Failed to receive IPC message: {e} - no further attempts to read will be performed");
-                self.read.put(read);
+            mycelium::IPCMsgKind::QueryLastHourOf { station, channel } => {
+                let from_time = Utc::now();
+                let data = int
+                    .query(
+                        self.database.clone(),
+                        EV_DB_QUERY,
+                        QueryBuilder::new_nodb()
+                            .with_station(station)
+                            .with_channel(channel)
+                            .with_after(from_time - chrono::Duration::minutes(60))
+                            .verify()
+                            .unwrap(),
+                    )
+                    .await?
+                    .map_err(|e| IPCConnectionErr::DBQuery(e))?;
+                self.send(&IPCMsg {
+                    kind: mycelium::IPCMsgKind::QueryLastHourResponse { data, from_time },
+                })
+                .await?;
+                let read = self.read.take();
+                self.bg_read(read, int);
+            }
+            _other => {
+                let read = self.read.take();
+                self.bg_read(read, int);
             }
         }
+        Ok(())
     }
 
     async fn send(&mut self, msg: &IPCMsg) -> Result<(), IPCError> {
         mycelium::ipc_send(&mut self.write, msg).await
     }
 
-    async fn new_station(&mut self, &id: &StationID, _int: &LocalInterface) {
+    async fn new_station(
+        &mut self,
+        &id: &StationID,
+        _int: &LocalInterface,
+    ) -> Result<(), IPCConnectionErr> {
         self.send(&IPCMsg {
             kind: mycelium::IPCMsgKind::NewStation { id },
         })
-        .await
-        .expect("Failed to send `new station` message");
+        .await?;
+        Ok(())
     }
 
-    async fn new_channel(&mut self, (id, ch): &(ChannelID, Channel), _int: &LocalInterface) {
+    async fn new_channel(
+        &mut self,
+        (id, ch): &(ChannelID, Channel),
+        _int: &LocalInterface,
+    ) -> Result<(), IPCConnectionErr> {
         self.send(&IPCMsg {
             kind: mycelium::IPCMsgKind::NewChannel {
                 id: *id,
                 ch: ch.clone(),
             },
         })
-        .await
-        .expect("Failed to send `new channel` message");
+        .await?;
+        Ok(())
     }
 
     async fn station_new_channel(
         &mut self,
         (station, channel, _channel_info): &(StationID, ChannelID, Channel),
         _int: &LocalInterface,
-    ) {
+    ) -> Result<(), IPCConnectionErr> {
         self.send(&IPCMsg {
             kind: mycelium::IPCMsgKind::StationNewChannel {
                 station: *station,
                 channel: *channel,
             },
         })
-        .await
-        .expect("Failed to send `channel assoc` message");
+        .await?;
+        Ok(())
     }
 
     async fn close(&mut self, _: &(), _int: &LocalInterface) {
@@ -220,7 +245,11 @@ impl IPCConnection {
             .await;
     }
 
-    async fn send_data(&mut self, data: &Record, _int: &LocalInterface) {
+    async fn send_data(
+        &mut self,
+        data: &Record,
+        _int: &LocalInterface,
+    ) -> Result<(), IPCConnectionErr> {
         self.send(&IPCMsg {
             kind: mycelium::IPCMsgKind::FreshHotData {
                 from: data.recorded_by,
@@ -228,24 +257,24 @@ impl IPCConnection {
                 by_channel: data.data.clone(),
             },
         })
-        .await
-        .expect("Failed to send `new data received` message");
+        .await?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl HandlerInit for IPCConnection {
     const DECL: msg::HandlerType = handler_decl_t!("IPC Connection Handler");
-
-    async fn init(&mut self, int: &LocalInterface) {
+    type Error = IPCConnectionErr;
+    async fn init(&mut self, int: &LocalInterface) -> Result<(), IPCConnectionErr> {
         let read = self.read.take();
         self.bg_read(read, int);
         let (stations, channels) = self.init_known.take();
         self.send(&IPCMsg {
             kind: mycelium::IPCMsgKind::Haiii { stations, channels },
         })
-        .await
-        .expect("Failed to send init packet");
+        .await?;
+        Ok(())
     }
     // description of this handler instance
     fn describe(&self) -> Str {
@@ -258,6 +287,13 @@ impl HandlerInit for IPCConnection {
         reg.register(Self::new_channel, EV_META_NEW_CHANNEL);
         reg.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
         reg.register(Self::send_data, EV_WEATHER_DATA_RECEIVED);
+    }
+    async fn on_error(&mut self, error: IPCConnectionErr, int: &LocalInterface) {
+        error!(
+            "Error occured in IPC conenction {} - {error:#} - connection will shut down",
+            self.describe()
+        );
+        int.shutdown().await
     }
 }
 

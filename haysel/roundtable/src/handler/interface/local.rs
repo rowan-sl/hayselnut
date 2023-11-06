@@ -1,11 +1,13 @@
-use anyhow::Result;
-use futures::{future::BoxFuture, Future};
+use futures::{
+    future::{pending, BoxFuture},
+    Future,
+};
 use uuid::Uuid;
 
 use crate::{
     dyn_var::DynVar,
     flag::Flag,
-    handler::{decl::MethodDecl, interface::Interface},
+    handler::{decl::MethodDecl, dispatch::DispatchErr, interface::Interface},
     msg::{self, HandlerInstance},
 };
 
@@ -13,6 +15,7 @@ pub struct LocalInterface {
     pub nonlocal: Interface,
     pub(crate) bg_spawner: flume::Sender<(BoxFuture<'static, DynVar>, Uuid, &'static str)>,
     pub(crate) update_metadata: Flag,
+    pub(crate) shutdown: Flag,
     pub(crate) instance: HandlerInstance,
     pub(crate) message_source: Option<HandlerInstance>,
 }
@@ -35,6 +38,11 @@ impl LocalInterface {
         }
     }
 
+    pub async fn shutdown(&self) -> ! {
+        self.shutdown.signal();
+        pending().await
+    }
+
     #[allow(dead_code)]
     pub fn update_metadata(&self) {
         self.update_metadata.signal();
@@ -55,7 +63,7 @@ impl LocalInterface {
         target: HandlerInstance,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<Rt> {
+    ) -> Result<Rt, DispatchErr> {
         self.nonlocal
             .query_as(self.whoami(), target, method, args)
             .await
@@ -66,7 +74,7 @@ impl LocalInterface {
         target: HandlerInstance,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<()> {
+    ) -> Result<(), DispatchErr> {
         self.nonlocal
             .dispatch_as(self.whoami(), target, method, args)
             .await
@@ -77,7 +85,7 @@ impl LocalInterface {
         target: msg::Target,
         method: MethodDecl<false, At, Rt>,
         args: At,
-    ) -> Result<()> {
+    ) -> Result<(), DispatchErr> {
         self.nonlocal
             .announce_as(self.whoami(), target, method, args)
             .await

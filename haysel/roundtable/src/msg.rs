@@ -75,6 +75,10 @@ pub struct HandlerInstance {
     pub discriminant_desc: Str,
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("An error occured while processing this request")]
+pub struct ResponseErr;
+
 /// a channel used for sending a single response to a query.
 #[derive(Debug)]
 pub(crate) enum Responder {
@@ -92,7 +96,7 @@ pub(crate) enum Responder {
         ///
         /// After this is done (if successfull) the `response_waker` should be woke
         /// to trigger the requesting task to check for this value
-        value: AtomicCell<DynVar>,
+        value: AtomicCell<Result<DynVar, ResponseErr>>,
         /// see `value`
         waker: Flag,
     },

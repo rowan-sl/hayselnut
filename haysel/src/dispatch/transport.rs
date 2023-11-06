@@ -6,7 +6,7 @@ use squirrel::transport::{
 };
 
 use roundtable::{
-    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler::{DispatchErr, HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl,
     msg::{self, HandlerInstance, Str},
 };
@@ -43,7 +43,10 @@ method_decl!(EV_TRANS_CLI_IDENT_APP, HandlerInstance, ());
 #[async_trait]
 impl HandlerInit for TransportClient {
     const DECL: msg::HandlerType = handler_decl_t!("Weather station interface [transport]");
-    async fn init(&mut self, _int: &LocalInterface) {}
+    type Error = DispatchErr;
+    async fn init(&mut self, _int: &LocalInterface) -> Result<(), DispatchErr> {
+        Ok(())
+    }
     fn describe(&self) -> Str {
         Str::Owned(format!(
             "Weather station interface [transport] for {:?}",
@@ -54,6 +57,13 @@ impl HandlerInit for TransportClient {
         reg.register(Self::queue_data, EV_TRANS_CLI_QUEUE_DATA);
         reg.register(Self::handle_pkt, super::EV_CONTROLLER_RECEIVED);
         reg.register(Self::ident_appl, EV_TRANS_CLI_IDENT_APP);
+    }
+    async fn on_error(&mut self, error: DispatchErr, int: &LocalInterface) {
+        error!(
+            "Handler {} experienced an error - failed to dispatch: {error:#?} (exiting)",
+            self.describe()
+        );
+        int.shutdown().await;
     }
 }
 
@@ -68,7 +78,11 @@ impl TransportClient {
         }
     }
 
-    async fn ident_appl(&mut self, app: &HandlerInstance, int: &LocalInterface) {
+    async fn ident_appl(
+        &mut self,
+        app: &HandlerInstance,
+        int: &LocalInterface,
+    ) -> Result<(), <Self as HandlerInit>::Error> {
         debug!(
             "sending {} missed events to newly received application client",
             self.missed_events.len()
@@ -76,16 +90,25 @@ impl TransportClient {
         self.ext = Some(app.clone());
         for pkt in self.missed_events.drain(..) {
             int.dispatch(app.clone(), EV_TRANS_CLI_DATA_RECVD, pkt)
-                .await
-                .unwrap();
+                .await?;
         }
+        Ok(())
     }
 
-    async fn queue_data(&mut self, data: &Vec<u8>, _int: &LocalInterface) {
+    async fn queue_data(
+        &mut self,
+        data: &Vec<u8>,
+        _int: &LocalInterface,
+    ) -> Result<(), <Self as HandlerInit>::Error> {
         self.inter.queue(data.clone());
+        Ok(())
     }
 
-    async fn handle_pkt(&mut self, pkt: &Packet, int: &LocalInterface) {
+    async fn handle_pkt(
+        &mut self,
+        pkt: &Packet,
+        int: &LocalInterface,
+    ) -> Result<(), <Self as HandlerInit>::Error> {
         for ev in self.inter.handle(*pkt) {
             match ev {
                 DispatchEvent::TimedOut => {
@@ -93,14 +116,11 @@ impl TransportClient {
                 }
                 DispatchEvent::Send(pkt) => {
                     int.dispatch(self.ctrl.clone(), EV_TRANS_CLI_REQ_SEND_PKT, pkt)
-                        .await
-                        .unwrap();
+                        .await?;
                 }
                 DispatchEvent::Received(pkt) => {
                     if let Some(ext) = self.ext.clone() {
-                        int.dispatch(ext, EV_TRANS_CLI_DATA_RECVD, pkt)
-                            .await
-                            .unwrap();
+                        int.dispatch(ext, EV_TRANS_CLI_DATA_RECVD, pkt).await?;
                     } else {
                         warn!("Transport received message, but has no assocated application client to send to");
                         self.missed_events.push(pkt);
@@ -108,5 +128,6 @@ impl TransportClient {
                 }
             }
         }
+        Ok(())
     }
 }

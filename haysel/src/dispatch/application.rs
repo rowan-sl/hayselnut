@@ -8,7 +8,7 @@ use mycelium::station::{
     identity::StationID,
 };
 use roundtable::{
-    handler::{HandlerInit, LocalInterface, MethodRegister},
+    handler::{DispatchErr, HandlerInit, LocalInterface, MethodRegister},
     handler_decl_t, method_decl,
     msg::{self, HandlerInstance, Str},
 };
@@ -44,7 +44,10 @@ pub struct Record {
 #[async_trait]
 impl HandlerInit for AppClient {
     const DECL: msg::HandlerType = handler_decl_t!("Weather station interface [application]");
-    async fn init(&mut self, _int: &LocalInterface) {}
+    type Error = DispatchErr;
+    async fn init(&mut self, _int: &LocalInterface) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn describe(&self) -> Str {
         Str::Owned(format!(
             "Weather station interface [application] for {:?}",
@@ -53,6 +56,13 @@ impl HandlerInit for AppClient {
     }
     fn methods(&self, reg: &mut MethodRegister<Self>) {
         reg.register(Self::received, EV_TRANS_CLI_DATA_RECVD);
+    }
+    async fn on_error(&mut self, error: DispatchErr, int: &LocalInterface) {
+        error!(
+            "Handler {} experienced an error - failed to dispatch: {error:#?} (exiting)",
+            self.describe()
+        );
+        int.shutdown().await;
     }
 }
 
@@ -74,47 +84,52 @@ impl AppClient {
         }
     }
 
-    async fn received(&mut self, data: &Vec<u8>, int: &LocalInterface) {
+    async fn received(&mut self, data: &Vec<u8>, int: &LocalInterface) -> Result<(), DispatchErr> {
         match rmp_serde::from_slice::<PacketKind>(&*data) {
             Ok(pkt) => {
                 trace!("Received packet from IP: {:?} - {pkt:?}", self.addr);
                 match pkt {
-                    PacketKind::Connect(data) => self.on_connect(data, int).await,
-                    PacketKind::Data(data) => self.on_data(data, int).await,
+                    PacketKind::Connect(data) => self.on_connect(data, int).await?,
+                    PacketKind::Data(data) => self.on_data(data, int).await?,
                     _ => warn!("Received unexpected packet kind"),
                 }
+                Ok(())
             }
             Err(e) => {
                 warn!(
                     "Failed to deserialize packet from IP: {:?} - {e:#}",
                     self.addr
                 );
+                Ok(())
             }
         }
     }
 
-    async fn on_connect(&mut self, data: OnConnect, int: &LocalInterface) {
+    async fn on_connect(
+        &mut self,
+        data: OnConnect,
+        int: &LocalInterface,
+    ) -> Result<(), DispatchErr> {
         let name_to_id_mappings = int
             .query(
                 self.registry.clone(),
                 registry::EV_REGISTRY_PROCESS_CONNECT,
                 (self.addr, data.clone()),
             )
-            .await
-            .expect("Failed to query registry");
+            .await?;
         let resp = rmp_serde::to_vec_named(&PacketKind::ChannelMappings(ChannelMappings {
             map: name_to_id_mappings,
         }))
         .unwrap();
         int.dispatch(self.transport.clone(), EV_TRANS_CLI_QUEUE_DATA, resp)
-            .await
-            .unwrap();
+            .await?;
         self.meta_station_id = Some(data.station_id);
         self.meta_station_build_rev = Some(data.station_build_rev);
         self.meta_station_build_date = Some(data.station_build_date);
+        Ok(())
     }
 
-    async fn on_data(&mut self, data: SomeData, int: &LocalInterface) {
+    async fn on_data(&mut self, data: SomeData, int: &LocalInterface) -> Result<(), DispatchErr> {
         let received_at = chrono::Utc::now();
         let mut buf = String::new();
         for (chid, dat) in data.per_channel.clone() {
@@ -124,8 +139,7 @@ impl AppClient {
                     registry::EV_REGISTRY_QUERY_CHANNEL,
                     chid,
                 )
-                .await
-                .expect("Failed to query registry")
+                .await?
             {
                 //TODO: verify that types match
                 let _ = writeln!(
@@ -152,8 +166,8 @@ impl AppClient {
                     data: data.per_channel,
                 },
             )
-            .await
-            .unwrap();
+            .await?;
         }
+        Ok(())
     }
 }

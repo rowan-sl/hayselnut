@@ -110,19 +110,19 @@ impl<S: Storage> TStopDBus2<S> {
     }
 }
 
-impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
-    const DECL: HandlerType = handler_decl_t!("TSDB2 Bus Integration");
-    fn describe(&self) -> Str {
-        Str::Borrowed("Instance of TSDB2 Bus Integration")
-    }
-    fn methods(&self, r: &mut roundtable::handler::MethodRegister<Self>) {
-        r.register(Self::query, EV_DB_QUERY);
-        r.register(Self::new_station, EV_META_NEW_STATION);
-        r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
-        r.register(Self::record_data, EV_WEATHER_DATA_RECEIVED);
-        r.register(Self::sync, EV_BUILTIN_AUTOSAVE);
-    }
-}
+// impl<S: Storage + Sync> HandlerInit for TStopDBus2<S> {
+//     const DECL: HandlerType = handler_decl_t!("TSDB2 Bus Integration");
+//     fn describe(&self) -> Str {
+//         Str::Borrowed("Instance of TSDB2 Bus Integration")
+//     }
+//     fn methods(&self, r: &mut roundtable::handler::MethodRegister<Self>) {
+//         r.register(Self::query, EV_DB_QUERY);
+//         r.register(Self::new_station, EV_META_NEW_STATION);
+//         r.register(Self::station_new_channel, EV_META_STATION_ASSOC_CHANNEL);
+//         r.register(Self::record_data, EV_WEATHER_DATA_RECEIVED);
+//         r.register(Self::sync, EV_BUILTIN_AUTOSAVE);
+//     }
+// }
 
 method_decl!(
     EV_DB_QUERY,
