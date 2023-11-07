@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tracing::metadata::LevelFilter;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_log::LogTracer;
 use tracing_subscriber::{fmt::Layer, prelude::*, registry, EnvFilter};
 
 #[must_use]

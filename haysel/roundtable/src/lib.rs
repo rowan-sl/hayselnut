@@ -6,7 +6,6 @@
 
 #[macro_use]
 extern crate tracing;
-#[macro_use]
 extern crate anyhow;
 #[macro_use]
 extern crate async_trait;
@@ -24,7 +23,7 @@ use tokio::{spawn, sync::broadcast};
 
 mod atomic_cell;
 pub mod common;
-mod dyn_var;
+pub mod dyn_var;
 mod flag;
 pub mod handler;
 pub mod id;

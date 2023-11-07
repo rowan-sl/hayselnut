@@ -26,6 +26,7 @@ mod dispatch;
 mod ipc;
 mod misc;
 mod registry;
+#[allow(dead_code)]
 pub mod tsdb2;
 mod tsdbmock;
 

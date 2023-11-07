@@ -6,19 +6,10 @@ use mycelium::station::{
     capabilities::{Channel, ChannelData, ChannelType, KnownChannels},
     identity::KnownStations,
 };
-use roundtable::{
-    common::EV_BUILTIN_AUTOSAVE,
-    handler::{HandlerInit, LocalInterface},
-    handler_decl_t, method_decl,
-    msg::{HandlerType, Str},
-};
+use roundtable::{handler::LocalInterface, method_decl};
 use uuid::Uuid;
 
-use crate::{
-    dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
-    misc::Take,
-    registry::{EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
-};
+use crate::{dispatch::application::Record, misc::Take};
 
 use super::{alloc::Storage, query::builder::QueryParamsNoDB, repr::DataGroupType, Database};
 

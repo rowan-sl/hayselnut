@@ -26,7 +26,7 @@ impl AutosaveDispatch {
         debug!("saving...");
         int.announce(msg::Target::Any, EV_BUILTIN_AUTOSAVE, ())
             .await
-            .unwrap();
+            .unwrap(); // unreachable
         int.bg_spawn(EV_PRIV_TIMER_COMPLETED, async move {
             interval.tick().await;
             interval
@@ -44,7 +44,7 @@ impl HandlerInit for AutosaveDispatch {
     async fn init(&mut self, int: &LocalInterface) -> Result<(), Self::Error> {
         let mut interval = interval_at(Instant::now() + self.interval, self.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        self.timer_complete(interval, int).await;
+        let _ = self.timer_complete(interval, int).await;
         Ok(())
     }
     fn describe(&self) -> Str {

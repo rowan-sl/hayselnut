@@ -58,8 +58,8 @@ impl HandlerInit for Registry {
             "Registry {} experienced an error: {error:#?} [the handler will now shutdown]",
             self.describe()
         );
-        self.stations.sync().await;
-        self.channels.sync().await;
+        let _ = self.stations.sync().await;
+        let _ = self.channels.sync().await;
         int.shutdown().await;
     }
 }

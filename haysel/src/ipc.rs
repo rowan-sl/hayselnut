@@ -1,6 +1,6 @@
 //! IPC Bus integration
 
-use std::{convert::Infallible, path::PathBuf, rc::Rc, sync::Arc};
+use std::{convert::Infallible, path::PathBuf, sync::Arc};
 
 use chrono::Utc;
 use mycelium::{
@@ -237,6 +237,7 @@ impl IPCConnection {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn close(&mut self, _: &(), _int: &LocalInterface) {
         let _ = self
             .send(&IPCMsg {
