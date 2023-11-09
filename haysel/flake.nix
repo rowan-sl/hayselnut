@@ -27,9 +27,9 @@
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
       # cf. https://crane.dev/API.html#libcleancargosource
       src = craneLib.cleanCargoSource ./.;
-      # compile-time
+      # compile-time + shell
       nativeBuildInputs = with pkgs; [ rustToolchain pkg-config clang mold ];
-      # runtime
+      # runtime (nix build)
       buildInputs = with pkgs; [ ]; # needed system libraries
       cargoArtifacts = craneLib.buildDepsOnly { inherit src buildInputs nativeBuildInputs; };
       haysel-bin = craneLib.buildPackage ({ inherit src buildInputs nativeBuildInputs cargoArtifacts; });
@@ -44,6 +44,7 @@
         inherit buildInputs;
         nativeBuildInputs = [ pkgs.rust-analyzer-unwrapped ] ++ nativeBuildInputs;
         RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+        shellHook = "zsh";
       };
     };
 }
