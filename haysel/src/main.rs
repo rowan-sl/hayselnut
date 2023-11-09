@@ -28,6 +28,7 @@ mod misc;
 mod registry;
 #[allow(dead_code)]
 pub mod tsdb2;
+pub mod tsdb3;
 mod tsdbmock;
 
 use core::{

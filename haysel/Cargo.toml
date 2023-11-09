@@ -38,6 +38,7 @@ config = { version = "0.13", features = ["preserve_order"] }
 nix = { version = "0.27", features = ["signal", "process"] }
 tracing-log = "0.1"
 tracing-appender = "0.2.2"
+tokio-uring = { version = "0.4.0", features = ["bytes"] }
 
 [profile.release]
 lto = true
