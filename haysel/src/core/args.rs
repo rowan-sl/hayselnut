@@ -43,6 +43,8 @@ pub enum Cmd {
         )]
         is_blockdevice: bool,
     },
+    /// test program for TSDB v3
+    DB3 {},
     /// kill the currently running haysel daemon (if there is one)
     Kill {
         #[arg(long, short, help = "config filepath")]

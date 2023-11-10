@@ -117,10 +117,7 @@ pub struct Alloc {
 }
 
 impl Alloc {
-    pub async unsafe fn read<'db, T: DBStruct>(
-        &'db self,
-        at: u64,
-    ) -> Result<DBRef<'db, T>, AllocErr> {
+    pub async fn read<'db, T: DBStruct>(&'db self, at: u64) -> Result<DBRef<'db, T>, AllocErr> {
         // Saftey (for later) - buf must be large enough to contain T
         if size_of::<T>() > self.bufs.size {
             return Err(AllocErr::TypeTooLarge);
@@ -225,10 +222,22 @@ pub fn main() -> Result<()> {
             .truncate(true)
             .open("test.tsdb3")
             .await?;
+        const LARGE: [u8; 4096] = [0u8; 4096];
+        file.write_at(&LARGE[..], 0).await.0?;
         // 10x 1kB buffers
         let bufs = Buffers::new(10, 1024);
-
         let alloc = Alloc { bufs, file };
+
+        #[repr(transparent)]
+        struct Data {
+            val: u32,
+        }
+
+        unsafe impl DBStruct for Data {}
+
+        let mut data = alloc.read::<Data>(0).await?;
+        data.val = 0xEFBEADDE;
+        data.sync().await?;
 
         // let (res, buf) = read(
         //     bufs.get_a_buffer().expect("ran out of buffers"),
