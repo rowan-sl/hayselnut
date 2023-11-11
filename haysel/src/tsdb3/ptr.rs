@@ -2,7 +2,7 @@ use std::{fmt::Debug, marker::PhantomData, mem::size_of, ops::Range};
 
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-use super::{BaseOffset, SlicePtr};
+use super::{access::SlicePtr, BaseOffset};
 
 pub enum Void {}
 
