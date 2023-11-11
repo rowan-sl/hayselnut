@@ -6,6 +6,7 @@ use memmap2::MmapMut;
 use self::alloc::{AllocAccess, TypeRegistry};
 
 mod alloc;
+mod repr;
 
 pub fn main() -> Result<()> {
     let file = OpenOptions::new()
