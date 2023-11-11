@@ -4,7 +4,7 @@ use std::{
     mem::{align_of, size_of},
 };
 
-use crate::tsdb3::repr;
+use super::repr;
 
 #[inline]
 pub(crate) fn round_up_to(n: usize, divisor: usize) -> usize {
@@ -70,20 +70,12 @@ impl TypeRegistry {
         self.types.push(Layout::new::<T>())
     }
 
-    pub fn extend(&mut self, other: &Self) {
-        self.types.extend_from_slice(&other.types);
-    }
-
     pub fn num_types(&self) -> usize {
         self.types.len()
     }
 
     pub fn max_align(&self) -> usize {
         self.types.iter().map(|t| t.align()).max().unwrap_or(1)
-    }
-
-    pub fn min_align(&self) -> usize {
-        self.types.iter().map(|t| t.align()).min().unwrap_or(1)
     }
 
     pub fn contains_similar<T>(&self) -> bool {
