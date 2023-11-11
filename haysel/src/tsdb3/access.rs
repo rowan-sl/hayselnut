@@ -123,3 +123,14 @@ impl<'a> MultipleAccess<'a> {
         })
     }
 }
+
+#[test]
+#[should_panic]
+fn disallow_overlapping_access() {
+    let mut data = vec![0; 1024];
+    let mut access = MultipleAccess::new(&mut data[..]);
+    let a = access.get(0..4);
+    let b = access.get(3..5);
+    // UB (assign a variable its own value, through two references)
+    a[3] = b[0]
+}

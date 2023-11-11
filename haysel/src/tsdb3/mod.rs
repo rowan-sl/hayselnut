@@ -147,7 +147,7 @@ impl<'a> AllocAccess<'a> {
         assert!(self.alloc_t_reg.contains_similar::<T>());
         // -- get and return the body --
         let dat = self.dat.get(ptr.to_range_usize());
-        Ref::<_, T>::new_zeroed(dat).unwrap().into_mut()
+        Ref::<_, T>::new(dat).unwrap().into_mut()
     }
 }
 
@@ -194,6 +194,24 @@ fn test_alloc_access_access_twice() {
     *v = *b"Hello, World!";
     // panic
     let _v_again = alloc.read(ptr_v);
+}
+
+#[test]
+fn test_alloc_access_again() {
+    let mut map = MmapMut::map_anon(4096).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg.register::<[u8; 13]>();
+        alloc_t_reg
+    };
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+    let (ptr_v, v) = alloc.alloc::<[u8; 13]>();
+    *v = *b"Hello, World!";
+    drop(alloc);
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, false);
+    let v = alloc.read(ptr_v);
+    assert_eq!(v, &b"Hello, World!"[..]);
 }
 
 pub fn main() -> Result<()> {
