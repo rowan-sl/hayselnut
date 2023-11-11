@@ -39,6 +39,7 @@ nix = { version = "0.27", features = ["signal", "process"] }
 tracing-log = "0.1"
 tracing-appender = "0.2.2"
 tokio-uring = { version = "0.4.0", features = ["bytes"] }
+memmap2 = "0.9.0"
 
 [profile.release]
 lto = true

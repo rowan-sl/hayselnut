@@ -7,6 +7,7 @@
 #![feature(is_sorted)]
 #![feature(trait_upcasting)]
 #![feature(downcast_unchecked)]
+#![feature(pointer_is_aligned)]
 
 #[macro_use]
 extern crate async_trait;

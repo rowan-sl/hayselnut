@@ -1,258 +1,252 @@
 //! TSDB v3
+//!
+//! Keep in Mind: tokio::fs simply uses spawn_blocking(std::fs)
 
 use std::{
-    iter::repeat,
+    alloc::Layout,
+    fs::OpenOptions,
     marker::PhantomData,
-    mem::{forget, size_of, transmute, MaybeUninit},
-    ops::{Deref, DerefMut},
-    ptr,
-    sync::atomic::{AtomicPtr, Ordering},
+    mem::size_of,
+    ops::{DerefMut, Range},
+    ptr::slice_from_raw_parts_mut,
 };
 
 use anyhow::Result;
-use tokio::io;
-use tokio_uring::{
-    buf::IoBuf,
-    fs::{File, OpenOptions},
-};
+use memmap2::MmapMut;
+use zerocopy::Ref;
 
-mod alloc;
+use crate::tsdb3::ptr::Ptr;
 
-//TODO: is this actaully needed (if only single thread, than no)
-struct Buffers {
-    buffers: Vec<AtomicPtr<u8>>,
-    // buffer size
-    size: usize,
+mod ptr;
+mod repr;
+
+/// memory address of the start of the data access slice
+#[derive(Clone, Copy)]
+struct BaseOffset<'a>(*const u8, PhantomData<&'a ()>);
+
+impl<'a> BaseOffset<'a> {
+    pub fn ptr(self) -> *const u8 {
+        self.0
+    }
 }
 
-impl Buffers {
-    pub fn new(num: usize, size: usize) -> Self {
-        let mut buffers = Vec::with_capacity(num);
-        for _ in 0..num {
-            let buf = repeat(0u8).take(size).collect::<Vec<_>>();
-            let ptr = Box::into_raw(buf.into_boxed_slice());
-            let atomic = AtomicPtr::new(ptr as *mut u8);
-            buffers.push(atomic);
+pub trait SlicePtr<'a> {
+    fn ptr(&self) -> *const u8;
+}
+
+impl<'a> SlicePtr<'a> for &'a mut [u8] {
+    fn ptr(&self) -> *const u8 {
+        self.as_ptr()
+    }
+}
+
+impl<'a> SlicePtr<'a> for MultipleAccess<'a> {
+    fn ptr(&self) -> *const u8 {
+        self.ptr as *const u8
+    }
+}
+
+fn access_memmap<'a>(map: &'a mut MmapMut, t_reg: &TypeRegistry) -> (BaseOffset<'a>, &'a mut [u8]) {
+    let map = map.deref_mut();
+    assert!(map.as_mut_ptr().is_aligned_to(t_reg.max_align()));
+    (BaseOffset(map as *mut [u8] as *const u8, PhantomData), map)
+}
+
+/// Note: this allows multiple accesses, but only once - when a reference to a sub part is dropped,
+///  it may not be referenced again through this struct
+struct MultipleAccess<'a> {
+    len: usize,
+    ptr: *mut u8,
+    /// (ptr, len)
+    access: Vec<Range<*mut u8>>,
+    lifetime: PhantomData<&'a mut [u8]>,
+}
+
+impl<'a> MultipleAccess<'a> {
+    /// To get the original back, one can create the access with new(&mut *original_ref) to use a shorter lifetime, and then
+    /// simply use the original slice again after the last use of this struct or any refs given by it
+    pub fn new(slice: &'a mut [u8]) -> Self {
+        Self {
+            len: slice.len(),
+            ptr: slice.as_mut_ptr(),
+            access: vec![],
+            lifetime: PhantomData,
         }
-        Self { buffers, size }
     }
 
-    fn get_a_buffer(&self) -> Option<Buffer> {
-        for _ in 0..5 {
-            for buf in &self.buffers {
-                let ptr = buf.swap(ptr::null_mut(), Ordering::Relaxed);
-                if !ptr.is_null() {
-                    return Some(unsafe { Vec::from_raw_parts(ptr, self.size, self.size) });
-                }
+    /// self is borrowed for a different lifetime than the return (self must be modified to insert the new reference, but the return value is unrelated)
+    pub fn get<'b>(&'b mut self, range: Range<usize>) -> &'a mut [u8] {
+        let Range { start, end } = range;
+        assert!(start < end);
+        assert!(end < self.len);
+        // saftey preconditions
+        assert!(range.end < isize::MAX as _);
+        assert!(range.end.checked_add(self.ptr as usize).is_some());
+        // Saftey: see previous asserts
+        let ptr_range = unsafe {
+            Range {
+                start: self.ptr.add(range.start),
+                end: self.ptr.add(range.end),
             }
-        }
-        None
-    }
-
-    fn put_back_a_buffer(&self, buf: Buffer) {
-        assert_eq!(buf.len(), self.size);
-        let buf = buf.into_boxed_slice();
-        let ptr = Box::into_raw(buf) as *mut u8;
-        for buf in &self.buffers {
-            if let Ok(..) =
-                buf.compare_exchange(ptr::null_mut(), ptr, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                return;
-            }
-        }
-        // leak buf
-        panic!("more buffers were returned than given out!");
-    }
-}
-
-pub async fn read(mut buf: Buffer, amnt: usize, at: u64, from: &File) -> (io::Result<()>, Buffer) {
-    let mut read_total = 0;
-    while read_total < amnt {
-        let ret = from
-            .read_at(buf.slice(read_total..amnt), at + read_total as u64)
-            .await;
-        buf = ret.1.into_inner();
-        read_total += match ret.0 {
-            Ok(x) => x,
-            Err(e) => return (Err(e.into()), buf),
-        }
-    }
-    (Ok(()), buf)
-}
-
-pub async fn write(mut buf: Buffer, amnt: usize, at: u64, into: &File) -> (io::Result<()>, Buffer) {
-    let mut write_total = 0;
-    while write_total != amnt {
-        let ret = into
-            .write_at(buf.slice(write_total..amnt), at + write_total as u64)
-            .await;
-        buf = ret.1.into_inner();
-
-        let written = match ret.0 {
-            Ok(x) => x,
-            Err(e) => return (Err(e.into()), buf),
         };
-        if written != 0 {
-            write_total += written;
-        } else {
-            panic!("Write failed: 0 bytes written from buffer");
+        assert!(
+            !self.is_overlapping(ptr_range),
+            "Attempted to access the same piece of data more than once simulaneously (aliasing is not allowed) - if you meant to use the same element twice, try re-using the old variable"
+        );
+        unsafe {
+            // Saftey (for ptr.add): see previous preconditions
+            let slice = slice_from_raw_parts_mut(self.ptr.add(range.start), range.len());
+            // Saftey: this struct has exclusive ownership over the enclosed range, and has ensured that no other references to this are active
+            &mut *slice
         }
     }
-    (Ok(()), buf)
-}
 
-#[derive(Debug, thiserror::Error)]
-pub enum AllocErr {
-    #[error("Ran out of buffers to use")]
-    OutOfBuffers,
-    #[error("Type used was larger than the buffer size")]
-    TypeTooLarge,
-    #[error("I/O Error: {0:#}")]
-    IO(#[from] io::Error),
-}
+    /// the returned slice must be from a current access
+    pub fn put<'b>(&'b mut self, slice: &'a mut [u8]) {
+        let range = slice.as_mut_ptr_range();
+        let idx = self
+            .access
+            .iter()
+            .enumerate()
+            .find(|(_, r)| **r == range)
+            .map(|(i, _)| i)
+            .expect("Returned slice was not taken from this access group");
+        let _ = self.access.remove(idx);
+    }
 
-pub struct Alloc {
-    bufs: Buffers,
-    file: File,
-}
-
-impl Alloc {
-    pub async fn read<'db, T: DBStruct>(&'db self, at: u64) -> Result<DBRef<'db, T>, AllocErr> {
-        // Saftey (for later) - buf must be large enough to contain T
-        if size_of::<T>() > self.bufs.size {
-            return Err(AllocErr::TypeTooLarge);
-        }
-        let buf = self.bufs.get_a_buffer().ok_or(AllocErr::OutOfBuffers)?;
-        let (res, buf) = read(buf, size_of::<T>(), at, &self.file).await;
-        res?;
-        Ok(DBRef {
-            buf: MaybeUninit::new(buf),
-            addr: at,
-            alloc: self,
-            ty: PhantomData,
+    fn is_overlapping(&self, with: Range<*mut u8>) -> bool {
+        self.access.iter().any(|range| {
+            let Range { start, end } = with;
+            range.contains(&start) || range.contains(&end)
         })
     }
 }
 
-type Buffer = Vec<u8>;
-
-// safe to transmute to bytes (no padding)
-pub unsafe trait DBStruct: Sized {}
-
-pub struct DBRef<'db, T: DBStruct> {
-    // will only be de-initialized on Drop::drop being called
-    buf: MaybeUninit<Buffer>,
-    addr: u64,
-    alloc: &'db Alloc,
-    ty: PhantomData<T>,
+#[derive(Default)]
+struct TypeRegistry {
+    types: Vec<Layout>,
 }
 
-impl<'db, T: DBStruct> DBRef<'db, T> {
-    /// Write this content back to the file, and return the buffer
-    pub async fn sync(self) -> Result<(), io::Error> {
-        let addr = self.addr;
-        let alloc = self.alloc;
-        // Saftey: `self` is forgotten directly after this, so the drop code that would call assume_init_read again is not run
-        let buf = unsafe { self.buf.assume_init_read() };
-        forget(self);
-        let (res, buf) = write(buf, size_of::<T>(), addr, &alloc.file).await;
-        res?;
-        alloc.bufs.put_back_a_buffer(buf);
-        Ok(())
+impl TypeRegistry {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Return the buffer, but do not write the content back to the file
-    pub async fn free(self) {
-        let alloc = self.alloc;
-        // Saftey: `self` is forgotten directly after this, so the drop code that would call assume_init_read again is not run
-        let buf = unsafe { self.buf.assume_init_read() };
-        forget(self);
-        alloc.bufs.put_back_a_buffer(buf);
+    pub fn register<T>(&mut self) {
+        self.types.push(Layout::new::<T>())
+    }
+
+    pub fn extend(&mut self, other: &Self) {
+        self.types.extend_from_slice(&other.types);
+    }
+
+    pub fn num_types(&self) -> usize {
+        self.types.len()
+    }
+
+    pub fn max_align(&self) -> usize {
+        self.types.iter().map(|t| t.align()).max().unwrap_or(1)
+    }
+
+    pub fn contains_similar<T>(&self) -> bool {
+        self.types.contains(&Layout::new::<T>())
     }
 }
 
-impl<'db, T: DBStruct> Deref for DBRef<'db, T> {
-    type Target = T;
-    fn deref<'a>(&'a self) -> &'a Self::Target {
-        unsafe {
-            // only functions that drop self invalidate buf, meaning it is impossible for this to be valid
-            let r = self.buf.assume_init_ref();
-            debug_assert!(r.capacity() > 0);
-            // validated in Alloc::read()
-            debug_assert!(r.len() >= size_of::<T>());
-            // Buffer contains at least enough space for T
-            let ptr = r.as_ptr() as *const T;
-            // Buffer is valid for 'a, T impl DBStruct and thus can be safely transmuted from/to bytes
-            transmute::<*const T, &'a Self::Target>(ptr)
+pub struct AllocAccess<'a> {
+    t_reg: &'a TypeRegistry,
+    alloc_t_reg: &'a TypeRegistry,
+    base: BaseOffset<'a>,
+    header: Ref<&'a mut [u8], repr::AllocHeader>,
+    free_lists: Ref<&'a mut [u8], [repr::AllocCategoryHeader]>,
+    dat: MultipleAccess<'a>,
+}
+
+impl<'a> AllocAccess<'a> {
+    pub fn new(map: &'a mut MmapMut, t_reg: &'a TypeRegistry, alloc_t_reg: &'a TypeRegistry, write_header: bool) -> Self {
+        // -- get memmap content --
+        let (base, dat): (BaseOffset, &mut [u8]) = access_memmap(map, &t_reg);
+        // -- get header --
+        let (mut header, dat) = Ref::<_, repr::AllocHeader>::new_from_prefix(dat).unwrap();
+        if write_header {
+            *header = repr::AllocHeader::new(Ptr::null(), t_reg.num_types() as u64);
+        }
+        assert!(header.verify());
+        // -- get the free lists --
+        let (free_lists, dat) = Ref::<_, [repr::AllocCategoryHeader]>::new_slice_from_prefix(
+            dat,
+            header.free_list_size as _,
+        )
+        .unwrap();
+        Self {
+            t_reg,
+            alloc_t_reg,
+            base,
+            header,
+            free_lists,
+            dat: MultipleAccess::new(dat),
         }
     }
-}
 
-impl<'db, T: DBStruct> DerefMut for DBRef<'db, T> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut Self::Target {
-        unsafe {
-            // only functions that drop self invalidate buf, meaning it is impossible for this to be valid
-            let r = self.buf.assume_init_mut();
-            debug_assert!(r.capacity() > 0);
-            // validated in Alloc::read()
-            debug_assert!(r.len() >= size_of::<T>());
-            // Buffer contains at least enough space for T
-            let ptr = r.as_mut_ptr() as *mut T;
-            // Buffer is valid for 'a, T impl DBStruct and thus can be safely transmuted from/to bytes
-            transmute::<*mut T, &'a mut Self::Target>(ptr)
+    pub fn get_free_for<T>(&mut self) -> Option<Ptr<repr::ChunkHeader>> {
+        // -- find the appropreate list --
+        let (list_header, found) = 'found: {
+            for list in &mut *self.free_lists {
+                let &mut repr::AllocCategoryHeader { size, head } = list;
+                if size_of::<T>() as u64 == size {
+                    break 'found (list, head);
+                }
+            }
+            // no entry (free list) exists for this type
+            return None;
+        };
+        // this entry (free list) exists, but it has no entries (free chunks)
+        if found.is_null() {
+            return None;
         }
-    }
-}
-
-impl<'db, T: DBStruct> Drop for DBRef<'db, T> {
-    fn drop(&mut self) {
-        error!("DBRef dropped improperly (without calling sync or free) - the buffer will be returned to the db, but no data will be written");
-        // Saftey: drop() is only called once, and this is the final use of `self.buf`
-        let buf = unsafe { self.buf.assume_init_read() };
-        self.alloc.bufs.put_back_a_buffer(buf)
+        // -- get the first entry in the free list --
+        let first_dat = self
+            .dat
+            .get(found.localize_to(self.base, &self.dat).to_range_usize());
+        let (first, _) = Ref::<_, repr::ChunkHeader>::new_from_prefix(&mut *first_dat).unwrap();
+        // -- remove `first` from this free list --
+        if first.next.is_null() {
+            // no `next` element in the list, so set the head to null
+            list_header.head = Ptr::null();
+        } else {
+            // there is an element after `first` in the list, so set the head to that
+            list_header.head = first.next;
+        }
+        self.dat.put(first_dat);
+        Some(found)
     }
 }
 
 pub fn main() -> Result<()> {
-    tokio_uring::start(async {
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open("test.tsdb3")
-            .await?;
-        const LARGE: [u8; 4096] = [0u8; 4096];
-        file.write_at(&LARGE[..], 0).await.0?;
-        // 10x 1kB buffers
-        let bufs = Buffers::new(10, 1024);
-        let alloc = Alloc { bufs, file };
-
-        #[repr(transparent)]
-        struct Data {
-            val: u32,
-        }
-
-        unsafe impl DBStruct for Data {}
-
-        let mut data = alloc.read::<Data>(0).await?;
-        data.val = 0xEFBEADDE;
-        data.sync().await?;
-
-        // let (res, buf) = read(
-        //     bufs.get_a_buffer().expect("ran out of buffers"),
-        //     10,
-        //     23,
-        //     &file,
-        // )
-        // .await;
-        // res?;
-
-        // let (res, buf) = write(buf, 10, 33, &file).await;
-        // res?;
-        // bufs.put_back_a_buffer(buf);
-
-        alloc.file.close().await?;
-        Ok(())
-    })
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open("test.tsdb3")?;
+    file.set_len(1024 * 500)?;
+    // Saftey: lol. lmao.
+    let mut map = unsafe { MmapMut::map_mut(&file)? };
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg
+    };
+    let t_reg = {
+        let mut t_reg = TypeRegistry::new();
+        t_reg.extend(&alloc_t_reg);
+        t_reg.register::<repr::AllocHeader>();
+        t_reg.register::<repr::AllocCategoryHeader>();
+        t_reg.register::<repr::ChunkFlags>();
+        t_reg.register::<repr::ChunkHeader>();
+        t_reg
+    };
+    {
+        let alloc = AllocAccess::new(&mut map, &t_reg, &alloc_t_reg true);
+    }
+    Ok(())
 }
