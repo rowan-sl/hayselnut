@@ -12,6 +12,16 @@ pub(crate) fn round_up_to(n: usize, divisor: usize) -> usize {
     (n + divisor - 1) & !(divisor - 1)
 }
 
+#[test]
+fn test_round_up_to() {
+    for i in 9..=16 {
+        assert_eq!(round_up_to(i, 8), 16);
+    }
+    assert_eq!(round_up_to(16, 8), 16);
+    assert_eq!(round_up_to(8, 8), 8);
+    assert_eq!(round_up_to(7, 8), 8);
+}
+
 pub fn alignment_pad_size<T>() -> usize {
     // align to the alignment of chunk header or T, whichever is greater
     // ensures that the next chunk will have the proper alignment for its header,
@@ -24,6 +34,26 @@ pub fn alignment_pad_size<T>() -> usize {
         max(align_of::<T>(), align_of::<repr::ChunkHeader>()),
     ) - size_of::<T>()
         - size_of::<repr::ChunkHeader>()
+}
+
+#[test]
+fn test_align_pad() {
+    assert_eq!(size_of::<repr::ChunkHeader>(), 16);
+    assert_eq!(align_of::<repr::ChunkHeader>(), 8);
+    //note: size must be a multiple of alignment
+    assert_eq!(alignment_pad_size::<u16>(), 6);
+    assert_eq!(alignment_pad_size::<repr::ChunkHeader>(), 0);
+    struct A([u8; 9]);
+    assert_eq!(alignment_pad_size::<A>(), 7);
+}
+
+#[test]
+fn test_align_pad_unusual_alignment() {
+    #[repr(align(32))]
+    struct B([u8; 32]);
+    assert_eq!(align_of::<B>(), 32);
+    assert_eq!(size_of::<B>(), 32);
+    assert_eq!(alignment_pad_size::<B>(), 16);
 }
 
 #[derive(Default)]

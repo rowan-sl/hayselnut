@@ -43,6 +43,16 @@ pub fn access_memmap<'a>(
     (BaseOffset(map as *mut [u8] as *const u8, PhantomData), map)
 }
 
+#[test]
+fn test_memmap_alignment() {
+    let mut map = MmapMut::map_anon(1024).unwrap();
+    #[repr(align(32))]
+    struct A([u8; 32]);
+    let mut reg = TypeRegistry::new();
+    reg.register::<A>();
+    let _ = access_memmap(&mut map, &reg);
+}
+
 /// Note: this allows multiple accesses, but only once - when a reference to a sub part is dropped,
 ///  it may not be referenced again through this struct
 pub struct MultipleAccess<'a> {
@@ -81,9 +91,10 @@ impl<'a> MultipleAccess<'a> {
             }
         };
         assert!(
-            !self.is_overlapping(ptr_range),
+            !self.is_overlapping(ptr_range.clone()),
             "Attempted to access the same piece of data more than once simulaneously (aliasing is not allowed) - if you meant to use the same element twice, try re-using the old variable"
         );
+        self.access.push(ptr_range);
         unsafe {
             // Saftey (for ptr.add): see previous preconditions
             let slice = slice_from_raw_parts_mut(self.ptr.add(range.start), range.len());

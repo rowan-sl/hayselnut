@@ -95,7 +95,7 @@ impl<'a> AllocAccess<'a> {
     }
 
     /// allocates a new zeroed T, and returns a ref to it
-    pub fn alloc<T: AsBytes + FromBytes + FromZeroes>(&mut self) -> &'a mut T {
+    pub fn alloc<T: AsBytes + FromBytes + FromZeroes>(&mut self) -> (Ptr<T>, &'a mut T) {
         assert!(self.alloc_t_reg.contains_similar::<T>());
         if let Some(free_spot) = self.get_free_for::<T>() {
             let dat = self
@@ -106,9 +106,15 @@ impl<'a> AllocAccess<'a> {
             flags.remove(repr::ChunkFlags::FREE);
             header.flags = flags.bits();
             // remove alignment padding
-            Ref::<_, T>::new_zeroed(&mut dat[alignment_pad_size::<T>()..])
+            let ref0 = Ref::<_, T>::new_zeroed(&mut dat[alignment_pad_size::<T>()..])
                 .unwrap()
-                .into_mut()
+                .into_mut();
+            (
+                free_spot
+                    .offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
+                    .cast::<T>(),
+                ref0,
+            )
         } else {
             let global_ptr = Ptr::<repr::ChunkHeader>::with(self.header.used);
             self.header.used += (size_of::<repr::ChunkHeader>()
@@ -128,13 +134,11 @@ impl<'a> AllocAccess<'a> {
                 next: Ptr::with(1),
             };
             // -- get and return the body --
-            let dat = self.dat.get(
-                global_ptr
-                    .offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
-                    .cast::<T>()
-                    .to_range_usize(),
-            );
-            Ref::<_, T>::new_zeroed(dat).unwrap().into_mut()
+            let ptr_t = global_ptr
+                .offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
+                .cast::<T>();
+            let dat = self.dat.get(ptr_t.to_range_usize());
+            (ptr_t, Ref::<_, T>::new_zeroed(dat).unwrap().into_mut())
         }
     }
 
@@ -142,13 +146,54 @@ impl<'a> AllocAccess<'a> {
     pub fn read<T: AsBytes + FromBytes + FromZeroes>(&mut self, ptr: Ptr<T>) -> &'a mut T {
         assert!(self.alloc_t_reg.contains_similar::<T>());
         // -- get and return the body --
-        let dat = self.dat.get(
-            ptr.offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
-                .cast::<T>()
-                .to_range_usize(),
-        );
+        let dat = self.dat.get(ptr.to_range_usize());
         Ref::<_, T>::new_zeroed(dat).unwrap().into_mut()
     }
+}
+
+#[test]
+fn test_new_map_basic_types() {
+    let mut map = MmapMut::map_anon(4096).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg.register::<[u8; 13]>();
+        alloc_t_reg
+    };
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+    let (_ptr_v, v) = alloc.alloc::<[u8; 13]>();
+    *v = *b"Hello, World!";
+}
+
+#[test]
+#[should_panic]
+fn test_new_map_not_enough_space() {
+    let mut map = MmapMut::map_anon(20).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg.register::<[u8; 13]>();
+        alloc_t_reg
+    };
+    // missing space, will panic
+    let _alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+}
+
+#[test]
+#[should_panic]
+fn test_alloc_access_access_twice() {
+    let mut map = MmapMut::map_anon(4096).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg.register::<[u8; 13]>();
+        alloc_t_reg
+    };
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+    let (ptr_v, v) = alloc.alloc::<[u8; 13]>();
+    *v = *b"Hello, World!";
+    // panic
+    let _v_again = alloc.read(ptr_v);
 }
 
 pub fn main() -> Result<()> {
@@ -169,7 +214,7 @@ pub fn main() -> Result<()> {
     };
     {
         let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
-        let v = alloc.alloc::<[u8; 13]>();
+        let (_ptr_v, v) = alloc.alloc::<[u8; 13]>();
         *v = *b"Hello, World!";
     }
     file.sync_all()?;
