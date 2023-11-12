@@ -45,6 +45,19 @@ pub struct DB {
     init: bool,
 }
 
+// `file` (which is what breaks the auto-impl) is effectively owned
+// by `Self` and is only used on drop, where an exclusive reference
+// to self is had, and `store` (which refrences `file`) is dropped
+unsafe impl Send for DB {}
+// validates ^^
+const _: () = {
+    const fn ensure_saftey(store: &ManuallyDrop<DBStore>, file: &fs::File) {
+        let _: &dyn Send = file;
+        let _: &dyn Send = store;
+        let _: &dyn Send = &true;
+    }
+};
+
 impl DB {
     /// Creates an interaface to the database stored in `file`
     ///

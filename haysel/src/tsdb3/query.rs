@@ -27,6 +27,7 @@ mod comptime_hacks {
     impl IsTrue for Condition<true> {}
 }
 
+#[derive(Clone, Copy)]
 pub struct QueryBuilder<const STEP: usize = INITIAL> {
     pub(super) station: Option<StationID>,
     pub(super) channel: Option<ChannelID>,
@@ -36,18 +37,6 @@ pub struct QueryBuilder<const STEP: usize = INITIAL> {
 }
 
 pub type QueryParams = QueryBuilder<VERIFIED>;
-
-impl Clone for QueryParams {
-    fn clone(&self) -> Self {
-        Self {
-            station: self.station.clone(),
-            channel: self.channel.clone(),
-            max_results: self.max_results.clone(),
-            after_time: self.after_time.clone(),
-            before_time: self.before_time.clone(),
-        }
-    }
-}
 
 impl QueryParams {
     pub(super) fn to_raw(

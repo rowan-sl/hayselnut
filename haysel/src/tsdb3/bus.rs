@@ -1,88 +1,85 @@
 //! bus integration for TSBD2
 
 use chrono::{DateTime, Utc};
+use flume::Sender;
 use mycelium::station::{
-    capabilities::{Channel, ChannelData, KnownChannels},
+    capabilities::{Channel, KnownChannels},
     identity::KnownStations,
 };
 use roundtable::{handler::LocalInterface, method_decl};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::dispatch::application::Record;
 
 use super::{query::QueryParams, DB};
 
+mod rt;
+
 /// The handler
 pub struct TStopDBus3 {
-    db: DB,
+    comm: Sender<rt::Msg>,
 }
 
 impl TStopDBus3 {
-    pub async fn new(db: DB) -> Self {
-        Self { db }
+    pub fn new(db: DB) -> Self {
+        let comm = rt::launch(db);
+        Self { comm }
     }
 
     async fn query(
         &mut self,
-        args: &QueryParams,
+        &params: &QueryParams,
         _int: &LocalInterface,
     ) -> Vec<(DateTime<Utc>, f32)> {
-        todo!()
-        // Ok(self.db.qery_data(, , , , ))
+        let (response, recv) = oneshot::channel();
+        self.comm
+            .send_async(rt::Msg::Query { params, response })
+            .await
+            .expect("Runtime task closed");
+        recv.await
+            .expect("Runtime task closed or recv queue dropped")
     }
 
-    pub async fn ensure_exists(&mut self, (_stations, _channels): &(KnownStations, KnownChannels)) {
-        todo!()
-        // warn!("Initial state verification unimplemented (necessary stations/channels may not exist in the database)");
-        // Ok(())
+    pub async fn ensure_exists(&mut self, (stations, channels): &(KnownStations, KnownChannels)) {
+        self.comm
+            .send_async(rt::Msg::EnsureExists {
+                stations: stations.clone(),
+                channels: channels.clone(),
+            })
+            .await
+            .expect("Runtime task closed");
     }
 
-    async fn new_station(&mut self, &id: &Uuid, _int: &LocalInterface) {
-        todo!()
-        // if let Err(err) = self.db.add_station(id).await {
-        //     error!("Error occured adding station to DB: {err:?}");
-        //     warn!("Handling of this error is not implemented");
-        // }
+    async fn new_station(&mut self, &sid: &Uuid, _int: &LocalInterface) {
+        self.comm
+            .send_async(rt::Msg::NewStation { sid })
+            .await
+            .expect("Runtime task closed");
     }
 
     async fn station_new_channel(
         &mut self,
-        (station, channel, channel_info): &(Uuid, Uuid, Channel),
+        (sid, cid, inf): &(Uuid, Uuid, Channel),
         _int: &LocalInterface,
     ) {
-        todo!()
-        // if let Err(err) = self
-        //     .db
-        //     .add_channel(
-        //         *station,
-        //         *channel,
-        //         match channel_info.ty {
-        //             ChannelType::Periodic => DataGroupType::Periodic,
-        //             ChannelType::Triggered => DataGroupType::Sporadic,
-        //         },
-        //     )
-        //     .await
-        // {
-        //     error!("Error occured adding channel to station in DB: {err:?}");
-        //     warn!("Handling of this error is not implemented");
-        // }
+        self.comm
+            .send_async(rt::Msg::NewChannel {
+                sid: *sid,
+                cid: *cid,
+                inf: inf.clone(),
+            })
+            .await
+            .expect("Runtime task closed");
     }
 
-    async fn record_data(&mut self, data: &Record, _int: &LocalInterface) {
-        for (ch, val) in &data.data {
-            self.db.insert_data(
-                data.recorded_by,
-                *ch,
-                data.recorded_at,
-                match val {
-                    ChannelData::Float(val) => *val,
-                    ChannelData::Event { .. } => {
-                        error!("Database does not support recording `event` type data yet");
-                        continue;
-                    }
-                },
-            );
-        }
+    async fn record_data(&mut self, record: &Record, _int: &LocalInterface) {
+        self.comm
+            .send_async(rt::Msg::Record {
+                record: record.clone(),
+            })
+            .await
+            .expect("Runtime task closed");
     }
 }
 
