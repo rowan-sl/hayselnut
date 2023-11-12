@@ -148,7 +148,9 @@ impl<'a> AllocAccess<'a> {
             let ptr_t = global_ptr
                 .offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
                 .cast::<T>();
-            let dat = self.dat.get(ptr_t.to_range_usize());
+            let dat = self
+                .dat
+                .get(ptr_t.localize_to(self.base, &self.dat).to_range_usize());
             (ptr_t, Ref::<_, T>::new_zeroed(dat).unwrap().into_mut())
         }
     }
@@ -157,7 +159,9 @@ impl<'a> AllocAccess<'a> {
     pub fn read<T: AsBytes + FromBytes + FromZeroes>(&mut self, ptr: Ptr<T>) -> &'a mut T {
         assert!(self.alloc_t_reg.contains_similar::<T>());
         // -- get and return the body --
-        let dat = self.dat.get(ptr.to_range_usize());
+        let dat = self
+            .dat
+            .get(ptr.localize_to(self.base, &self.dat).to_range_usize());
         Ref::<_, T>::new(dat).unwrap().into_mut()
     }
 }
@@ -257,6 +261,6 @@ fn test_alloc_tricky_types() {
     let (entry, _) = alloc.alloc::<super::repr::DBEntrypoint>();
     drop(alloc);
     let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, false);
-    let v = alloc.read(entry);
-    let _ = alloc.alloc::<super::repr::Station>();
+    let _v = alloc.read(entry);
+    let _a = alloc.alloc::<super::repr::Station>();
 }
