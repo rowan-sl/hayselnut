@@ -44,7 +44,7 @@ impl DB {
     ///
     /// ## Initialization
     /// this function does not rely on `file` containing anything in perticular.
-    /// before the database may be used, you must initialize it using [`open`] (to open an existing datbase) or [`init`] to initialize a new one
+    /// before the database may be used, you must initialize it using [`DB::open`] (to open an existing datbase) or [`DB::init`] to initialize a new one
     ///
     /// ## Errors
     /// if memory mapping fails
@@ -70,10 +70,28 @@ impl DB {
         })
     }
 
+    #[must_use]
+    #[allow(dead_code)]
+    pub(in crate::tsdb3) fn new_in_ram(size: usize) -> Result<Self, Error> {
+        let map = MmapMut::map_anon(size)?;
+        let mut alloc_t_reg = TypeRegistry::new();
+        // only types that HAVE POINTERS TO THEM need to go here
+        alloc_t_reg.register::<repr::DBEntrypoint>();
+        alloc_t_reg.register::<repr::Station>();
+        alloc_t_reg.register::<repr::Channel>();
+        alloc_t_reg.register::<repr::ChannelData>();
+        Ok(Self {
+            file: ptr::null(),
+            store: ManuallyDrop::new(DBStore { map, alloc_t_reg }),
+            init: false,
+        })
+    }
+
     /// Initialize a new database, discarding any previous content.
     ///
-    /// This function must only be called once, before any other usage of the db and is the alternative to [`open`]
+    /// This function must only be called once, before any other usage of the db and is the alternative to [`DB::open`]
     pub fn init(&mut self) {
+        assert!(!self.init);
         let mut access = self.store.access(true);
         let (entry_ptr, entry) = access.alloc::<repr::DBEntrypoint>();
         *access.entrypoint_pointer() = entry_ptr.cast::<alloc::ptr::Void>();
@@ -86,8 +104,9 @@ impl DB {
 
     /// Open an existing database, under the assumption that there is one.
     ///
-    /// This function must only be called once, before any other usage of the db and is the alternative to [`init`]
+    /// This function must only be called once, before any other usage of the db and is the alternative to [`DB::init`]
     pub fn open(&mut self) {
+        assert!(!self.init);
         // will error if the alloc header is invalid
         let mut access = self.store.access(false);
         let entry = access.entrypoint::<repr::DBEntrypoint>().unwrap();
@@ -104,6 +123,7 @@ impl DB {
 
     /// Get all stations currently known to the database
     pub fn get_stations<'a>(&'a mut self) -> impl Iterator<Item = &'a StationID> + 'a {
+        assert!(self.init);
         let mut access = self.store.access(false);
         let entry = access.entrypoint::<repr::DBEntrypoint>().unwrap();
         entry
@@ -119,6 +139,7 @@ impl DB {
         &'a mut self,
         station_id: StationID,
     ) -> Option<impl Iterator<Item = &'a ChannelID> + 'a> {
+        assert!(self.init);
         assert!(!station_id.is_nil());
         let mut access = self.store.access(false);
         let entry = access.entrypoint::<repr::DBEntrypoint>().unwrap();
@@ -140,6 +161,7 @@ impl DB {
     }
 
     pub fn insert_station(&mut self, id: StationID) {
+        assert!(self.init);
         assert!(!id.is_nil());
         assert!(self
             .get_stations()
@@ -164,6 +186,7 @@ impl DB {
         station: StationID,
         channels: impl IntoIterator<Item = ChannelID>,
     ) {
+        assert!(self.init);
         assert!(!station.is_nil());
         let mut access = self.store.access(false);
         let entry = access.entrypoint::<repr::DBEntrypoint>().unwrap();
@@ -201,6 +224,7 @@ impl DB {
         time: DateTime<Utc>,
         reading: f32,
     ) {
+        assert!(self.init);
         assert!(self.get_stations().find(|st| *st == &station_id).is_some());
         assert!(self
             .get_channels_for(station_id)
@@ -255,6 +279,7 @@ impl DB {
         // not exactly respected, more of a general max (will be checked once every data chunk)
         max_results: usize,
     ) -> Vec<(DateTime<Utc>, f32)> {
+        assert!(self.init);
         assert!(self.get_stations().find(|st| *st == &station_id).is_some());
         assert!(self
             .get_channels_for(station_id)
@@ -321,11 +346,19 @@ impl Drop for DB {
     fn drop(&mut self) {
         // Saftey: self.store not used after this
         unsafe { ManuallyDrop::drop(&mut self.store) };
-        // Saftey: self.file not used after this, no longer referenced by self.store
-        let file = unsafe { ptr::read(self.file as *const fs::File) };
-        let _ = file.sync_all();
-        drop(file)
+        if !self.file.is_null() {
+            // Saftey: self.file not used after this, no longer referenced by self.store
+            let file = unsafe { ptr::read(self.file as *const fs::File) };
+            let _ = file.sync_all();
+            drop(file)
+        }
     }
+}
+
+#[test]
+fn create_new_db() {
+    let mut db = DB::new_in_ram(4096).unwrap();
+    db.init();
 }
 
 pub fn main() -> Result<()> {
@@ -339,18 +372,5 @@ pub fn main() -> Result<()> {
     // Saftey: lol. lmao.
     let mut db = unsafe { DB::new(file) }?;
     db.init();
-    // let mut map = unsafe { MmapMut::map_mut(&file)? };
-    // let alloc_t_reg = {
-    //     let mut alloc_t_reg = TypeRegistry::new();
-    //     alloc_t_reg.register::<u64>();
-    //     alloc_t_reg.register::<[u8; 13]>();
-    //     alloc_t_reg
-    // };
-    // {
-    //     let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
-    //     let (_ptr_v, v) = alloc.alloc::<[u8; 13]>();
-    //     *v = *b"Hello, World!";
-    // }
-    // file.sync_all()?;
     Ok(())
 }
