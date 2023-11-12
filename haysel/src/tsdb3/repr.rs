@@ -38,6 +38,8 @@ pub struct TuningParams {
 #[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
 #[repr(C)]
 pub struct MapStations {
+    /// To indicate the absence of a station, it has a null id and ptr (from_zeroes does this)
+    /// - this may not be sparse (all n valid elements must be the first n elements)
     pub stations: [MapStationsElem; 16],
 }
 
@@ -52,6 +54,8 @@ pub struct MapStationsElem {
 #[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
 #[repr(C)]
 pub struct Station {
+    /// to indicate the absence of a channel, it has a null id and ptr (from_zeroes does this)
+    /// - this may not be sparse (all n valid elements must be the first n elements)
     pub channels: [MapChannelsElem; 64],
 }
 
@@ -63,16 +67,39 @@ pub struct MapChannelsElem {
     pub ptr: Ptr<Channel>,
 }
 
+#[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
+#[repr(C)]
+pub struct Channel {
+    pub num_used: u32,
+    /// previous data entry time. (htime fmt)
+    pub last_time: u32,
+    pub data: ChannelData,
+}
+
+impl Channel {
+    pub fn is_full(&self) -> bool {
+        assert!(self.num_used <= self.data.chunk.len() as u32);
+        self.num_used == self.data.chunk.len() as u32
+    }
+}
+
 /// entry in a linked list (going from most recent to oldest)
 /// entries are (time, data)
 /// - data is whatever unit this is using
 /// - time is in seconds since 2020 (when this breaks in 2156, I'll be dead)
 /// - idx 0->len is oldest->newest (0=old, len=new)
-/// - only the first element in the list can have empty parts, which [empty elements] are indicated by a timestamp == EPOCH
+/// - only the head can have empty elements, the number of non-empty elements is stored in MapChannelsElem
 /// - once the head fills up, a new empty head is created, with its `next` pointing to the previous head
 #[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
 #[repr(C)]
-pub struct Channel {
-    pub chunk: [(u32, f32); 512],
-    pub next: Ptr<Channel>,
+pub struct ChannelData {
+    pub chunk: [DataEntry; 512],
+    pub next: Ptr<ChannelData>,
+}
+
+#[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
+#[repr(C)]
+pub struct DataEntry {
+    pub htime: u32,
+    pub data: f32,
 }
