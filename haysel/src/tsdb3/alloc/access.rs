@@ -119,9 +119,23 @@ impl<'a> MultipleAccess<'a> {
     fn is_overlapping(&self, with: Range<*mut u8>) -> bool {
         self.access.iter().any(|range| {
             let Range { start, end } = with;
-            range.contains(&start) || range.contains(&end)
+            if range.contains(&start) || range.contains(&end) {
+                eprintln!("Overlap detected between {range:?} and {with:?}");
+                true
+            } else {
+                false
+            }
         })
     }
+}
+
+#[test]
+fn allow_close_access() {
+    let mut data = vec![0; 1024];
+    let mut access = MultipleAccess::new(&mut data[..]);
+    let a = access.get(3..4);
+    let b = access.get(4..5);
+    a[0] = b[0]
 }
 
 #[test]

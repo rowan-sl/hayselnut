@@ -9,6 +9,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use memmap2::MmapMut;
 use mycelium::station::{capabilities::ChannelID, identity::StationID};
+#[cfg(test)]
+use uuid::Uuid;
 use zerocopy::FromZeroes;
 
 use self::alloc::{AllocAccess, TypeRegistry};
@@ -71,7 +73,7 @@ impl DB {
     }
 
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::tsdb3) fn new_in_ram(size: usize) -> Result<Self, Error> {
         let map = MmapMut::map_anon(size)?;
         let mut alloc_t_reg = TypeRegistry::new();
@@ -359,6 +361,14 @@ impl Drop for DB {
 fn create_new_db() {
     let mut db = DB::new_in_ram(4096).unwrap();
     db.init();
+}
+
+#[test]
+fn create_new_station() {
+    let mut db = DB::new_in_ram(4096).unwrap();
+    db.init();
+    let sid = Uuid::new_v4();
+    db.insert_station(sid);
 }
 
 pub fn main() -> Result<()> {

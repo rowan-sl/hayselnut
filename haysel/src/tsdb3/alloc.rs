@@ -136,13 +136,14 @@ impl<'a> AllocAccess<'a> {
                     .localize_to(self.base, &self.dat)
                     .to_range_usize(),
             );
-            let mut header = Ref::<_, repr::ChunkHeader>::new(header_dat).unwrap();
+            let mut header = Ref::<_, repr::ChunkHeader>::new(&mut *header_dat).unwrap();
             *header = repr::ChunkHeader {
                 flags: repr::ChunkFlags::empty().bits(),
                 len: (alignment_pad_size::<T>() + size_of::<T>()) as _,
                 // dangling, non null (not required, but it will make detecting errors easier)
                 next: Ptr::with(1),
             };
+            self.dat.put(header_dat);
             // -- get and return the body --
             let ptr_t = global_ptr
                 .offset((size_of::<repr::ChunkHeader>() + alignment_pad_size::<T>()) as _)
@@ -173,6 +174,25 @@ fn test_new_map_basic_types() {
     let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
     let (_ptr_v, v) = alloc.alloc::<[u8; 13]>();
     *v = *b"Hello, World!";
+}
+
+#[test]
+fn test_alloc_twice() {
+    let mut map = MmapMut::map_anon(4096).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<u64>();
+        alloc_t_reg.register::<[u8; 13]>();
+        alloc_t_reg
+    };
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+    let (ptr_v, v) = alloc.alloc::<[u8; 13]>();
+    *v = *b"Hello, World!";
+    drop(alloc);
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, false);
+    let v = alloc.read(ptr_v);
+    assert_eq!(v, &b"Hello, World!"[..]);
+    let _ = alloc.alloc::<u64>();
 }
 
 #[test]
@@ -222,4 +242,21 @@ fn test_alloc_access_again() {
     let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, false);
     let v = alloc.read(ptr_v);
     assert_eq!(v, &b"Hello, World!"[..]);
+}
+
+#[test]
+fn test_alloc_tricky_types() {
+    let mut map = MmapMut::map_anon(4096).unwrap();
+    let alloc_t_reg = {
+        let mut alloc_t_reg = TypeRegistry::new();
+        alloc_t_reg.register::<super::repr::DBEntrypoint>();
+        alloc_t_reg.register::<super::repr::Station>();
+        alloc_t_reg
+    };
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, true);
+    let (entry, _) = alloc.alloc::<super::repr::DBEntrypoint>();
+    drop(alloc);
+    let mut alloc = AllocAccess::new(&mut map, &alloc_t_reg, false);
+    let v = alloc.read(entry);
+    let _ = alloc.alloc::<super::repr::Station>();
 }
