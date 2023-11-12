@@ -17,7 +17,7 @@ pub use ptr::Ptr;
 pub use registry::TypeRegistry;
 
 mod access;
-mod ptr;
+pub mod ptr;
 mod registry;
 mod repr;
 
@@ -54,6 +54,18 @@ impl<'a> AllocAccess<'a> {
             header: header.into_mut(),
             free_lists: free_lists.into_mut_slice(),
             dat: MultipleAccess::new(dat),
+        }
+    }
+
+    pub fn entrypoint_pointer(&mut self) -> &mut Ptr<ptr::Void> {
+        &mut self.header.entrypoint
+    }
+
+    pub fn entrypoint<'b, T: FromBytes + AsBytes + 'a>(&'b mut self) -> Option<&'a mut T> {
+        if self.header.entrypoint.is_null() {
+            None
+        } else {
+            Some(self.read(self.header.entrypoint.cast::<T>()))
         }
     }
 

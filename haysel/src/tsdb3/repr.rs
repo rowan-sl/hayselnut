@@ -1,4 +1,3 @@
-use mycelium::station::{capabilities::ChannelID, identity::StationID};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 use super::alloc::Ptr;
@@ -39,13 +38,29 @@ pub struct TuningParams {
 #[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
 #[repr(C)]
 pub struct MapStations {
-    pub stations: [(StationID, Ptr<Station>); 16],
+    pub stations: [MapStationsElem; 16],
+}
+
+#[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
+#[repr(C)]
+pub struct MapStationsElem {
+    /// StationID
+    pub id: uuid::Bytes,
+    pub ptr: Ptr<Station>,
 }
 
 #[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
 #[repr(C)]
 pub struct Station {
-    pub channels: [(ChannelID, Ptr<Channel>); 64],
+    pub channels: [MapChannelsElem; 64],
+}
+
+#[derive(Debug, Clone, Copy, FromBytes, AsBytes, FromZeroes)]
+#[repr(C)]
+pub struct MapChannelsElem {
+    /// ChannelID
+    pub id: uuid::Bytes,
+    pub ptr: Ptr<Channel>,
 }
 
 /// entry in a linked list (going from most recent to oldest)
