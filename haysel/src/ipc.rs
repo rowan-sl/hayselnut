@@ -27,7 +27,7 @@ use crate::{
     dispatch::application::{Record, EV_WEATHER_DATA_RECEIVED},
     misc::Take,
     registry::{self, EV_META_NEW_CHANNEL, EV_META_NEW_STATION, EV_META_STATION_ASSOC_CHANNEL},
-    tsdb2::{bus::EV_DB_QUERY, query::builder::QueryBuilder},
+    tsdb3::{bus::EV_DB_QUERY, query::QueryBuilder},
 };
 
 pub struct IPCNewConnections {
@@ -123,8 +123,6 @@ pub enum IPCConnectionErr {
     IPC(#[from] IPCError),
     #[error("Dispatch error: {0:#}")]
     Dispatch(#[from] DispatchErr),
-    #[error("Failed to query database: {0:#}")]
-    DBQuery(anyhow::Error),
 }
 
 pub struct IPCConnection {
@@ -167,15 +165,14 @@ impl IPCConnection {
                     .query(
                         self.database.clone(),
                         EV_DB_QUERY,
-                        QueryBuilder::new_nodb()
+                        QueryBuilder::new()
                             .with_station(station)
                             .with_channel(channel)
                             .with_after(from_time - chrono::Duration::minutes(60))
                             .verify()
                             .unwrap(),
                     )
-                    .await?
-                    .map_err(|e| IPCConnectionErr::DBQuery(e))?;
+                    .await?;
                 self.send(&IPCMsg {
                     kind: mycelium::IPCMsgKind::QueryLastHourResponse { data, from_time },
                 })

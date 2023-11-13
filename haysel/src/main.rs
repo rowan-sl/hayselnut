@@ -27,11 +27,11 @@ mod dispatch;
 mod ipc;
 mod misc;
 mod registry;
-#[allow(dead_code)]
-pub mod tsdb2;
+// #[allow(dead_code)]
+// pub mod tsdb2;
 pub mod tsdb3;
-#[allow(dead_code)]
-mod tsdbmock;
+// #[allow(dead_code)]
+// mod tsdbmock;
 
 use core::{
     args::RunArgs,
