@@ -54,10 +54,12 @@ pub fn stage0_delegate() -> Result<()> {
             kill(Pid::from_raw(pid.try_into()?), Some(Signal::SIGINT))?;
             return Ok(());
         }
+        #[allow(unreachable_code)]
         other => {
             let _guard = core::init_logging_no_file()?;
             let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
             return runtime.block_on(commands::delegate(other));
+            drop(_guard);
         }
     }
 }

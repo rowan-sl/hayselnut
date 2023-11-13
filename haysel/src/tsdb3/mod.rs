@@ -18,6 +18,7 @@ use self::{
 
 mod alloc;
 pub mod bus;
+pub mod cmd;
 pub mod query;
 mod repr;
 mod test;

@@ -57,6 +57,10 @@ impl<'a> AllocAccess<'a> {
         }
     }
 
+    pub fn get_size_used(&self) -> u64 {
+        self.header.used
+    }
+
     pub fn entrypoint_pointer(&mut self) -> &mut Ptr<ptr::Void> {
         &mut self.header.entrypoint
     }

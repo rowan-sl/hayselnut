@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::tsdb3::cmd::args::DBCmdArgs;
+
 #[derive(Parser, Debug)]
 pub struct ArgsParser {
     #[command(subcommand)]
@@ -45,6 +47,11 @@ pub enum Cmd {
     },
     /// test program for TSDB v3
     DB3 {},
+    /// TSDBv3 statistics, testing, maintinance, and more
+    DB {
+        #[command(flatten)]
+        args: DBCmdArgs,
+    },
     /// kill the currently running haysel daemon (if there is one)
     Kill {
         #[arg(long, short, help = "config filepath")]

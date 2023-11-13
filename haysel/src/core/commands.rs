@@ -34,6 +34,9 @@ pub async fn delegate(args: ArgsParser) -> Result<()> {
             db2::main(init_overwrite, files, mode).await
         }
         Cmd::DB3 {} => tokio::task::spawn_blocking(move || crate::tsdb3::main()).await?,
+        Cmd::DB { args } => {
+            tokio::task::spawn_blocking(move || crate::tsdb3::cmd::main(args)).await?
+        }
         // handled earlier
         Cmd::Kill { .. } | Cmd::Run { .. } => unreachable!(),
     }
