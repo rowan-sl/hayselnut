@@ -51,9 +51,6 @@ features = ["server-utils"]
 [dependencies.mycelium]
 path = "mycelium"
 
-[dependencies.haysel_macro]
-path = "haysel_macro"
-
 [dependencies.roundtable]
 path = "roundtable"
 
@@ -61,6 +58,5 @@ path = "roundtable"
 members = [
   "squirrel",
   "mycelium",
-  "haysel_macro",
   "roundtable",
 ]
