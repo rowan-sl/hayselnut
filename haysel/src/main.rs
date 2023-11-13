@@ -30,6 +30,7 @@ mod registry;
 #[allow(dead_code)]
 pub mod tsdb2;
 pub mod tsdb3;
+#[allow(dead_code)]
 mod tsdbmock;
 
 use core::{
@@ -39,7 +40,7 @@ use core::{
 use misc::RecordsPath;
 use registry::JsonLoader;
 
-use crate::{core::AutosaveDispatch, registry::Registry, tsdbmock::TStopDBus2Mock};
+use crate::{core::AutosaveDispatch, registry::Registry};
 
 fn main() -> anyhow::Result<()> {
     core::rt::stage0_delegate()
@@ -89,6 +90,47 @@ async fn async_main(
     }
 
     let registry = bus.spawn(Registry::new(stations, channels));
+
+    debug!("Loading database [TSDB v3]");
+    let db = {
+        let path = match cfg.database.storage {
+            core::config::StorageMode::default => records_dir.path("data.tsdb3"),
+            core::config::StorageMode::file => {
+                if cfg.database.files.is_empty() {
+                    error!(
+                        "storage mode: 'file' was selected, but no files were given for storage"
+                    );
+                    bail!("Invalid config");
+                } else if cfg.database.files.len() == 1 {
+                    cfg.database.files[0].path.clone()
+                } else {
+                    error!("storage mode: 'file' was selected, but multiple files were provided. TSDB v3 does not yet support this");
+                    bail!("Invalid config");
+                }
+            }
+        };
+        let file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .await?
+            .into_std()
+            .await;
+        // Saftey: YOLO
+        let mut db = unsafe { tsdb3::DB::new(file) }?;
+        db.open();
+        let mut stop = tsdb3::bus::TStopDBus3::new(db);
+        let (stations, channels) = bus
+            .query_as(
+                HDL_EXTERNAL,
+                registry.clone(),
+                registry::EV_REGISTRY_QUERY_ALL,
+                (),
+            )
+            .await?;
+        stop.ensure_exists(&(stations, channels)).await;
+        bus.spawn(stop)
+    };
 
     // debug!("Loading database");
     // warn!("TSDB V2 is currently very unstable, bolth in format and in reliablility - things *will* go badly");
@@ -172,20 +214,21 @@ async fn async_main(
     //     bus.spawn(db_stop)
     // };
     // info!("Database loaded");
-    info!("Creating database *mock* - it will store recent data in-memory for testing");
-    let db = {
-        let mut db = TStopDBus2Mock::new().await;
-        let (stations, channels) = bus
-            .query_as(
-                HDL_EXTERNAL,
-                registry.clone(),
-                registry::EV_REGISTRY_QUERY_ALL,
-                (),
-            )
-            .await?;
-        db.ensure_exists(&(stations, channels)).await?;
-        bus.spawn(db)
-    };
+
+    // info!("Creating database *mock* - it will store recent data in-memory for testing");
+    // let db = {
+    //     let mut db = TStopDBus2Mock::new().await;
+    //     let (stations, channels) = bus
+    //         .query_as(
+    //             HDL_EXTERNAL,
+    //             registry.clone(),
+    //             registry::EV_REGISTRY_QUERY_ALL,
+    //             (),
+    //         )
+    //         .await?;
+    //     db.ensure_exists(&(stations, channels)).await?;
+    //     bus.spawn(db)
+    // };
 
     let ipc_path = run_dir.path("ipc.sock");
     debug!("Setting up IPC at {:?}", ipc_path);

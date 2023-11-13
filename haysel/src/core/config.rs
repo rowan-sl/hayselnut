@@ -76,16 +76,11 @@ pub enum StorageMode {
     /// a single file (explicitly specified)
     #[allow(non_camel_case_types)]
     file,
-    /// multiple files in raid zero (usefull with block devices)
-    #[allow(non_camel_case_types)]
-    raid,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct File {
     pub path: PathBuf,
-    #[serde(default)]
-    pub blockdevice: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
