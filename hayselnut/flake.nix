@@ -1,5 +1,5 @@
 {
-  description = "Server for the Hayselnut project";
+  description = "Weather station for the Hayselnut Project";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
