@@ -5,7 +5,6 @@
 #![feature(generic_const_exprs)]
 #![feature(specialization)]
 #![feature(is_sorted)]
-#![feature(trait_upcasting)]
 #![feature(downcast_unchecked)]
 #![feature(pointer_is_aligned)]
 
