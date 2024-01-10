@@ -3,23 +3,18 @@
 //! - getting the actual type name of dyn Any
 //! - casting dyn T -> dyn Any (not as cursed)
 
-pub mod dyn_debug;
 pub mod dyn_downcast;
 pub mod dyn_typename;
-pub mod possibly_clone;
 
-pub use dyn_debug::DynDebug;
 pub use dyn_downcast::AsAny;
 pub use dyn_typename::TypeNamed;
-pub use possibly_clone::PossiblyClone;
 
 use std::{any::TypeId, fmt::Debug};
 
 /// convenience trait for [`TypeNamed`] + [`AsAny`] + 'static
-pub trait GeneralRequirements: DynDebug + TypeNamed + AsAny + 'static {}
-impl<T: DynDebug + 'static> GeneralRequirements for T {}
+pub trait GeneralRequirements: TypeNamed + AsAny + 'static {}
+impl<T: 'static> GeneralRequirements for T {}
 
-/// value must be Debug, just to make things easy
 #[repr(transparent)]
 pub struct DynVar {
     val: Box<dyn GeneralRequirements + Sync + Send + 'static>,
@@ -117,8 +112,6 @@ impl DynVar {
 
 impl Debug for DynVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DynVar")
-            .field("val", self.val.as_dbg())
-            .finish()
+        f.debug_struct("DynVar").finish_non_exhaustive()
     }
 }

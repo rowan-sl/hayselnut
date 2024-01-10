@@ -1,7 +1,6 @@
 //! Bussin
 
 #![allow(incomplete_features)]
-#![feature(specialization)]
 #![feature(downcast_unchecked)]
 
 #[macro_use]
