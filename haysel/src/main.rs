@@ -1,11 +1,7 @@
 #![allow(incomplete_features)]
 // num_enum!!!! (again)
-#![allow(non_upper_case_globals)]
-#![feature(trivial_bounds)]
+// #![allow(non_upper_case_globals)]
 #![feature(generic_const_exprs)]
-#![feature(specialization)]
-#![feature(is_sorted)]
-#![feature(downcast_unchecked)]
 #![feature(pointer_is_aligned)]
 
 #[macro_use]
@@ -26,11 +22,7 @@ mod dispatch;
 mod ipc;
 mod misc;
 mod registry;
-// #[allow(dead_code)]
-// pub mod tsdb2;
 pub mod tsdb3;
-// #[allow(dead_code)]
-// mod tsdbmock;
 
 use core::{
     args::RunArgs,
