@@ -1,8 +1,5 @@
 //! Bussin
 
-#![allow(incomplete_features)]
-#![feature(downcast_unchecked)]
-
 #[macro_use]
 extern crate tracing;
 extern crate anyhow;
