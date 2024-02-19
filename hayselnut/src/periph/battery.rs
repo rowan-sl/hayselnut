@@ -5,14 +5,17 @@ use esp_idf_hal::{
 };
 use esp_idf_sys::EspError;
 
-pub struct BatteryMonitor<'a, P: ADCPin>(AdcChannelDriver<'a, P, adc::Atten11dB<P::Adc>>);
+pub struct BatteryMonitor<'a, P: ADCPin>(AdcChannelDriver<'a, { adc::attenuation::DB_11 }, P>);
 
 impl<'a, P: ADCPin> BatteryMonitor<'a, P> {
     pub fn new(pin: P) -> Result<Self, EspError> {
         Ok(Self(AdcChannelDriver::new(pin)?))
     }
 
-    pub fn read<'b, ADC: Adc>(&mut self, driver: &mut AdcDriver<'b, ADC>) -> Result<f32, EspError> {
+    pub fn read<'b, ADC: Adc>(&mut self, driver: &mut AdcDriver<'b, ADC>) -> Result<f32, EspError>
+    where
+        P: ADCPin<Adc = ADC>,
+    {
         // mull by 2, measured through a voltage divider
         Ok((driver.read(&mut self.0)? * 2 / 10) as f32 / 100.0)
     }

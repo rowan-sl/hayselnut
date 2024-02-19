@@ -14,11 +14,8 @@ tokio = { git = "https://github.com/tokio-rs/tokio", branch = "master" }
 mio = { git = "https://github.com/tokio-rs/mio", branch = "master" }
 socket2 = { git = "https://github.com/rust-lang/socket2", branch = "master" }
 
-
 [profile.release]
 codegen-units=1
-#lto=true
-#strip=true
 opt-level = "s"
 
 [profile.dev]
@@ -32,17 +29,14 @@ experimental = ["esp-idf-svc/experimental", "embedded-svc/experimental"]
 [dependencies]
 anyhow = {version = "1", features = ["backtrace"]}
 log = "0.4"
-esp-idf-sys = { version = "0.33", features = ["binstart"] }
-esp-idf-svc = "0.46"
-esp-idf-hal = "0.41"
-embedded-hal = "=1.0.0-alpha.10"
-embedded-svc = { version = "0.25", default-features = false }
+esp-idf-sys = { version = "0.34", features = ["binstart"] }
+esp-idf-svc = { version = "0.48", default-features = false, features = ["std", "alloc", "native", "embassy-sync", "critical-section", "embassy-time-driver"] }
+esp-idf-hal = "0.43"
+embedded-hal = "1.0.0"
+embedded-svc = { version = "0.27", default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
 bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
-#shared-bus = { version = "0.2.5", features = ["eh-alpha", "std"] }
-#embedded-graphics = "0.7.1"
-#ssd1306 = "0.7.1"
 futures = { version = "0.3.25", default-features = false, features = ["async-await"] }
 serde = { version = "1.0.152", features = ["derive"] }
 uuid = { version = "1.3.1", features = ["serde", "v4"] }
@@ -50,11 +44,11 @@ static_assertions = "1.1.0"
 rmp-serde = "1.1.1"
 # WARNING: the `sync` feature cannot be used - will cause `pthread` related linker errors
 tokio = { version = "*", features = ["rt", "net", "io-util"] }
-mio = { version = "0.8.8", features = ["log"] }
+mio = { version = "*", features = ["log"] }
 
 [dependencies.squirrel]
 path = "../haysel/squirrel/"
 
 [build-dependencies]
-embuild = "0.31.0"
+embuild = "0.31.3"
 chrono = "0.4.26"

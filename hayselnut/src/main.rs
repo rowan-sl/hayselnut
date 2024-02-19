@@ -16,15 +16,13 @@ use std::{
     cell::SyncUnsafeCell,
     collections::HashMap,
     io,
+    str::FromStr,
     time::{Duration, Instant},
 };
 
 use embedded_svc::wifi;
 use esp_idf_hal::{
-    adc::{self, AdcChannelDriver, AdcDriver},
-    gpio::PinDriver,
-    //    gpio::PinDriver,
-    //    i2c::{self, I2cDriver},
+    adc::{self, AdcDriver},
     i2c,
     peripherals::Peripherals,
     reset::ResetReason,
@@ -63,9 +61,6 @@ use store::{StationStore, StationStoreCached};
 
 use crate::{
     error::{ErrExt as _, _panic_hwerr},
-    flag::Flag,
-    // flag::Flag,
-    // lightning::LightningSensor,
     periph::{battery::BatteryMonitor, bme280::PeriphBME280, Peripheral, SensorPeripheral},
 };
 
@@ -457,7 +452,7 @@ fn main() {
 
                     loop {
                         select_biased! {
-                            res = wifi.wifi_wait(|| wifi.is_up(), None).fuse() => {
+                            res = wifi.wifi_wait(|wifi| wifi.is_up(), None).fuse() => {
                                 res.unwrap_hwerr("failed to check wifi status");
                                 info!("WIFI disconnected");
                                 continue 'retry_wifi
@@ -624,7 +619,7 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
     info!("Connecting to: {}", chosen.0.ssid);
     wifi.set_configuration(&wifi::Configuration::Client(wifi::ClientConfiguration {
         ssid: chosen.0.ssid,
-        password: chosen.1.unwrap_or_default().into(),
+        password: <_ as FromStr>::from_str(chosen.1.unwrap_or_default()).unwrap(),
         channel: Some(chosen.0.channel),
         ..Default::default()
     }))
@@ -641,7 +636,7 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'_>>) {
         }
     }
     info!("waiting for association");
-    wifi.ip_wait_while(|| wifi.is_up().map(|x| !x), None)
+    wifi.ip_wait_while(|wifi| wifi.is_up().map(|x| !x), None)
         .await
         .unwrap_hwerr("ip_wait_while failed");
     assert!(wifi.is_up().unwrap_hwerr("Failed to query wifi status"));

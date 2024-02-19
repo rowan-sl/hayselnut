@@ -1,9 +1,7 @@
 use std::process::Command;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Necessary because of this issue: https://github.com/rust-lang/cargo/issues/9641
-    embuild::build::CfgArgs::output_propagated("ESP_IDF")?;
-    embuild::build::LinkArgs::output_propagated("ESP_IDF")?;
+    embuild::espidf::sysenv::output();
     // some info on the build
     let commit_hash = Command::new("git")
         .args(["describe", "--always", "--dirty=-modified"])
