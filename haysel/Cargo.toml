@@ -56,6 +56,7 @@ path = "roundtable"
 [workspace]
 members = [
   "squirrel",
+  "cs_squirrel",
   "mycelium",
   "roundtable",
 ]

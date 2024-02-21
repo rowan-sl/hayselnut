@@ -1,0 +1,18 @@
+[package]
+name = "cs_squirrel"
+version = "0.1.0"
+edition = "2021"
+license = "GPLv3"
+readme = "README.md"
+authors = ["Rowan S-L <rowan@fawkes.io>"]
+description = "CS: Squirrel - secure transport protocol for the Hayselnut project"
+repository = "https://git.fawkes.io/mtnash/hayselnut/"
+
+[dependencies]
+num_enum = "0.7.2"
+static_assertions = "1.1.0"
+thiserror = "1.0.57"
+
+[dependencies.zerocopy]
+version = "0.7"
+features = ["derive"]
