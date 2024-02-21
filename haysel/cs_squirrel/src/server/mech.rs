@@ -124,7 +124,7 @@ impl ConnState {
             .expect("scratch buffer / env max packet size is smaller than the minimum frame size")
     }
 
-    pub async fn process<'re, 'sc, Fut0: Future, Fut1: Future>(
+    pub async fn process<'re, 'sc, Fut0: Future, Fut1: Future, Fut2: Future>(
         &mut self,
         pkt: packet::Read<'re>,
         to_send: Option<&mut Send<'_>>,
@@ -132,6 +132,7 @@ impl ConnState {
         scratch: &'sc mut [u8],
         mut send: impl FnMut(packet::Write<'sc>) -> Fut0,
         mut received: impl FnMut(&'re [u8]) -> Fut1,
+        mut receive_complete: impl FnMut() -> Fut2,
     ) -> Result<(), Error> {
         if let State::Recv | State::Send = self.state {
             if self.trans_time.elapsed() > self.conf.max_trans_time {
@@ -139,183 +140,146 @@ impl ConnState {
                 return Err(Error::Timeout);
             }
         }
+
+        let pkt_responds_to_last = pkt.head().responding_to == self.last_sent;
+        // have we already responded
+        let pkt_is_repeat = pkt.head().packet == self.responding_to;
+
         match (self.state, pkt) {
             // -- INITIALIZATION --
             // valid initialization of a transaction (Rest/Done => Tx/Rx)
+            (
+                State::Resting | State::RecvDone | State::SendDone | State::RecvStart,
+                packet::Read::Cmd(cmd),
+            ) if cmd.kind() == Ok(packet::CmdKind::Tx) => 'res: {
+                // handles bolth the initial and the repeat
+                let pkid = if self.state == State::RecvStart {
+                    // on repeat
+
+                    // invalid continuation
+                    if cmd.head.packet != self.responding_to {
+                        break 'res;
+                    }
+                    self.last_sent
+                } else {
+                    // initial
+                    self.responding_to = cmd.head.packet;
+                    self.state = State::RecvStart; // Tx is client POV
+                    self.trans_time = Instant::now();
+                    self.advance_last_sent()
+                };
+                let write = packet::Write::new(scratch)
+                    .unwrap()
+                    .with_packet(pkid)
+                    .with_responding_to(self.responding_to)
+                    .write_cmd(packet::CmdKind::Confirm)
+                    .unwrap();
+                send(write).await;
+            }
             (State::Resting | State::RecvDone | State::SendDone, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Tx)
-                    || cmd.kind() == Ok(packet::CmdKind::Rx) =>
+                if cmd.kind() == Ok(packet::CmdKind::Rx) =>
             {
                 self.responding_to = cmd.head.packet;
-                match cmd.kind().unwrap() {
-                    packet::CmdKind::Tx => {
-                        self.state = State::RecvStart; // Tx is client POV
-                        self.trans_time = Instant::now();
-                        let write = packet::Write::new(scratch)
-                            .unwrap()
-                            .with_packet(self.advance_last_sent())
-                            .with_responding_to(self.responding_to)
-                            .write_cmd(packet::CmdKind::Confirm)
-                            .unwrap();
-                        send(write).await;
-                    }
-                    packet::CmdKind::Rx => {
-                        self.state = State::SendStart; // Rx is client POV
-                        self.trans_time = Instant::now();
-                        let data = to_send
-                            .map(|send| send.advance(self.calc_max_data(scratch.len())))
-                            .flatten()
-                            .unwrap_or(&[]);
-                        let write = packet::Write::new(scratch)
-                            .unwrap()
-                            .with_packet(self.advance_last_sent())
-                            .with_responding_to(self.responding_to)
-                            .write_frame_with(data)
-                            .unwrap();
-                        send(write).await;
-                    }
-                    _ => unreachable!(),
-                }
+                self.state = State::SendStart; // Rx is client POV
+                self.trans_time = Instant::now();
+                let data = to_send
+                    .map(|send| send.advance(self.calc_max_data(scratch.len())))
+                    .flatten()
+                    .unwrap_or(&[]);
+                let write = packet::Write::new(scratch)
+                    .unwrap()
+                    .with_packet(self.advance_last_sent())
+                    .with_responding_to(self.responding_to)
+                    .write_frame_with(data)
+                    .unwrap();
+                send(write).await;
             }
             // not a valid initialization of a transaction
             (State::Resting, _) => {}
 
-            // -- RECEIVING --
-            // this is a REPETITION of the original packet.
-            // respond in kind, with a repitition of the original ACK
-            (State::RecvStart, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Tx)
-                    && cmd.head.packet == self.responding_to =>
-            {
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.last_sent)
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
-            }
-            // not a valid continuation
+            // // -- RECEIVING --
+            // not a valid continuation (repeat of initial is handled in the initial case)
             (State::RecvStart, packet::Read::Cmd(..)) => {}
-            // Begin to receive data from the client
-            (State::RecvStart, packet::Read::Frame(frame))
-                if frame.head.responding_to == self.last_sent =>
-            {
+            // receive data from the client
+            // this also covers the case of repeat and out-of-order packets
+            (State::RecvStart | State::Recv, packet::Read::Frame(frame)) => {
+                // redundant in the case that state is Recv
                 self.state = State::Recv;
-                self.responding_to = frame.head.packet;
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.advance_last_sent())
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
-                if let Ok(data) = frame.data() {
-                    received(data).await;
-                } else {
-                    return Err(Error::InvalidData);
+                if pkt_responds_to_last {
+                    // used in next if statement
+                    self.responding_to = frame.head.packet;
+                    let _ = self.advance_last_sent();
+                }
+                if pkt_responds_to_last || pkt_is_repeat {
+                    let write = packet::Write::new(scratch)
+                        .unwrap()
+                        .with_packet(self.last_sent)
+                        .with_responding_to(self.responding_to)
+                        .write_cmd(packet::CmdKind::Confirm)
+                        .unwrap();
+                    send(write).await;
+                }
+                // after responding, reduce latency
+                if pkt_responds_to_last {
+                    if let Ok(data) = frame.data() {
+                        received(data).await;
+                    } else {
+                        return Err(Error::InvalidData);
+                    }
                 }
             }
-            // this is not the frame we are looking for
-            (State::RecvStart, packet::Read::Frame(..)) => {}
             // done receiving
             (State::Recv, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Complete)
-                    && cmd.head.responding_to == self.last_sent =>
+                if cmd.kind() == Ok(packet::CmdKind::Complete) =>
             {
+                // redundant in the case that the state is RecvDone
                 self.state = State::RecvDone;
-                self.responding_to = cmd.head.packet;
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.advance_last_sent())
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
+                if pkt_responds_to_last {
+                    // used in next if statement
+                    self.responding_to = cmd.head.packet;
+                    let _ = self.advance_last_sent();
+                }
+                if pkt_responds_to_last || pkt_is_repeat {
+                    let write = packet::Write::new(scratch)
+                        .unwrap()
+                        .with_packet(self.last_sent)
+                        .with_responding_to(self.responding_to)
+                        .write_cmd(packet::CmdKind::Confirm)
+                        .unwrap();
+                    send(write).await;
+                }
+                // after responding to reduce latency
+                if pkt_responds_to_last {
+                    receive_complete().await;
+                }
             }
             // not a valid continuation
             (State::Recv, packet::Read::Cmd(..)) => {}
-            // this is a repeat of already received data
-            // do not add it to a buffer, but repeat identical ACK
-            (State::Recv, packet::Read::Frame(frame))
-                if frame.head.packet == self.responding_to =>
-            {
-                // merge with Recv branch
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.last_sent)
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
-            }
-            // receive more data
-            (State::Recv, packet::Read::Frame(frame))
-                if frame.head.responding_to == self.last_sent =>
-            {
-                // merge with RecvStart branch?
-                self.responding_to = frame.head.packet;
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.advance_last_sent())
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
-                if let Ok(data) = frame.data() {
-                    received(data).await;
-                } else {
-                    return Err(Error::InvalidData);
-                }
-            }
-            // received out of order
-            (State::Recv, packet::Read::Frame(..)) => {}
-            // this is a repeat of a previously received Complete
-            // respond with identical ACK
-            (State::RecvDone, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Complete)
-                    && cmd.head.packet == self.responding_to =>
-            {
-                // merge with first complete branch?
-                let write = packet::Write::new(scratch)
-                    .unwrap()
-                    .with_packet(self.advance_last_sent())
-                    .with_responding_to(self.responding_to)
-                    .write_cmd(packet::CmdKind::Confirm)
-                    .unwrap();
-                send(write).await;
-            }
-            // invalid continuation
             (State::RecvDone, _) => {}
 
             // -- SENDING --
             // this is a repetition of the original client Rx init packet.
             // respond with identical repeat ACK
             (State::SendStart, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Rx)
-                    && cmd.head.packet == self.responding_to => {}
+                if cmd.kind() == Ok(packet::CmdKind::Rx) && pkt_is_repeat => {}
             // the client ACKs the last sent Frame, we move on to the next one
             (State::SendStart, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Confirm)
-                    && cmd.head.responding_to == self.last_sent => {}
+                if cmd.kind() == Ok(packet::CmdKind::Confirm) && pkt_responds_to_last => {}
             // invalid continuation (not confirmation or repeat, doesn't require response)
             (State::SendStart, _) => {}
             // the client ACKs the last sent frame, move on to the next one
             (State::Send, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Confirm)
-                    && cmd.head.responding_to == self.last_sent => {}
+                if cmd.kind() == Ok(packet::CmdKind::Confirm) && pkt_responds_to_last => {}
             // this is a repetition of the last received ACK
             // respond with an identical repeat of the last frame
             (State::Send, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Confirm)
-                    && cmd.head.packet == self.responding_to => {}
+                if cmd.kind() == Ok(packet::CmdKind::Confirm) && pkt_is_repeat => {}
             // invalid continuation
             (State::Send, _) => {}
             // the client ACKs the last packet, we have already run out of frames and sent the Complete message
             // respond with an identical Complete message
             (State::SendDone, packet::Read::Cmd(cmd))
-                if cmd.kind() == Ok(packet::CmdKind::Confirm)
-                    && cmd.head.packet == self.responding_to => {}
+                if cmd.kind() == Ok(packet::CmdKind::Confirm) && pkt_is_repeat => {}
             // invalid continuation
             (State::SendDone, _) => {}
         }
