@@ -8,6 +8,12 @@ use zerocopy::{network_endian::U32, AsBytes, FromBytes, FromZeroes, Unalign};
 #[repr(C, align(1))]
 pub struct Uid(Unalign<U32>);
 
+impl Uid {
+    pub const fn null() -> Self {
+        Self(Unalign::new(U32::ZERO))
+    }
+}
+
 /// sequential UID generator
 #[derive(Debug, Default)]
 pub struct Seq {
