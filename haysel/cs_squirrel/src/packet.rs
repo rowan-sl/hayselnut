@@ -13,7 +13,7 @@ pub use cmd::{Cmd, CmdKind};
 pub use frame::Frame;
 use uid::Uid;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("the buffer provided was too small (for writing data)")]
     TooSmallWrite,
