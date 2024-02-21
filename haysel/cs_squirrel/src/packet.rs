@@ -1,7 +1,7 @@
 //! network packet definition/serialization/deserialization
 
-mod cmd;
-mod frame;
+pub mod cmd;
+pub mod frame;
 pub mod uid;
 
 use std::mem::size_of;
@@ -125,5 +125,16 @@ impl<'dest> Write<'dest> {
         cmd.head.packet_ty = Type::Frame as u8;
         cmd.command = kind as u8;
         Ok(self)
+    }
+
+    // get a reference to the portion of the inner buffer that has actual data in it
+    pub fn portion_to_send(&self) -> &[u8] {
+        match Type::extract(&self.inner).unwrap() {
+            Type::Frame => {
+                let f = Frame::ref_buf(&self.inner).unwrap();
+                &self.inner[0..frame::SIZE_OF_HEADER + f.data().unwrap().len()]
+            }
+            Type::Command => &self.inner[0..size_of::<Cmd>()],
+        }
     }
 }
