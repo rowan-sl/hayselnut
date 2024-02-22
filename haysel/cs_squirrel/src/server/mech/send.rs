@@ -41,3 +41,58 @@ impl<'buf> Send<'buf> {
         self.last
     }
 }
+
+#[test]
+fn it_works() {
+    let buf = [0u8; 10];
+    let _send = Send::new(&buf);
+}
+
+#[test]
+fn advance_once() {
+    let buf = [1, 2, 3, 4, 5];
+    let mut send = Send::new(&buf);
+    let first_3 = send.advance(3).unwrap();
+    assert_eq!(first_3, &[1, 2, 3]);
+}
+
+#[test]
+fn advance_once_check_last() {
+    let buf = [1, 2, 3, 4, 5];
+    let mut send = Send::new(&buf);
+    let first_3 = send.advance(3).unwrap();
+    assert_eq!(first_3, &[1, 2, 3]);
+    assert_eq!(Some(first_3.to_vec()), send.prev().map(|s| s.to_vec()));
+}
+
+#[test]
+fn advance_twice() {
+    let buf = [1, 2, 3, 4, 5, 6, 7];
+    let mut send = Send::new(&buf);
+    let first_3 = send.advance(3).unwrap();
+    assert_eq!(first_3, &[1, 2, 3]);
+    let next_2 = send.advance(2).unwrap();
+    assert_eq!(next_2, &[4, 5]);
+}
+
+#[test]
+fn advance_past_end() {
+    let buf = [1, 2, 3, 4, 5, 6, 7];
+    let mut send = Send::new(&buf);
+    let first_3 = send.advance(3).unwrap();
+    assert_eq!(first_3, &[1, 2, 3]);
+    let next_4 = send.advance(10).unwrap();
+    assert_eq!(next_4, &[4, 5, 6, 7]);
+}
+
+#[test]
+fn advance_returns_none() {
+    let buf = [1, 2, 3, 4, 5, 6, 7];
+    let mut send = Send::new(&buf);
+    let first_3 = send.advance(3).unwrap();
+    assert_eq!(first_3, &[1, 2, 3]);
+    let next_4 = send.advance(10).unwrap();
+    assert_eq!(next_4, &[4, 5, 6, 7]);
+    let none = send.advance(0);
+    assert_eq!(none, None);
+}
