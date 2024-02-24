@@ -89,7 +89,7 @@ impl ConnState {
             .expect("scratch buffer / env max packet size is smaller than the minimum frame size")
     }
 
-    pub async fn process<'re, 'sc>(
+    pub fn process<'re, 'sc>(
         &mut self,
         pkt: packet::Read<'re>,
         to_send: Option<&mut Send<'_>>,

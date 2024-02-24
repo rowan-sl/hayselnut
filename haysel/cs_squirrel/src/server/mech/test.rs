@@ -30,7 +30,7 @@ async fn recv_one() {
         while let Some(packet) = sv_rx.recv().await {
             let read = packet::Read::try_read(&packet).unwrap();
             println!("server: processing");
-            let res = mech.process(read, None, &mut scratch).await.unwrap();
+            let res = mech.process(read, None, &mut scratch).unwrap();
             if let Some(write) = res.written {
                 let buf = write.portion_to_send();
                 cl_tx.send(buf.to_vec()).await.unwrap();
@@ -153,10 +153,7 @@ async fn send_one() {
         while let Some(packet) = sv_rx.recv().await {
             let read = packet::Read::try_read(&packet).unwrap();
             println!("server: processing");
-            let res = mech
-                .process(read, Some(&mut send), &mut scratch)
-                .await
-                .unwrap();
+            let res = mech.process(read, Some(&mut send), &mut scratch).unwrap();
             if let Some(write) = res.written {
                 let buf = write.portion_to_send();
                 cl_tx.send(buf.to_vec()).await.unwrap();
