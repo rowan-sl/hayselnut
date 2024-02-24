@@ -140,3 +140,110 @@ async fn recv_one() {
     };
     assert_eq!(recvd, DATA.to_vec());
 }
+
+#[tokio::test]
+async fn send_one() {
+    let (cl_tx, mut cl_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(10);
+    let (sv_tx, mut sv_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(10);
+    let server = spawn(async move {
+        let (conf, env) = test_conf_env();
+        let mut mech = ConnState::new(conf, env.clone());
+        let mut scratch = vec![0u8; env.max_packet_size];
+        let mut send = Send::new(DATA);
+        while let Some(packet) = sv_rx.recv().await {
+            let read = packet::Read::try_read(&packet).unwrap();
+            println!("server: processing");
+            let res = mech
+                .process(read, Some(&mut send), &mut scratch)
+                .await
+                .unwrap();
+            if let Some(write) = res.written {
+                let buf = write.portion_to_send();
+                cl_tx.send(buf.to_vec()).await.unwrap();
+            }
+            if let Some(_read) = res.read {
+                panic!("did not expect to read data");
+            }
+            if res.read_complete {
+                panic!("did not expect to read data");
+            }
+        }
+        assert!(
+            send.done_sending(),
+            "write did not complete before disconnect"
+        )
+    });
+    let client = spawn(async move {
+        let (_conf, env) = test_conf_env();
+        let mut scratch = vec![0u8; env.max_packet_size];
+        let mut gen = packet::uid::Seq::new();
+        let mut data: Vec<u8> = vec![];
+
+        let id = gen.next();
+        let mut last;
+        sv_tx
+            .send(
+                packet::Write::new(&mut scratch)
+                    .unwrap()
+                    .with_packet(id)
+                    .with_responding_to(Uid::null())
+                    .write_cmd(packet::CmdKind::Rx)
+                    .unwrap()
+                    .portion_to_send()
+                    .to_vec(),
+            )
+            .await
+            .unwrap();
+        {
+            let recv = cl_rx.recv().await.unwrap();
+            let read = packet::Read::try_read(&recv).unwrap();
+            let head = read.head();
+            last = head.packet;
+            assert_eq!(head.responding_to, id);
+            assert_eq!(head.packet_ty, packet::Type::Frame as _);
+            match read {
+                packet::Read::Cmd(..) => panic!("expected frame, got cmd"),
+                packet::Read::Frame(frame) => {
+                    data.extend_from_slice(frame.data().unwrap());
+                }
+            }
+        }
+        loop {
+            let id = gen.next();
+            sv_tx
+                .send(
+                    packet::Write::new(&mut scratch)
+                        .unwrap()
+                        .with_packet(id)
+                        .with_responding_to(last)
+                        .write_cmd(packet::CmdKind::Confirm)
+                        .unwrap()
+                        .portion_to_send()
+                        .to_vec(),
+                )
+                .await
+                .unwrap();
+            let recv = cl_rx.recv().await.unwrap();
+            let read = packet::Read::try_read(&recv).unwrap();
+            let head = read.head();
+            last = head.packet;
+            assert_eq!(head.responding_to, id);
+            assert_eq!(head.packet_ty, packet::Type::Command as _);
+            match read {
+                packet::Read::Cmd(cmd) => {
+                    assert_eq!(cmd.kind(), Ok(packet::CmdKind::Complete));
+                    break;
+                }
+                packet::Read::Frame(frame) => {
+                    data.extend_from_slice(frame.data().unwrap());
+                }
+            }
+        }
+        data
+    });
+    let recvd = select! {
+        _ = sleep(Duration::from_millis(700)) => panic!("timed out"),
+        res = client => { let recvd = res.unwrap(); server.await.unwrap(); recvd }
+    };
+    assert_eq!(recvd, DATA.to_vec());
+}
