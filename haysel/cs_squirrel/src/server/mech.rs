@@ -1,11 +1,10 @@
 //! State machine for handling a single server connection
 
 mod send;
+#[cfg(test)]
+mod test;
 
-use std::{
-    future::Future,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::{
     env::Env,
@@ -43,6 +42,13 @@ enum State {
 pub struct Config {
     /// greatest time allowed per transaction
     pub max_trans_time: Duration,
+}
+
+#[derive(Default)]
+pub struct ProcessResult<'sc, 're> {
+    pub written: Option<packet::Write<'sc>>,
+    pub read: Option<&'re [u8]>,
+    pub read_complete: bool,
 }
 
 /// server connection state machine
@@ -83,16 +89,13 @@ impl ConnState {
             .expect("scratch buffer / env max packet size is smaller than the minimum frame size")
     }
 
-    pub async fn process<'re, 'sc, Fut0: Future, Fut1: Future, Fut2: Future>(
+    pub async fn process<'re, 'sc>(
         &mut self,
         pkt: packet::Read<'re>,
         to_send: Option<&mut Send<'_>>,
         // scratch buffer for sending packets
         scratch: &'sc mut [u8],
-        mut send: impl FnMut(packet::Write<'sc>) -> Fut0,
-        mut received: impl FnMut(&'re [u8]) -> Fut1,
-        mut receive_complete: impl FnMut() -> Fut2,
-    ) -> Result<(), Error> {
+    ) -> Result<ProcessResult<'sc, 're>, Error> {
         if let State::Recv | State::Send | State::RecvStart | State::SendStart = self.state {
             if self.trans_time.elapsed() > self.conf.max_trans_time {
                 self.state = State::Resting;
@@ -100,9 +103,11 @@ impl ConnState {
             }
         }
 
-        let pkt_responds_to_last = pkt.head().responding_to == self.last_sent;
+        let pkt_responds_to_last =
+            pkt.head().responding_to == self.last_sent && self.last_sent != Uid::null();
         // have we already responded
-        let pkt_is_repeat = pkt.head().packet == self.responding_to;
+        let pkt_is_repeat =
+            pkt.head().packet == self.responding_to && self.responding_to != Uid::null();
 
         // for documentation on proper order, see packet::CmdKind
         match (self.state, pkt) {
@@ -112,13 +117,17 @@ impl ConnState {
                 State::Resting | State::RecvDone | State::SendDone | State::RecvStart,
                 packet::Read::Cmd(cmd),
             ) if cmd.kind() == Ok(packet::CmdKind::Tx) => 'res: {
+                #[cfg(test)]
+                dbg!("server: rest || recv_start => recv_start || recv");
                 // handles bolth the initial and the repeat
                 let pkid = if self.state == State::RecvStart {
                     // on repeat
 
                     // invalid continuation
                     if !pkt_is_repeat {
-                        break 'res;
+                        #[cfg(test)]
+                        dbg!("server: recv_start: invalid continuation");
+                        break 'res Ok(ProcessResult::default());
                     }
                     self.last_sent
                 } else {
@@ -134,7 +143,10 @@ impl ConnState {
                     .with_responding_to(self.responding_to)
                     .write_cmd(packet::CmdKind::Confirm)
                     .unwrap();
-                send(write).await;
+                Ok(ProcessResult {
+                    written: Some(write),
+                    ..Default::default()
+                })
             }
             (
                 State::Resting | State::RecvDone | State::SendDone | State::SendStart,
@@ -146,7 +158,7 @@ impl ConnState {
                         (self.last_sent, to_send.map(|send| send.prev()))
                     } else {
                         // invalid continuation
-                        break 'res;
+                        break 'res Ok(ProcessResult::default());
                     }
                 } else {
                     // initial
@@ -173,7 +185,10 @@ impl ConnState {
                 }
                 .unwrap();
 
-                send(write).await;
+                Ok(ProcessResult {
+                    written: Some(write),
+                    ..Default::default()
+                })
             }
 
             // // -- RECEIVING --
@@ -187,23 +202,33 @@ impl ConnState {
                     self.responding_to = frame.head.packet;
                     let _ = self.advance_last_sent();
                 }
-                if pkt_responds_to_last || pkt_is_repeat {
-                    let write = packet::Write::new(scratch)
-                        .unwrap()
-                        .with_packet(self.last_sent)
-                        .with_responding_to(self.responding_to)
-                        .write_cmd(packet::CmdKind::Confirm)
-                        .unwrap();
-                    send(write).await;
-                }
+                let written = if pkt_responds_to_last || pkt_is_repeat {
+                    Some(
+                        packet::Write::new(scratch)
+                            .unwrap()
+                            .with_packet(self.last_sent)
+                            .with_responding_to(self.responding_to)
+                            .write_cmd(packet::CmdKind::Confirm)
+                            .unwrap(),
+                    )
+                } else {
+                    None
+                };
                 // after responding, reduce latency
-                if pkt_responds_to_last {
+                let read = if pkt_responds_to_last {
                     if let Ok(data) = frame.data() {
-                        received(data).await;
+                        Some(data)
                     } else {
                         return Err(Error::InvalidData);
                     }
-                }
+                } else {
+                    None
+                };
+                Ok(ProcessResult {
+                    written,
+                    read,
+                    read_complete: false,
+                })
             }
             // done receiving
             (State::Recv, packet::Read::Cmd(cmd))
@@ -216,19 +241,23 @@ impl ConnState {
                     self.responding_to = cmd.head.packet;
                     let _ = self.advance_last_sent();
                 }
-                if pkt_responds_to_last || pkt_is_repeat {
-                    let write = packet::Write::new(scratch)
-                        .unwrap()
-                        .with_packet(self.last_sent)
-                        .with_responding_to(self.responding_to)
-                        .write_cmd(packet::CmdKind::Confirm)
-                        .unwrap();
-                    send(write).await;
-                }
-                // after responding to reduce latency
-                if pkt_responds_to_last {
-                    receive_complete().await;
-                }
+                let written = if pkt_responds_to_last || pkt_is_repeat {
+                    Some(
+                        packet::Write::new(scratch)
+                            .unwrap()
+                            .with_packet(self.last_sent)
+                            .with_responding_to(self.responding_to)
+                            .write_cmd(packet::CmdKind::Confirm)
+                            .unwrap(),
+                    )
+                } else {
+                    None
+                };
+                Ok(ProcessResult {
+                    written,
+                    read_complete: pkt_responds_to_last,
+                    ..Default::default()
+                })
             }
 
             // -- SENDING --
@@ -248,7 +277,7 @@ impl ConnState {
                 } else if pkt_is_repeat {
                     (self.last_sent, to_send.map(|send| send.prev()))
                 } else {
-                    break 'res;
+                    break 'res Ok(ProcessResult::default());
                 };
 
                 let write = packet::Write::new(scratch)
@@ -265,26 +294,35 @@ impl ConnState {
                 }
                 .unwrap();
 
-                send(write).await;
+                Ok(ProcessResult {
+                    written: Some(write),
+                    ..Default::default()
+                })
             }
             // the client ACKs the last packet, we have already run out of frames and sent the Complete message
             // respond with an identical Complete message
             (State::SendDone, packet::Read::Cmd(cmd))
                 if cmd.kind() == Ok(packet::CmdKind::Confirm) && pkt_is_repeat =>
             {
-                send(
-                    packet::Write::new(scratch)
-                        .unwrap()
-                        .with_packet(self.last_sent)
-                        .with_responding_to(self.responding_to)
-                        .write_cmd(packet::CmdKind::Complete)
-                        .unwrap(),
-                )
-                .await;
+                let write = packet::Write::new(scratch)
+                    .unwrap()
+                    .with_packet(self.last_sent)
+                    .with_responding_to(self.responding_to)
+                    .write_cmd(packet::CmdKind::Complete)
+                    .unwrap();
+                Ok(ProcessResult {
+                    written: Some(write),
+                    ..Default::default()
+                })
             }
             // invalid continuation (likely an ooo packet)
-            _ => {}
+            _value => {
+                #[cfg(test)]
+                dbg!("server: invalid continuation", _value);
+                dbg!(packet::Type::Frame as u8);
+                dbg!(packet::Type::Command as u8);
+                Ok(ProcessResult::default())
+            }
         }
-        Ok(())
     }
 }

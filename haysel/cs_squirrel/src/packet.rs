@@ -69,7 +69,7 @@ pub enum Read<'src> {
 }
 
 impl<'src> Read<'src> {
-    pub fn try_from(buf: &'src [u8]) -> Result<Self> {
+    pub fn try_read(buf: &'src [u8]) -> Result<Self> {
         Ok(match Type::extract(buf)? {
             Type::Frame => Self::Frame(Frame::ref_buf(buf)?),
             Type::Command => Self::Cmd(Cmd::ref_from_prefix(buf).ok_or(Error::TooSmallReadHeader)?),
@@ -122,7 +122,7 @@ impl<'dest> Write<'dest> {
     /// set packet_ty to Frame, write command
     pub fn write_cmd(self, kind: CmdKind) -> Result<Self> {
         let cmd = Cmd::mut_from_prefix(self.inner).ok_or(Error::TooSmallReadHeader)?;
-        cmd.head.packet_ty = Type::Frame as u8;
+        cmd.head.packet_ty = Type::Command as u8;
         cmd.command = kind as u8;
         Ok(self)
     }

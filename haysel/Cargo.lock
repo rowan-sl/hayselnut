@@ -354,6 +354,7 @@ dependencies = [
  "num_enum",
  "static_assertions",
  "thiserror",
+ "tokio",
  "zerocopy 0.7.32",
 ]
 

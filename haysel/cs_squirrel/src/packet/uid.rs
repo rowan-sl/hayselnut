@@ -26,8 +26,8 @@ impl Seq {
     }
 
     pub fn next(&mut self) -> Uid {
-        let id = Uid(Unalign::new(U32::new(self.current)));
+        // uid 0 is null
         self.current = self.current.wrapping_add(1);
-        id
+        Uid(Unalign::new(U32::new(self.current)))
     }
 }

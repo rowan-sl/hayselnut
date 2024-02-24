@@ -33,7 +33,7 @@ impl Frame {
         }
         let frame = Self::mut_buf(buf)?;
         frame.len = Unalign::new(U16::new(data.len().try_into().unwrap()));
-        frame.data.copy_from_slice(data);
+        frame.data[0..data.len()].copy_from_slice(data);
         Ok(frame)
     }
 

@@ -9,9 +9,10 @@ description = "CS: Squirrel - secure transport protocol for the Hayselnut projec
 repository = "https://git.fawkes.io/mtnash/hayselnut/"
 
 [dependencies]
-num_enum = "0.7.2"
-static_assertions = "1.1.0"
-thiserror = "1.0.57"
+num_enum = "0.7"
+static_assertions = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
 
 [dependencies.zerocopy]
 version = "0.7"
