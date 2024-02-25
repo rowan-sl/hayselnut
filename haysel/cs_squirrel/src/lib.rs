@@ -9,6 +9,7 @@
 #![feature(ptr_metadata)]
 #![feature(result_flattening)]
 
+pub mod buf;
 pub mod env;
 pub mod packet;
 pub mod server;

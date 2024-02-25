@@ -1,12 +1,12 @@
 //! State machine for handling a single server connection
 
-mod send;
 #[cfg(test)]
 mod test;
 
 use std::time::{Duration, Instant};
 
 use crate::{
+    buf::Cursor,
     env::Env,
     packet::{
         self,
@@ -14,13 +14,16 @@ use crate::{
     },
 };
 
-pub use send::Send;
-
+/// No server error may be fatal. everything can be recovered, or else
+/// we are vonurable to (at minimum) bad actors screwing with the
+/// connection in an unrecoverable way
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid data packet received (len was larger than the received size)")]
     InvalidData,
-    #[error("transaction timed out")]
+    /// this error should not be even somewhat fatal becuse of client::ConnState::reset
+    /// resetting should cause the server to reset <timout> duration later
+    #[error("transaction timed out - this should not be a fatal error")]
     Timeout,
 }
 
@@ -92,7 +95,7 @@ impl ConnState {
     pub fn process<'re, 'sc>(
         &mut self,
         pkt: packet::Read<'re>,
-        to_send: Option<&mut Send<'_>>,
+        to_send: Option<&mut Cursor<'_>>,
         // scratch buffer for sending packets
         scratch: &'sc mut [u8],
     ) -> Result<ProcessResult<'sc, 're>, Error> {

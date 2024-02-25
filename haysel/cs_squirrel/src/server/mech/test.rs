@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use tokio::{select, spawn, time::sleep};
 
-use super::{Config, ConnState, Send};
+use super::{Config, ConnState};
 use crate::{
+    buf::Cursor,
     env::Env,
     packet::{self, uid::Uid},
 };
@@ -47,7 +48,7 @@ async fn recv_one() {
     let client = spawn(async move {
         let (_conf, env) = test_conf_env();
         let chunk_size = env.max_packet_size / 2;
-        let mut send = Send::new(DATA);
+        let mut send = Cursor::new(DATA);
         let mut scratch = vec![0u8; env.max_packet_size];
         let mut gen = packet::uid::Seq::new();
 
@@ -149,7 +150,7 @@ async fn send_one() {
         let (conf, env) = test_conf_env();
         let mut mech = ConnState::new(conf, env.clone());
         let mut scratch = vec![0u8; env.max_packet_size];
-        let mut send = Send::new(DATA);
+        let mut send = Cursor::new(DATA);
         while let Some(packet) = sv_rx.recv().await {
             let read = packet::Read::try_read(&packet).unwrap();
             println!("server: processing");
