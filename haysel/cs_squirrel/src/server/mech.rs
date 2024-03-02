@@ -17,6 +17,8 @@ use crate::{
 /// No server error may be fatal. everything can be recovered, or else
 /// we are vonurable to (at minimum) bad actors screwing with the
 /// connection in an unrecoverable way
+///
+/// fatal server errors should be panics
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid data packet received (len was larger than the received size)")]

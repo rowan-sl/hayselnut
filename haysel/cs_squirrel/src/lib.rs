@@ -10,6 +10,7 @@
 #![feature(result_flattening)]
 
 pub mod buf;
+pub mod client;
 pub mod env;
 pub mod packet;
 pub mod server;
