@@ -15,7 +15,6 @@ mio = { git = "https://github.com/tokio-rs/mio", branch = "master" }
 socket2 = { git = "https://github.com/rust-lang/socket2", branch = "master" }
 
 [profile.release]
-codegen-units=1
 opt-level = "s"
 
 [profile.dev]

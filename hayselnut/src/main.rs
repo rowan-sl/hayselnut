@@ -272,6 +272,7 @@ fn main() {
     )
     .unwrap_hwerr("failed to initialize async wifi");
 
+    info!("async/rt-start");
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
