@@ -62,6 +62,11 @@
         LIBCLANG_PATH = "${pkgs.llvmPackages_11.libclang.lib}/lib";
         TMPDIR="/tmp";
         RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+        shellHook = ''
+        if [ -n "$\{EXEC_THIS_SHELL}" ]; then 
+          exec $EXEC_THIS_SHELL
+        fi
+        '';
       };
     };
 }
