@@ -60,7 +60,7 @@ pub struct Server {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Database {
-    /// storage mode of the database (single file vs RAID)
+    /// storage mode of the database
     pub storage: StorageMode,
     /// file(s) to use as backing.
     /// not necessary to provide if `StorageMode::DefaultFile` is selected
@@ -68,13 +68,12 @@ pub struct Database {
     pub files: Vec<File>,
 }
 
+#[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub enum StorageMode {
     /// a single file, automatically created inside the data directory
-    #[allow(non_camel_case_types)]
     default,
     /// a single file (explicitly specified)
-    #[allow(non_camel_case_types)]
     file,
 }
 
@@ -85,7 +84,7 @@ pub struct File {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Misc {
-    /// script to run before starting (e.g. to setup permissions for block devices used in RAID)
+    /// script to run before starting
     #[serde(default)]
     pub init_script: PathBuf,
 }
