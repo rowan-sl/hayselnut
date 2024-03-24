@@ -35,7 +35,7 @@ embedded-hal = "1.0.0"
 embedded-svc = { version = "0.27", default-features = false }
 num = "0.4.0"
 thiserror = "1.0.31"
-bme280 = { git = "https://github.com/rowan-sl/bme280-rs" }
+bme280 = { git = "https://git.fawkes.io/mtnash/bme280-rs" }
 futures = { version = "0.3.25", default-features = false, features = ["async-await"] }
 serde = { version = "1.0.152", features = ["derive"] }
 uuid = { version = "1.3.1", features = ["serde", "v4"] }

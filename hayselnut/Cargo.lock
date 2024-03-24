@@ -132,7 +132,7 @@ checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 [[package]]
 name = "bme280"
 version = "0.4.4"
-source = "git+https://github.com/rowan-sl/bme280-rs#5d46e90da4c0bf23f33fdc1519a9ee430649e60b"
+source = "git+https://git.fawkes.io/mtnash/bme280-rs#5d46e90da4c0bf23f33fdc1519a9ee430649e60b"
 dependencies = [
  "embedded-hal 1.0.0",
  "maybe-async-cfg",
